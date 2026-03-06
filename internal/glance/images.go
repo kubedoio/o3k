@@ -225,7 +225,8 @@ func (svc *Service) GetImage(c *gin.Context) {
 	imageID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	var id, name, status, visibility, diskFormat, containerFormat, checksum string
+	var id, name, status, visibility, diskFormat, containerFormat string
+	var checksum sql.NullString
 	var sizeBytes sql.NullInt64
 	var minDisk, minRAM int
 	var createdAt, updatedAt time.Time
@@ -265,8 +266,8 @@ func (svc *Service) GetImage(c *gin.Context) {
 		image["size"] = sizeBytes.Int64
 	}
 
-	if checksum != "" {
-		image["checksum"] = checksum
+	if checksum.Valid && checksum.String != "" {
+		image["checksum"] = checksum.String
 	}
 
 	c.JSON(http.StatusOK, image)
