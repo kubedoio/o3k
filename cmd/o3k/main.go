@@ -102,7 +102,7 @@ func main() {
 	}
 
 	log.Println("O3K started successfully")
-	log.Println("  - Keystone (Identity):    http://localhost:5000/v3")
+	log.Println("  - Keystone (Identity):    http://localhost:35357/v3")
 	log.Println("  - Nova (Compute):         http://localhost:8774/v2.1")
 	log.Println("  - Neutron (Network):      http://localhost:9696/v2.0")
 	log.Println("  - Cinder (Block Storage): http://localhost:8776/v3")

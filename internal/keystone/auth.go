@@ -275,7 +275,7 @@ func BuildServiceCatalog(projectID string) []CatalogEntry {
 			Type: "identity",
 			Name: "keystone",
 			Endpoints: []Endpoint{
-				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:5000/v3", baseURL)},
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:35357/v3", baseURL)},
 			},
 		},
 		{

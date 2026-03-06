@@ -54,7 +54,7 @@ func (svc *Service) GetVersion(c *gin.Context) {
 			"links": []gin.H{
 				{
 					"rel":  "self",
-					"href": "http://localhost:5000/v3",
+					"href": "http://localhost:35357/v3",
 				},
 			},
 			"media-types": []gin.H{

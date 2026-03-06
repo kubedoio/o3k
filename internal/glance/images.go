@@ -31,6 +31,10 @@ func NewService(cephPool, cephConf string) *Service {
 
 // RegisterRoutes registers Glance routes
 func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
+	// Version discovery
+	r.GET("/", svc.GetVersions)
+	r.GET("/v2", svc.GetVersionV2)
+
 	v2 := r.Group("/v2")
 	{
 		// Images
@@ -60,6 +64,40 @@ type CreateImageRequest struct {
 	MinRAM          int     `json:"min_ram"`
 	Protected       bool    `json:"protected"`
 	Tags            []string `json:"tags"`
+}
+
+// GetVersions returns all available API versions
+func (svc *Service) GetVersions(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"versions": []gin.H{
+			{
+				"id":     "v2.9",
+				"status": "CURRENT",
+				"links": []gin.H{
+					{
+						"rel":  "self",
+						"href": "http://localhost:9292/v2/",
+					},
+				},
+			},
+		},
+	})
+}
+
+// GetVersionV2 returns v2 API version details
+func (svc *Service) GetVersionV2(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"version": gin.H{
+			"id":     "v2.9",
+			"status": "CURRENT",
+			"links": []gin.H{
+				{
+					"rel":  "self",
+					"href": "http://localhost:9292/v2/",
+				},
+			},
+		},
+	})
 }
 
 // CreateImage creates a new image
