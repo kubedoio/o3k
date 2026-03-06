@@ -220,7 +220,8 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	err := database.DB.QueryRow(c.Request.Context(), `
 		SELECT id, name, admin_state_up, status, shared, mtu, created_at, updated_at
 		FROM networks
-		WHERE id = $1 AND (project_id = $2 OR shared = true)
+		WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)
+		LIMIT 1
 	`, networkID, projectID).Scan(&id, &name, &adminStateUp, &status, &shared, &mtu, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {

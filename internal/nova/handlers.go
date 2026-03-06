@@ -135,10 +135,10 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	projectID := c.GetString("project_id")
 	userID := c.GetString("user_id")
 
-	// Fetch flavor
+	// Fetch flavor (support lookup by UUID or name)
 	var flavor database.Flavor
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT id, name, vcpus, ram_mb, disk_gb FROM flavors WHERE id = $1",
+		"SELECT id, name, vcpus, ram_mb, disk_gb FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1",
 		req.Server.FlavorRef,
 	).Scan(&flavor.ID, &flavor.Name, &flavor.VCPUs, &flavor.RAMMB, &flavor.DiskGB)
 
@@ -547,8 +547,9 @@ func (svc *Service) GetFlavor(c *gin.Context) {
 	var vcpus, ramMB, diskGB int
 	var isPublic bool
 
+	// Support lookup by UUID or name
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE id = $1",
+		"SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1",
 		flavorID,
 	).Scan(&id, &name, &vcpus, &ramMB, &diskGB, &isPublic)
 

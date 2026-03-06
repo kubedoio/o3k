@@ -231,10 +231,13 @@ func (svc *Service) GetImage(c *gin.Context) {
 	var minDisk, minRAM int
 	var createdAt, updatedAt time.Time
 
+	// Try by UUID first, then by name if UUID parsing fails
+	// Use CAST to handle non-UUID strings gracefully
 	err := database.DB.QueryRow(c.Request.Context(), `
 		SELECT id, name, status, visibility, size_bytes, disk_format, container_format, min_disk_gb, min_ram_mb, checksum, created_at, updated_at
 		FROM images
-		WHERE id = $1 AND (visibility = 'public' OR project_id = $2)
+		WHERE (id::text = $1 OR name = $1) AND (visibility = 'public' OR project_id = $2)
+		LIMIT 1
 	`, imageID, projectID).Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &checksum, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
