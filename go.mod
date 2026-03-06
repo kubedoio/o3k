@@ -1,6 +1,6 @@
 module github.com/cobaltcore-dev/o3k
 
-go 1.25.7
+go 1.26.1
 
 require (
 	github.com/coreos/go-iptables v0.8.0
@@ -10,7 +10,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/vishvananda/netlink v1.3.1
-	github.com/vishvananda/netns v0.0.5
 	golang.org/x/crypto v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -42,6 +41,7 @@ require (
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
+	github.com/vishvananda/netns v0.0.5 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
