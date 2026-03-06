@@ -1,0 +1,310 @@
+package keystone
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/sapcc/lightstack/internal/common"
+	"github.com/sapcc/lightstack/internal/database"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// TokenClaims represents JWT token claims
+type TokenClaims struct {
+	UserID    string   `json:"user_id"`
+	UserName  string   `json:"user_name"`
+	ProjectID string   `json:"project_id,omitempty"`
+	Roles     []string `json:"roles,omitempty"`
+	jwt.RegisteredClaims
+}
+
+// AuthService handles authentication operations
+type AuthService struct {
+	jwtSecret []byte
+	tokenTTL  time.Duration
+}
+
+// NewAuthService creates a new auth service
+func NewAuthService(jwtSecret string, tokenTTL time.Duration) *AuthService {
+	return &AuthService{
+		jwtSecret: []byte(jwtSecret),
+		tokenTTL:  tokenTTL,
+	}
+}
+
+// AuthRequest represents an authentication request
+type AuthRequest struct {
+	Auth struct {
+		Identity struct {
+			Methods  []string `json:"methods"`
+			Password *struct {
+				User struct {
+					Name     string `json:"name"`
+					Password string `json:"password"`
+					Domain   *struct {
+						Name string `json:"name"`
+					} `json:"domain"`
+				} `json:"user"`
+			} `json:"password,omitempty"`
+			Token *struct {
+				ID string `json:"id"`
+			} `json:"token,omitempty"`
+		} `json:"identity"`
+		Scope *struct {
+			Project *struct {
+				Name string `json:"name"`
+				ID   string `json:"id"`
+			} `json:"project,omitempty"`
+		} `json:"scope,omitempty"`
+	} `json:"auth"`
+}
+
+// AuthResponse represents an authentication response
+type AuthResponse struct {
+	Token struct {
+		ExpiresAt string                 `json:"expires_at"`
+		IssuedAt  string                 `json:"issued_at"`
+		Methods   []string               `json:"methods"`
+		User      map[string]interface{} `json:"user"`
+		Catalog   []CatalogEntry         `json:"catalog,omitempty"`
+		Project   *map[string]interface{} `json:"project,omitempty"`
+		Roles     []map[string]interface{} `json:"roles,omitempty"`
+	} `json:"token"`
+}
+
+// CatalogEntry represents a service in the catalog
+type CatalogEntry struct {
+	Type      string     `json:"type"`
+	Name      string     `json:"name"`
+	Endpoints []Endpoint `json:"endpoints"`
+}
+
+// Endpoint represents a service endpoint
+type Endpoint struct {
+	Interface string `json:"interface"`
+	Region    string `json:"region"`
+	URL       string `json:"url"`
+}
+
+// AuthenticatePassword authenticates user with password
+func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest) (*AuthResponse, string, error) {
+	if req.Auth.Identity.Password == nil {
+		return nil, "", common.NewBadRequestError("password authentication required")
+	}
+
+	username := req.Auth.Identity.Password.User.Name
+	password := req.Auth.Identity.Password.User.Password
+
+	// Fetch user from database
+	var user database.User
+	err := database.DB.QueryRow(ctx,
+		"SELECT id, name, password_hash, enabled FROM users WHERE name = $1",
+		username,
+	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled)
+
+	if err == pgx.ErrNoRows {
+		return nil, "", common.NewUnauthorizedError("invalid credentials")
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("database error: %w", err)
+	}
+
+	if !user.Enabled {
+		return nil, "", common.NewUnauthorizedError("user is disabled")
+	}
+
+	// Verify password
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return nil, "", common.NewUnauthorizedError("invalid credentials")
+	}
+
+	// Handle scoped vs unscoped
+	var projectID string
+	var roles []string
+	var project *database.Project
+
+	if req.Auth.Scope != nil && req.Auth.Scope.Project != nil {
+		// Scoped authentication
+		projectName := req.Auth.Scope.Project.Name
+		projectIDParam := req.Auth.Scope.Project.ID
+
+		// Fetch project
+		var proj database.Project
+		var query string
+		var param string
+		if projectIDParam != "" {
+			query = "SELECT id, name, description, enabled FROM projects WHERE id = $1"
+			param = projectIDParam
+		} else {
+			query = "SELECT id, name, description, enabled FROM projects WHERE name = $1"
+			param = projectName
+		}
+
+		err := database.DB.QueryRow(ctx, query, param).Scan(
+			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled,
+		)
+		if err == pgx.ErrNoRows {
+			return nil, "", common.NewUnauthorizedError("project not found")
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("database error: %w", err)
+		}
+
+		if !proj.Enabled {
+			return nil, "", common.NewUnauthorizedError("project is disabled")
+		}
+
+		projectID = proj.ID
+		project = &proj
+
+		// Fetch roles
+		rows, err := database.DB.Query(ctx, `
+			SELECT r.name
+			FROM role_assignments ra
+			JOIN roles r ON ra.role_id = r.id
+			WHERE ra.user_id = $1 AND ra.project_id = $2
+		`, user.ID, projectID)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to fetch roles: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var roleName string
+			if err := rows.Scan(&roleName); err != nil {
+				return nil, "", fmt.Errorf("failed to scan role: %w", err)
+			}
+			roles = append(roles, roleName)
+		}
+
+		if len(roles) == 0 {
+			return nil, "", common.NewForbiddenError("user has no roles on this project")
+		}
+	}
+
+	// Generate JWT token
+	now := time.Now()
+	expiresAt := now.Add(s.tokenTTL)
+	claims := &TokenClaims{
+		UserID:    user.ID,
+		UserName:  user.Name,
+		ProjectID: projectID,
+		Roles:     roles,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			Subject:   user.ID,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(s.jwtSecret)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to sign token: %w", err)
+	}
+
+	// Build response
+	resp := &AuthResponse{}
+	resp.Token.ExpiresAt = expiresAt.Format(time.RFC3339)
+	resp.Token.IssuedAt = now.Format(time.RFC3339)
+	resp.Token.Methods = req.Auth.Identity.Methods
+	resp.Token.User = map[string]interface{}{
+		"id":   user.ID,
+		"name": user.Name,
+		"domain": map[string]interface{}{
+			"id":   "default",
+			"name": "Default",
+		},
+	}
+
+	// Add project and catalog if scoped
+	if projectID != "" {
+		resp.Token.Project = &map[string]interface{}{
+			"id":   project.ID,
+			"name": project.Name,
+			"domain": map[string]interface{}{
+				"id":   "default",
+				"name": "Default",
+			},
+		}
+
+		// Add roles
+		for _, roleName := range roles {
+			resp.Token.Roles = append(resp.Token.Roles, map[string]interface{}{
+				"id":   roleName,
+				"name": roleName,
+			})
+		}
+
+		// Add service catalog
+		resp.Token.Catalog = BuildServiceCatalog(projectID)
+	}
+
+	return resp, tokenString, nil
+}
+
+// ValidateToken validates and parses a JWT token
+func (s *AuthService) ValidateToken(tokenString string) (*TokenClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &TokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return s.jwtSecret, nil
+	})
+
+	if err != nil {
+		return nil, common.NewUnauthorizedError("invalid token")
+	}
+
+	if claims, ok := token.Claims.(*TokenClaims); ok && token.Valid {
+		return claims, nil
+	}
+
+	return nil, common.NewUnauthorizedError("invalid token claims")
+}
+
+// BuildServiceCatalog builds the OpenStack service catalog
+func BuildServiceCatalog(projectID string) []CatalogEntry {
+	baseURL := "http://localhost"
+
+	return []CatalogEntry{
+		{
+			Type: "identity",
+			Name: "keystone",
+			Endpoints: []Endpoint{
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:5000/v3", baseURL)},
+			},
+		},
+		{
+			Type: "compute",
+			Name: "nova",
+			Endpoints: []Endpoint{
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:8774/v2.1", baseURL)},
+			},
+		},
+		{
+			Type: "network",
+			Name: "neutron",
+			Endpoints: []Endpoint{
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:9696/v2.0", baseURL)},
+			},
+		},
+		{
+			Type: "volumev3",
+			Name: "cinderv3",
+			Endpoints: []Endpoint{
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:8776/v3/%s", baseURL, projectID)},
+			},
+		},
+		{
+			Type: "image",
+			Name: "glance",
+			Endpoints: []Endpoint{
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:9292", baseURL)},
+			},
+		},
+	}
+}

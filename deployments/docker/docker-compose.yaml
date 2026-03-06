@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lightstack-postgres
+    environment:
+      POSTGRES_DB: lightstack
+      POSTGRES_USER: lightstack
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lightstack"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  lightstack:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile
+    container_name: lightstack
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5000:5000"  # Keystone
+      - "8774:8774"  # Nova
+      - "9696:9696"  # Neutron
+      - "8776:8776"  # Cinder
+      - "9292:9292"  # Glance
+    environment:
+      LIGHTSTACK_DB_URL: "postgres://lightstack:secret@postgres:5432/lightstack?sslmode=disable"
+      LIGHTSTACK_JWT_SECRET: "${LIGHTSTACK_JWT_SECRET:-change-me-in-production}"
+    volumes:
+      # For libvirt access (if running on same host)
+      - /var/run/libvirt:/var/run/libvirt:ro
+      # For network namespace operations
+      - /var/run/netns:/var/run/netns
+    # Uncomment for privileged operations (netlink, namespaces)
+    # privileged: true
+    # cap_add:
+    #   - NET_ADMIN
+    #   - SYS_ADMIN
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local

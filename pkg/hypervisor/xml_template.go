@@ -1,0 +1,209 @@
+package hypervisor
+
+import (
+	"fmt"
+	"strings"
+)
+
+// VMSpec defines VM specifications
+type VMSpec struct {
+	UUID        string
+	Name        string
+	VCPUs       int
+	MemoryMB    int
+	DiskGB      int
+	ImagePath   string   // Path to image (RBD or local)
+	Networks    []NetworkConfig
+	Volumes     []VolumeConfig
+	CloudInit   *CloudInitConfig
+}
+
+// NetworkConfig defines network interface configuration
+type NetworkConfig struct {
+	PortID     string
+	MACAddress string
+	BridgeName string
+}
+
+// VolumeConfig defines volume attachment configuration
+type VolumeConfig struct {
+	VolumeID  string
+	RBDPool   string
+	RBDImage  string
+	Device    string // vda, vdb, etc.
+}
+
+// CloudInitConfig defines cloud-init configuration
+type CloudInitConfig struct {
+	MetaData string
+	UserData string
+}
+
+// GenerateVMXML generates libvirt XML for a VM
+func GenerateVMXML(spec VMSpec) string {
+	var sb strings.Builder
+
+	// Domain header
+	sb.WriteString(fmt.Sprintf(`<domain type='kvm'>
+  <name>%s</name>
+  <uuid>%s</uuid>
+  <memory unit='MiB'>%d</memory>
+  <currentMemory unit='MiB'>%d</currentMemory>
+  <vcpu placement='static'>%d</vcpu>
+
+  <os>
+    <type arch='x86_64' machine='pc-i440fx-2.12'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+
+  <features>
+    <acpi/>
+    <apic/>
+    <pae/>
+  </features>
+
+  <cpu mode='host-model'>
+    <model fallback='allow'/>
+  </cpu>
+
+  <clock offset='utc'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+  </clock>
+
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>restart</on_crash>
+
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+`,
+		spec.Name, spec.UUID, spec.MemoryMB, spec.MemoryMB, spec.VCPUs))
+
+	// Boot disk (RBD-backed or local)
+	if strings.HasPrefix(spec.ImagePath, "rbd:") {
+		// RBD image format: rbd:pool/image
+		parts := strings.Split(strings.TrimPrefix(spec.ImagePath, "rbd:"), "/")
+		pool := parts[0]
+		image := parts[1]
+
+		sb.WriteString(fmt.Sprintf(`
+    <disk type='network' device='disk'>
+      <driver name='qemu' type='qcow2' cache='writeback'/>
+      <source protocol='rbd' name='%s/%s'>
+        <host name='127.0.0.1' port='6789'/>
+      </source>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+`, pool, image))
+	} else {
+		// Local file
+		sb.WriteString(fmt.Sprintf(`
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='writeback'/>
+      <source file='%s'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+`, spec.ImagePath))
+	}
+
+	// Attached volumes
+	for i, vol := range spec.Volumes {
+		device := vol.Device
+		if device == "" {
+			device = fmt.Sprintf("vd%c", 'b'+i) // vdb, vdc, etc.
+		}
+
+		sb.WriteString(fmt.Sprintf(`
+    <disk type='network' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source protocol='rbd' name='%s/%s'>
+        <host name='127.0.0.1' port='6789'/>
+      </source>
+      <target dev='%s' bus='virtio'/>
+    </disk>
+`, vol.RBDPool, vol.RBDImage, device))
+	}
+
+	// Network interfaces
+	for _, net := range spec.Networks {
+		sb.WriteString(fmt.Sprintf(`
+    <interface type='bridge'>
+      <mac address='%s'/>
+      <source bridge='%s'/>
+      <model type='virtio'/>
+    </interface>
+`, net.MACAddress, net.BridgeName))
+	}
+
+	// Serial console
+	sb.WriteString(`
+    <serial type='pty'>
+      <target port='0'/>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+`)
+
+	// VNC graphics
+	sb.WriteString(`
+    <graphics type='vnc' port='-1' autoport='yes' listen='0.0.0.0'>
+      <listen type='address' address='0.0.0.0'/>
+    </graphics>
+`)
+
+	// Cloud-init (if provided)
+	if spec.CloudInit != nil {
+		sb.WriteString(fmt.Sprintf(`
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/lightstack/cloud-init/%s.iso'/>
+      <target dev='hdc' bus='ide'/>
+      <readonly/>
+    </disk>
+`, spec.UUID))
+	}
+
+	// Close devices and domain
+	sb.WriteString(`  </devices>
+</domain>
+`)
+
+	return sb.String()
+}
+
+// GenerateCloudInitISO generates cloud-init ISO content
+func GenerateCloudInitISO(uuid string, config *CloudInitConfig) (string, error) {
+	// TODO: Generate actual ISO file using genisoimage or similar
+	// For now, return path where ISO should be created
+	return fmt.Sprintf("/var/lib/lightstack/cloud-init/%s.iso", uuid), nil
+}
+
+// DefaultCloudInitConfig returns default cloud-init configuration
+func DefaultCloudInitConfig(hostname, sshKey string) *CloudInitConfig {
+	metaData := fmt.Sprintf(`instance-id: %s
+local-hostname: %s
+`, hostname, hostname)
+
+	userData := `#cloud-config
+packages:
+  - curl
+  - vim
+runcmd:
+  - echo "LightStack VM booted successfully" > /var/log/lightstack.log
+`
+
+	if sshKey != "" {
+		userData += fmt.Sprintf(`
+ssh_authorized_keys:
+  - %s
+`, sshKey)
+	}
+
+	return &CloudInitConfig{
+		MetaData: metaData,
+		UserData: userData,
+	}
+}
