@@ -2,6 +2,7 @@ package nova
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"time"
@@ -397,7 +398,8 @@ func (svc *Service) GetServer(c *gin.Context) {
 	instanceID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	var id, name, status, projID, userID, flavorID, imageID string
+	var id, name, status, projID string
+	var userID, flavorID, imageID sql.NullString
 	var powerState int
 	var createdAt, updatedAt time.Time
 
@@ -421,20 +423,28 @@ func (svc *Service) GetServer(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"server": gin.H{
-			"id":                     id,
-			"name":                   name,
-			"status":                 status,
-			"tenant_id":              projID,
-			"user_id":                userID,
-			"created":                createdAt.Format(time.RFC3339),
-			"updated":                updatedAt.Format(time.RFC3339),
-			"OS-EXT-STS:power_state": powerState,
-			"flavor":                 gin.H{"id": flavorID},
-			"image":                  gin.H{"id": imageID},
-		},
-	})
+	// Build response with nullable fields
+	response := gin.H{
+		"id":                     id,
+		"name":                   name,
+		"status":                 status,
+		"tenant_id":              projID,
+		"created":                createdAt.Format(time.RFC3339),
+		"updated":                updatedAt.Format(time.RFC3339),
+		"OS-EXT-STS:power_state": powerState,
+	}
+
+	if userID.Valid {
+		response["user_id"] = userID.String
+	}
+	if flavorID.Valid {
+		response["flavor"] = gin.H{"id": flavorID.String}
+	}
+	if imageID.Valid {
+		response["image"] = gin.H{"id": imageID.String}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"server": response})
 }
 
 // DeleteServer deletes a server
