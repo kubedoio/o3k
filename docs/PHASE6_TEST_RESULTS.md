@@ -21,12 +21,12 @@
 | Component | Tests | Passed | Failed | Status |
 |-----------|-------|--------|--------|--------|
 | **Keystone** | 4 | 4 | 0 | ✅ |
-| **Nova** | 3 | 3 | 0 | ✅ |
+| **Nova** | 10 | 10 | 0 | ✅ |
 | **Neutron** | 3 | 3 | 0 | ✅ |
-| **Cinder** | 4 | 4 | 0 | ✅ |
+| **Cinder** | 6 | 6 | 0 | ✅ |
 | **Glance** | 6 | 6 | 0 | ✅ |
 | **Cross-Service** | 2 | 2 | 0 | ✅ |
-| **TOTAL** | **22** | **22** | **0** | ✅ |
+| **TOTAL** | **31** | **31** | **0** | ✅ |
 
 ---
 
@@ -97,6 +97,47 @@
   - vCPUs: 16 total, 2 used
   - Memory: 32768 MB total, 4096 MB used
 
+#### 2.4 Create Server
+- **Test**: `POST /v2.1/servers`
+- **Payload**: Create instance with flavor, image, network
+- **Result**: ✅ **PASS**
+- **Response**: Contains `metadata: {}` field (no 'metadata' string)
+
+#### 2.5 Get Server Details
+- **Test**: `GET /v2.1/servers/{id}` (by UUID)
+- **Result**: ✅ **PASS**
+- **Note**: Supports lookup by UUID or name
+
+#### 2.6 Get Server Details (by name)
+- **Test**: `GET /v2.1/servers/{name}`
+- **Result**: ✅ **PASS**
+- **Note**: Uses PostgreSQL `id::text` casting for name lookup
+
+#### 2.7 Server Actions - Reboot
+- **Test**: `POST /v2.1/servers/{id}/action` with `{"reboot": {"type": "SOFT"}}`
+- **Result**: ✅ **PASS**
+- **Stub Mode**: Updates status to REBOOT → ACTIVE after 1s
+- **Real Mode**: Calls libvirt reboot
+
+#### 2.8 Server Actions - Stop
+- **Test**: `POST /v2.1/servers/{id}/action` with `{"os-stop": null}`
+- **Result**: ✅ **PASS**
+- **Stub Mode**: Sets status=SHUTOFF, power_state=4
+- **Real Mode**: Calls libvirt shutdown
+
+#### 2.9 Server Actions - Start
+- **Test**: `POST /v2.1/servers/{id}/action` with `{"os-start": null}`
+- **Result**: ✅ **PASS**
+- **Stub Mode**: Sets status=ACTIVE, power_state=1
+- **Real Mode**: Calls libvirt start
+
+#### 2.10 Delete Server
+- **Test**: `DELETE /v2.1/servers/{id}`
+- **Result**: ✅ **PASS**
+- **Note**: Supports deletion by UUID or name
+- **Stub Mode**: Removes from database
+- **Real Mode**: Destroys libvirt domain + removes from database
+
 ---
 
 ### 3. Neutron (Network Service)
@@ -131,18 +172,30 @@
 - **Payload**: `{"volume": {"name": "integration-test-vol", "size": 1}}`
 - **Result**: ✅ **PASS**
 - **Volume ID**: `0411f817-9377-45cd-8b79-372815c9572e`
+- **Response**: Contains `metadata: {}` field (no 'metadata' string)
 
-#### 4.3 Verify Local Storage
+#### 4.3 Get Volume Details
+- **Test**: `GET /v3/{project_id}/volumes/{id}` (by UUID)
+- **Result**: ✅ **PASS**
+- **Note**: Supports lookup by UUID or name
+
+#### 4.4 Get Volume Details (by name)
+- **Test**: `GET /v3/{project_id}/volumes/{name}`
+- **Result**: ✅ **PASS**
+- **Note**: Uses PostgreSQL `id::text` casting for name lookup
+
+#### 4.5 Verify Local Storage
 - **Test**: Check file exists at `~/.o3k/volumes/volume-{id}.qcow2`
 - **Result**: ✅ **PASS**
 - **File Size**: 1.0G (sparse file)
 - **File Path**: `/Users/I761222/.o3k/volumes/volume-0411f817-9377-45cd-8b79-372815c9572e.qcow2`
 
-#### 4.4 Delete Volume
+#### 4.6 Delete Volume
 - **Test**: `DELETE /v3/{project_id}/volumes/{id}`
 - **Result**: ✅ **PASS**
 - **HTTP Status**: 204 No Content
 - **File Cleanup**: Verified file deleted from filesystem
+- **Note**: Supports deletion by UUID or name
 
 ---
 
@@ -408,17 +461,26 @@ Size: 1MB (fully allocated)
 
 **Phase 6 Integration Testing: ✅ COMPLETE**
 
-All 22 tests passed successfully. O3K MVP v1 is fully functional for:
+All 31 tests passed successfully. O3K MVP v1 is fully functional for:
 - ✅ Authentication and authorization (Keystone)
 - ✅ Compute management (Nova - stub mode)
+  - ✅ Server CRUD operations (create, list, get, delete)
+  - ✅ Server actions (reboot, stop, start)
+  - ✅ Name-based lookup support
+  - ✅ Metadata field properly formatted
 - ✅ Network management (Neutron - stub mode)
 - ✅ Block storage (Cinder - local mode)
+  - ✅ Volume CRUD operations
+  - ✅ Name-based lookup support
+  - ✅ Metadata field properly formatted
 - ✅ Image management (Glance - local mode)
 
 **Data Integrity**: ✅ Verified (MD5 checksum validation)
 **Storage Cleanup**: ✅ Verified (files deleted on resource delete)
 **API Compliance**: ✅ OpenStack-compatible
 **Cross-Service Integration**: ✅ Working
+**UUID Casting**: ✅ PostgreSQL `id::text` for name lookups
+**Stub Mode**: ✅ Database-only operations without hypervisor
 
 **Next Steps**:
 1. Deploy Horizon and test dashboard integration
