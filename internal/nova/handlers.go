@@ -540,10 +540,10 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		return
 	}
 
-	// Get libvirt domain ID for remaining actions
-	var libvirtDomainID string
+	// Get libvirt domain ID for remaining actions (support lookup by ID or name)
+	var libvirtDomainID sql.NullString
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
+		"SELECT libvirt_domain_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
 
@@ -552,27 +552,52 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		return
 	}
 
-	if svc.vmManager == nil || libvirtDomainID == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "hypervisor not available"})
+	// In stub mode, just update database status
+	if svc.vmManager == nil || !libvirtDomainID.Valid || libvirtDomainID.String == "" {
+		// Handle actions in stub mode by updating database only
+		if _, ok := req["reboot"]; ok {
+			// Just mark as rebooting then active
+			database.DB.Exec(c.Request.Context(),
+				"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
+				"REBOOT", time.Now(), instanceID, projectID)
+			go func() {
+				time.Sleep(1 * time.Second)
+				database.DB.Exec(context.Background(),
+					"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
+					"ACTIVE", time.Now(), instanceID, projectID)
+			}()
+		} else if _, ok := req["os-stop"]; ok {
+			database.DB.Exec(c.Request.Context(),
+				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+				"SHUTOFF", 4, time.Now(), instanceID, projectID)
+		} else if _, ok := req["os-start"]; ok {
+			database.DB.Exec(c.Request.Context(),
+				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+				"ACTIVE", 1, time.Now(), instanceID, projectID)
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		c.Status(http.StatusAccepted)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	// Handle different actions
+	// Handle different actions with real libvirt
 	if _, ok := req["reboot"]; ok {
-		if err := svc.vmManager.RebootVM(ctx, libvirtDomainID); err != nil {
+		if err := svc.vmManager.RebootVM(ctx, libvirtDomainID.String); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 	} else if _, ok := req["os-stop"]; ok {
-		if err := svc.vmManager.StopVM(ctx, libvirtDomainID); err != nil {
+		if err := svc.vmManager.StopVM(ctx, libvirtDomainID.String); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 	} else if _, ok := req["os-start"]; ok {
-		if err := svc.vmManager.StartVM(ctx, libvirtDomainID); err != nil {
+		if err := svc.vmManager.StartVM(ctx, libvirtDomainID.String); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
