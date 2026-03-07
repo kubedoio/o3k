@@ -16,24 +16,26 @@ import (
 
 // Service handles Neutron API endpoints
 type Service struct {
-	mode        string
-	nsManager   *networking.NetworkNamespaceManager
-	brManager   *networking.BridgeManager
-	tapManager  *networking.TAPDeviceManager
-	dhcpManager *networking.DHCPManager
-	sgManager   *networking.SecurityGroupManager
+	mode          string
+	nsManager     *networking.NetworkNamespaceManager
+	brManager     *networking.BridgeManager
+	tapManager    *networking.TAPDeviceManager
+	dhcpManager   *networking.DHCPManager
+	sgManager     *networking.SecurityGroupManager
+	routerManager *networking.RouterManager
 }
 
 // NewService creates a new Neutron service
 func NewService(mode string) *Service {
 	sgManager, _ := networking.NewSecurityGroupManager(mode) // Ignore error for now
 	return &Service{
-		mode:        mode,
-		nsManager:   networking.NewNetworkNamespaceManager(mode),
-		brManager:   networking.NewBridgeManager(mode),
-		tapManager:  networking.NewTAPDeviceManager(mode),
-		dhcpManager: networking.NewDHCPManager(mode),
-		sgManager:   sgManager,
+		mode:          mode,
+		nsManager:     networking.NewNetworkNamespaceManager(mode),
+		brManager:     networking.NewBridgeManager(mode),
+		tapManager:    networking.NewTAPDeviceManager(mode),
+		dhcpManager:   networking.NewDHCPManager(mode),
+		sgManager:     sgManager,
+		routerManager: networking.NewRouterManager(mode),
 	}
 }
 
@@ -74,6 +76,24 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.GET("/security-group-rules", svc.ListSecurityGroupRules)
 		v2.POST("/security-group-rules", svc.CreateSecurityGroupRule)
 		v2.DELETE("/security-group-rules/:id", svc.DeleteSecurityGroupRule)
+
+		// Routers
+		v2.GET("/routers", svc.ListRouters)
+		v2.POST("/routers", svc.CreateRouter)
+		v2.GET("/routers/:id", svc.GetRouter)
+		v2.DELETE("/routers/:id", svc.DeleteRouter)
+		v2.PUT("/routers/:id", svc.UpdateRouter)
+
+		// Router Interfaces
+		v2.PUT("/routers/:id/add_router_interface", svc.AddRouterInterface)
+		v2.PUT("/routers/:id/remove_router_interface", svc.RemoveRouterInterface)
+
+		// Floating IPs
+		v2.GET("/floatingips", svc.ListFloatingIPs)
+		v2.POST("/floatingips", svc.CreateFloatingIP)
+		v2.GET("/floatingips/:id", svc.GetFloatingIP)
+		v2.PUT("/floatingips/:id", svc.UpdateFloatingIP)
+		v2.DELETE("/floatingips/:id", svc.DeleteFloatingIP)
 	}
 }
 
@@ -582,5 +602,3 @@ func generateMAC() string {
 	buf[0] = (buf[0] | 2) & 0xfe // Set local bit, clear multicast bit
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
 }
-
-// Port implementations continue in next file due to length...
