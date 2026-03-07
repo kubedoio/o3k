@@ -1,5 +1,9 @@
-# Multi-stage build for O3K
-FROM golang:1.26-alpine AS builder
+# Multi-stage build for O3K - Multi-architecture support
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+
+# Build arguments for cross-compilation
+ARG TARGETOS
+ARG TARGETARCH
 
 # Install build dependencies
 RUN apk add --no-cache git make
@@ -14,13 +18,15 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o o3k ./cmd/o3k
+# Build the binary for target architecture
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-w -s" -o o3k ./cmd/o3k
 
-# Build the migration tool
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o o3k-migrate ./cmd/o3k-migrate
+# Build the migration tool for target architecture
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-w -s" -o o3k-migrate ./cmd/o3k-migrate
 
-# Runtime stage
+# Runtime stage - automatically uses target platform
 FROM alpine:3.19
 
 # Install runtime dependencies
@@ -55,9 +61,9 @@ USER o3k
 # Expose ports
 EXPOSE 5000 8774 9696 8776 9292 8775
 
-# Health check
+# Health check (use internal port 35357)
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:5000/v3 || exit 1
+    CMD curl -f http://localhost:35357/v3 || exit 1
 
 # Run migrations and start O3K
 CMD ["/bin/sh", "-c", "/app/o3k-migrate up && /app/o3k --config /app/config/o3k.yaml"]

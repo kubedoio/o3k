@@ -55,8 +55,12 @@ type AuthRequest struct {
 		} `json:"identity"`
 		Scope *struct {
 			Project *struct {
-				Name string `json:"name"`
-				ID   string `json:"id"`
+				Name   string `json:"name"`
+				ID     string `json:"id"`
+				Domain *struct {
+					Name string `json:"name"`
+					ID   string `json:"id"`
+				} `json:"domain,omitempty"`
 			} `json:"project,omitempty"`
 		} `json:"scope,omitempty"`
 	} `json:"auth"`
@@ -98,12 +102,32 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 	username := req.Auth.Identity.Password.User.Name
 	password := req.Auth.Identity.Password.User.Password
 
-	// Fetch user from database
-	var user database.User
+	// Get domain name (default to "Default" if not specified)
+	domainName := "Default"
+	if req.Auth.Identity.Password.User.Domain != nil && req.Auth.Identity.Password.User.Domain.Name != "" {
+		domainName = req.Auth.Identity.Password.User.Domain.Name
+	}
+
+	// Look up domain ID
+	var domainID string
 	err := database.DB.QueryRow(ctx,
-		"SELECT id, name, password_hash, enabled FROM users WHERE name = $1",
-		username,
-	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled)
+		"SELECT id FROM domains WHERE name = $1",
+		domainName,
+	).Scan(&domainID)
+
+	if err == pgx.ErrNoRows {
+		return nil, "", common.NewUnauthorizedError("invalid domain")
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("database error looking up domain: %w", err)
+	}
+
+	// Fetch user from database (with domain filter)
+	var user database.User
+	err = database.DB.QueryRow(ctx,
+		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE name = $1 AND domain_id = $2",
+		username, domainID,
+	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
 
 	if err == pgx.ErrNoRows {
 		return nil, "", common.NewUnauthorizedError("invalid credentials")
@@ -131,20 +155,20 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		projectName := req.Auth.Scope.Project.Name
 		projectIDParam := req.Auth.Scope.Project.ID
 
-		// Fetch project
+		// Fetch project (with domain filter)
 		var proj database.Project
 		var query string
-		var param string
+		var params []interface{}
 		if projectIDParam != "" {
-			query = "SELECT id, name, description, enabled FROM projects WHERE id = $1"
-			param = projectIDParam
+			query = "SELECT id, name, description, enabled, domain_id FROM projects WHERE id = $1 AND domain_id = $2"
+			params = []interface{}{projectIDParam, domainID}
 		} else {
-			query = "SELECT id, name, description, enabled FROM projects WHERE name = $1"
-			param = projectName
+			query = "SELECT id, name, description, enabled, domain_id FROM projects WHERE name = $1 AND domain_id = $2"
+			params = []interface{}{projectName, domainID}
 		}
 
-		err := database.DB.QueryRow(ctx, query, param).Scan(
-			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled,
+		err := database.DB.QueryRow(ctx, query, params...).Scan(
+			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
 		if err == pgx.ErrNoRows {
 			return nil, "", common.NewUnauthorizedError("project not found")

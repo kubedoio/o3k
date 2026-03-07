@@ -3,7 +3,7 @@ INSERT INTO users (id, name, password_hash, enabled)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     'admin',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', -- bcrypt hash of 'secret'
+    '$2a$10$/DyBs44Yot8zgjC4j.n03Ox/QG94ftrksEXKKvadKcixLbGll0dR2', -- bcrypt hash of 'secret'
     true
 ) ON CONFLICT (name) DO NOTHING;
 

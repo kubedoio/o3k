@@ -81,136 +81,73 @@ Just as K3s removed heavyweight components from Kubernetes:
 
 ## Quick Start
 
-### Prerequisites
+### 🚀 5-Minute Setup (Docker)
 
-**Required:**
-- Go 1.21+
-- PostgreSQL 14+
-
-**Optional (for real mode):**
-- libvirt + KVM (for real VMs)
-- Ceph cluster (for RBD storage)
-- AWS S3 / MinIO / Ceph RGW (for S3 storage)
-
-**Note**: O3K works in stub mode without any optional dependencies for testing.
-
-### Installation
-
-1. **Clone and build:**
+The fastest way to get O3K running:
 
 ```bash
+# 1. Clone repository
 git clone https://github.com/cobaltcore-dev/o3k.git
 cd o3k
-make install-deps
-make build
-```
 
-2. **Start PostgreSQL (development):**
+# 2. Start services
+docker compose up -d
 
-```bash
-docker run -d --name o3k-postgres \
-  -e POSTGRES_DB=o3k \
-  -e POSTGRES_USER=o3k \
-  -e POSTGRES_PASSWORD=secret \
-  -p 5432:5432 postgres:16
-```
+# 3. Install OpenStack CLI
+brew install pipx && pipx install python-openstackclient
 
-3. **Run migrations:**
+# 4. Configure environment
+source ~/.o3k-env
 
-```bash
-make migrate-up
-```
-
-4. **Run O3K:**
-
-```bash
-./bin/o3k --config config/o3k.yaml
-```
-
-The following services will be available:
-- Keystone: http://localhost:35357/v3
-- Nova: http://localhost:8774/v2.1
-- Neutron: http://localhost:9696/v2.0
-- Cinder: http://localhost:8776/v3
-- Glance: http://localhost:9292/v2
-
-### Testing with OpenStack CLI
-
-```bash
-# Set environment variables
-export OS_AUTH_URL=http://localhost:35357/v3
-export OS_USERNAME=admin
-export OS_PASSWORD=secret
-export OS_PROJECT_NAME=default
-export OS_USER_DOMAIN_NAME=default
-export OS_PROJECT_DOMAIN_NAME=default
-
-# Test authentication
+# 5. Test it!
 openstack token issue
-
-# List projects
-openstack project list
-
-# List users
-openstack user list
+openstack server create --flavor m1.small --image cirros --network my-net test-vm
 ```
+
+**That's it!** You now have a fully functional OpenStack cloud running locally.
+
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the complete quick start guide.
+
+### 📖 Installation Options
+
+**Docker Compose (Recommended):**
+- See [docs/INSTALLATION.md](docs/INSTALLATION.md#docker-compose-recommended)
+- Includes PostgreSQL, all services, health checks
+- Works on ARM64 (Apple Silicon) and AMD64 (Intel/AMD)
+
+**Binary Installation:**
+- See [docs/INSTALLATION.md](docs/INSTALLATION.md#binary-installation)
+- For advanced users who want direct control
+- Requires manual PostgreSQL setup
 
 ## Configuration
 
-O3K supports multiple operating modes. Edit `config/o3k.yaml`:
+O3K can be configured through YAML files or environment variables.
 
+**Quick configuration:**
 ```yaml
+# config/o3k.yaml
 database:
-  url: "postgres://o3k:secret@localhost/o3k"
-  max_connections: 20
+  url: "postgres://lightstack:secret@localhost/lightstack?sslmode=disable"
 
 keystone:
-  port: 35357
   jwt_secret: "change-me-in-production"
   token_ttl: 24h
 
 nova:
-  port: 8774
-  libvirt_uri: "qemu:///system"
   libvirt_mode: stub  # "stub" or "real"
 
 neutron:
-  port: 9696
-  networking_mode: iptables
+  networking_mode: stub  # "stub", "iptables", or "ebpf"
 
 cinder:
-  port: 8776
-  storage_mode: local  # "stub", "local", "rbd", "s3", "local,s3", "rbd,s3"
-  ceph_pool: volumes
-  s3_bucket: ""
-  s3_region: us-east-1
+  storage_mode: local  # "local", "rbd", "s3", or hybrid
 
 glance:
-  port: 9292
-  storage_mode: local  # "stub", "local", "rbd", "s3", "local,rbd", "local,s3", "rbd,s3"
-  ceph_pool: images
-  s3_bucket: ""
-  s3_region: us-east-1
+  storage_mode: local  # "local", "rbd", "s3", or hybrid
 ```
 
-### Storage Modes
-
-O3K supports 7 storage backend configurations:
-
-1. **stub** - In-memory mock (testing only)
-2. **local** - Local filesystem storage
-3. **rbd** - Ceph RBD (requires Ceph cluster)
-4. **s3** - S3-compatible object storage (AWS S3, MinIO, Ceph RGW)
-5. **local,rbd** - Hybrid with RBD fallback
-6. **local,s3** - Hybrid with S3 fallback
-7. **rbd,s3** - Hybrid with S3 fallback
-
-See `docs/STORAGE_MODES.md` for detailed configuration.
-
-### Environment Variables
-
-- `O3K_DB_URL` - Override database URL
-- `O3K_JWT_SECRET` - Override JWT secret (recommended in production)
+**For complete configuration guide, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)**
 
 ## Development
 
@@ -332,15 +269,23 @@ Areas needing help:
 
 ## 📚 Documentation
 
-- **Quick Start**: This README
-- **Storage Modes**: `docs/STORAGE_MODES.md` - All 7 storage configurations
-- **S3 Configuration**: `docs/S3_CONFIGURATION.md` - AWS S3, MinIO, Ceph RGW
-- **Real Libvirt Mode**: `docs/REAL_LIBVIRT_MODE.md` - KVM setup and VM lifecycle
-- **Horizon Testing**: `docs/HORIZON_TESTING_RESULTS.md` - Dashboard compatibility
-- **Integration Tests**: `docs/PHASE6_TEST_RESULTS.md` - Full test suite results
-- **MVP Summary**: `docs/MVP_V1_COMPLETE.md` - Project completion report
-- **Architecture**: `docs/ARCHITECTURE.md` - System design (coming soon)
-- **API Reference**: `docs/API_REFERENCE.md` - Endpoint documentation (coming soon)
+### Getting Started
+- **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes
+- **[Installation Guide](docs/INSTALLATION.md)** - Complete setup instructions (Docker & binary)
+- **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)** - Docker-specific deployment guide
+- **[Multi-Architecture](docs/MULTIARCH.md)** - ARM64 and AMD64 support
+
+### Configuration & Operations
+- **[Configuration Guide](docs/CONFIGURATION.md)** - All configuration options
+- **[Operations Guide](docs/OPERATIONS.md)** - Day-to-day management and monitoring
+
+### Development & API
+- **[Architecture](docs/ARCHITECTURE.md)** - System design and components
+- **[API Reference](docs/API.md)** - OpenStack API compatibility details
+- **[Contributing](docs/CONTRIBUTING.md)** - Development guidelines
+
+### Additional Resources
+All documentation available in the [`docs/`](docs/) directory.
 
 ## 📝 License
 
