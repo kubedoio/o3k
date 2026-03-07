@@ -124,6 +124,7 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 			"bootable":    "false",
 			"created_at":  now.Format(time.RFC3339),
 			"updated_at":  now.Format(time.RFC3339),
+			"metadata":    gin.H{},
 			"attachments": []interface{}{},
 		},
 	})
@@ -237,10 +238,11 @@ func (svc *Service) GetVolume(c *gin.Context) {
 	var attachedTo sql.NullString
 	var createdAt, updatedAt time.Time
 
+	// Support lookup by ID or name
 	err := database.DB.QueryRow(c.Request.Context(), `
 		SELECT id, name, size_gb, status, bootable, attached_to_instance_id, created_at, updated_at
 		FROM volumes
-		WHERE id = $1 AND project_id = $2
+		WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))
 	`, volumeID, projectID).Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
@@ -280,10 +282,10 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 	volumeID := c.Param("id")
 	projectID := c.Param("project_id")
 
-	// Check if volume is attached
+	// Check if volume is attached (support lookup by ID or name)
 	var attachedTo sql.NullString
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT attached_to_instance_id FROM volumes WHERE id = $1 AND project_id = $2",
+		"SELECT attached_to_instance_id FROM volumes WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		volumeID, projectID,
 	).Scan(&attachedTo)
 
