@@ -52,6 +52,10 @@ COPY migrations /app/migrations
 # Copy default config
 COPY config/o3k.yaml /app/config/o3k.yaml
 
+# Create storage directories for local mode
+RUN mkdir -p /var/lib/o3k/images /var/lib/o3k/volumes && \
+    chown -R o3k:o3k /var/lib/o3k
+
 # Change ownership
 RUN chown -R o3k:o3k /app
 
