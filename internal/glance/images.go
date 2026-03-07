@@ -358,7 +358,7 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 	// Check if image exists and is in queued status
 	var status string
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT status FROM images WHERE id = $1 AND project_id = $2",
+		"SELECT status FROM images WHERE id = $1 AND (visibility = 'public' OR project_id = $2)",
 		imageID, projectID,
 	).Scan(&status)
 
