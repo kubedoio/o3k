@@ -6,12 +6,49 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: This project uses the Ultimate Project System (Beastmode × Spec-Kit synthesis).
 
-- Read `.beastmode/BEASTMODE.md` at the start of every session
-- Follow the workflow: `specify → plan → tasks → implement → validate → release`
-- Respect the Nine Articles (constitution) in `memory/constitution.md`
-- Use the knowledge hierarchy (L0-L3) for context management
+### Workflow & Knowledge Hierarchy
+- **L0 (Autoload)**: Read `.beastmode/BEASTMODE.md` at the start of every session
+- **L1 (Phase Context)**: `.beastmode/context/{PHASE}.md` - Load at phase start
+- **L2 (Domain Details)**: `.beastmode/context/{phase}/{domain}.md` - On-demand
+- **L3 (Specs & Artifacts)**: `specs/NNN-*/` - Feature specifications
 
-Available commands: `/constitution`, `/specify`, `/plan`, `/tasks`, `/implement`, `/validate`, `/release`
+### Development Workflow
+```
+specify → plan → tasks → implement → validate → release
+```
+Each phase: **prime → execute → validate → checkpoint → retro**
+
+### The Nine Articles (Constitution)
+Immutable principles in `memory/constitution.md`:
+1. **Library-First** - Features begin as standalone libraries
+2. **CLI Interface** - All libraries expose CLI functionality
+3. **Test-First** - TDD mandatory (NON-NEGOTIABLE: tests → fail → implement)
+4. **Integration Testing** - Real dependencies over mocks
+5. **Observability** - Everything inspectable
+6. **Versioning** - Semantic versioning
+7. **Simplicity** - ≤3 projects, YAGNI principles
+8. **Anti-Abstraction** - Use frameworks directly
+9. **Integration-First** - Contract tests before implementation
+
+### Available Commands
+- `/constitution` - Establish project principles
+- `/specify [desc]` - Create feature specification
+- `/plan [stack]` - Create implementation plan
+- `/tasks` - Generate task list
+- `/implement [--parallel]` - Execute with parallel agents (swarm mode)
+- `/validate` - Run validation gates
+- `/release` - Release feature
+
+### Swarm Mode
+Parallel execution enabled for:
+- Research: Multiple topics simultaneously
+- Implementation: Parallel-safe waves (file isolation checked)
+- Retro: Context + Meta walkers together
+
+### Persona
+When working on this project, adopt the **deadpan minimalist** persona:
+- Short sentences, maximum understatement
+- Competent, slightly annoyed at the work (never at the user)
 
 ## Project Overview
 
@@ -24,6 +61,19 @@ O3K is a lightweight OpenStack implementation in Go, inspired by K3s. It provide
 - **Multi-mode Support**: Each service supports stub mode (development) and real mode (production)
 
 ## Build and Development Commands
+
+### Quick Start with Docker Compose
+
+```bash
+# Start all services (PostgreSQL + O3K)
+docker compose up -d
+
+# Configure environment
+source ~/.o3k-env         # Sets OS_AUTH_URL, OS_USERNAME, etc.
+
+# Test it works
+openstack token issue
+```
 
 ### Building and Running
 
@@ -235,24 +285,57 @@ openstack server delete test-vm
 - Tests use environment variables from `.env` or `~/.o3k-env`
 - Quick validation: `./test/quick_test.sh` (runs in ~30 seconds)
 
+### Test-First Development (Constitution Article III)
+When implementing new features:
+1. **Write tests first** - Create `*_test.go` files
+2. **Get approval** - Review test strategy
+3. **Confirm RED** - Tests must fail initially
+4. **Implement** - Write code to make tests pass (GREEN)
+5. **Refactor** - Clean up while keeping tests green
+
+This is **NON-NEGOTIABLE** per the project constitution.
+
 ## Configuration
 
 Configuration loaded from `config/o3k.yaml` (or via `--config` flag).
 
 **Critical settings:**
 - `database.url`: PostgreSQL connection string
-- `keystone.jwt_secret`: MUST change in production
+- `keystone.jwt_secret`: MUST change in production (security critical)
 - `nova.libvirt_mode`: `stub` (dev) or `real` (prod)
 - `neutron.networking_mode`: `stub`, `iptables`, or `ebpf`
-- `cinder.storage_mode`: `stub`, `local`, `rbd`, `s3`, or hybrid
-- `glance.storage_mode`: `stub`, `local`, `rbd`, `s3`, or hybrid
+- `cinder.storage_mode`: `stub`, `local`, `rbd`, `s3`, or hybrid (comma-separated)
+- `glance.storage_mode`: `stub`, `local`, `rbd`, `s3`, or hybrid (comma-separated)
 
 **Multi-node VXLAN** (advanced):
 - Set `neutron.vxlan_enabled: true`
 - Configure `compute.node_id` and `compute.tunnel_ip`
 - Enables cross-node VM networking via VXLAN overlay
 
+### Default Credentials
+Seed data creates:
+- **User**: `admin`
+- **Password**: `secret`
+- **Project**: `default`
+
+*Change these in production environments.*
+
 ## Common Patterns and Idioms
+
+### Commit Messages
+Follow conventional commits format:
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+**Types**: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+
+**Examples**:
+- `feat(glance): add S3 backend support for image storage`
+- `fix(nova): correct power_state in server detail response`
+- `refactor(cinder): simplify volume attachment logic`
 
 ### Error Handling
 ```go
