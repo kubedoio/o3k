@@ -780,12 +780,25 @@ func (svc *Service) ListHypervisors(c *gin.Context) {
 			"hypervisor_hostname": "o3k-node-1",
 			"state":               "up",
 			"status":              "enabled",
+			"hypervisor_type":     "QEMU",
+			"hypervisor_version":  2012000,
+			"vcpus":               16,
+			"memory_mb":           32768,
+			"local_gb":            1000,
+			"vcpus_used":          0,
+			"memory_mb_used":      0,
+			"local_gb_used":       0,
+			"free_disk_gb":        900,
+			"free_ram_mb":         28672,
+			"running_vms":         0,
 		},
 	}})
 }
 
 // ListHypervisorsDetail lists hypervisors with details (mock for Horizon)
 func (svc *Service) ListHypervisorsDetail(c *gin.Context) {
+	cpuInfoJSON := `{"arch":"x86_64","model":"Skylake-Server-IBRS","vendor":"Intel","features":[],"topology":{"cores":8,"threads":2,"sockets":1}}`
+
 	c.JSON(200, gin.H{"hypervisors": []gin.H{
 		{
 			"id":                  1,
@@ -798,9 +811,12 @@ func (svc *Service) ListHypervisorsDetail(c *gin.Context) {
 			"vcpus_used":          0,
 			"memory_mb_used":      0,
 			"local_gb_used":       0,
+			"free_disk_gb":        900,
+			"free_ram_mb":         28672,
 			"hypervisor_type":     "QEMU",
 			"hypervisor_version":  2012000,
 			"running_vms":         0,
+			"cpu_info":            cpuInfoJSON,
 		},
 	}})
 }
