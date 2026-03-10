@@ -548,6 +548,21 @@ func (svc *Service) ServerAction(c *gin.Context) {
 	} else if createImageData, ok := req["createImage"]; ok {
 		svc.CreateImageAction(c, createImageData)
 		return
+	} else if _, ok := req["pause"]; ok {
+		svc.PauseInstanceAction(c)
+		return
+	} else if _, ok := req["unpause"]; ok {
+		svc.UnpauseInstanceAction(c)
+		return
+	} else if _, ok := req["lock"]; ok {
+		svc.LockInstanceAction(c)
+		return
+	} else if _, ok := req["unlock"]; ok {
+		svc.UnlockInstanceAction(c)
+		return
+	} else if _, ok := req["forceDelete"]; ok {
+		svc.ForceDeleteInstanceAction(c)
+		return
 	}
 
 	// Get libvirt domain ID for remaining actions (support lookup by ID or name)
@@ -1176,5 +1191,121 @@ func (svc *Service) CreateImageAction(c *gin.Context, createImageData interface{
 	imageLocation := fmt.Sprintf("http://localhost:9292/v2/images/%s", imageID)
 	c.Header("Location", imageLocation)
 	c.Status(http.StatusAccepted)
+}
+
+// PauseInstanceAction handles the pause action
+func (svc *Service) PauseInstanceAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Update instance status to PAUSED
+	_, err := database.DB.Exec(c.Request.Context(),
+		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+		"PAUSED", time.Now(), instanceID, projectID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// UnpauseInstanceAction handles the unpause action
+func (svc *Service) UnpauseInstanceAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Update instance status to ACTIVE
+	_, err := database.DB.Exec(c.Request.Context(),
+		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+		"ACTIVE", time.Now(), instanceID, projectID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// LockInstanceAction handles the lock action
+func (svc *Service) LockInstanceAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Update instance locked status
+	_, err := database.DB.Exec(c.Request.Context(),
+		"UPDATE instances SET locked = true, updated_at = $1 WHERE id = $2 AND project_id = $3",
+		time.Now(), instanceID, projectID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// UnlockInstanceAction handles the unlock action
+func (svc *Service) UnlockInstanceAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Update instance locked status
+	_, err := database.DB.Exec(c.Request.Context(),
+		"UPDATE instances SET locked = false, updated_at = $1 WHERE id = $2 AND project_id = $3",
+		time.Now(), instanceID, projectID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// ForceDeleteInstanceAction handles the forceDelete action
+func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// In stub mode, just delete from database
+	if svc.libvirtMode == "stub" || svc.vmManager == nil {
+		_, err := database.DB.Exec(c.Request.Context(),
+			"DELETE FROM instances WHERE id = $1 AND project_id = $2",
+			instanceID, projectID,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.Status(http.StatusNoContent)
+		return
+	}
+
+	// In real mode, destroy VM then delete from database
+	var libvirtDomainID sql.NullString
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&libvirtDomainID)
+
+	if err == nil && libvirtDomainID.Valid && libvirtDomainID.String != "" {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+		svc.vmManager.DeleteVM(ctx, libvirtDomainID.String)
+	}
+
+	_, err = database.DB.Exec(c.Request.Context(),
+		"DELETE FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
