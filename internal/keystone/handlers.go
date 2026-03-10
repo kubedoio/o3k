@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // Service handles Keystone API endpoints
@@ -46,7 +48,10 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Projects
 		v3.GET("/projects", svc.ListProjects)
+		v3.POST("/projects", svc.CreateProject)
 		v3.GET("/projects/:id", svc.GetProject)
+		v3.PATCH("/projects/:id", svc.UpdateProject)
+		v3.DELETE("/projects/:id", svc.DeleteProject)
 
 		// Groups
 		v3.GET("/groups", svc.ListGroups)
@@ -287,6 +292,189 @@ func (svc *Service) GetProject(c *gin.Context) {
 		"enabled":     enabled,
 		"domain_id":   "default",
 	}})
+}
+
+// CreateProject handles POST /v3/projects
+func (svc *Service) CreateProject(c *gin.Context) {
+	var req struct {
+		Project struct {
+			Name        string `json:"name" binding:"required"`
+			Description string `json:"description"`
+			DomainID    string `json:"domain_id"`
+			Enabled     *bool  `json:"enabled"`
+		} `json:"project" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"message": "invalid request body",
+			"code":    400,
+			"title":   "Bad Request",
+		}})
+		return
+	}
+
+	// Default domain_id if not provided
+	domainID := req.Project.DomainID
+	if domainID == "" {
+		domainID = "00000000-0000-0000-0000-000000000100" // Default domain UUID
+	}
+
+	// Default enabled to true if not specified
+	enabled := true
+	if req.Project.Enabled != nil {
+		enabled = *req.Project.Enabled
+	}
+
+	// Generate new project ID
+	projectID := uuid.New().String()
+	now := time.Now()
+
+	// Insert into database
+	_, err := database.DB.Exec(c.Request.Context(),
+		`INSERT INTO projects (id, name, description, domain_id, enabled, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		projectID, req.Project.Name, req.Project.Description, domainID, enabled, now, now,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+			"message": err.Error(),
+			"code":    500,
+			"title":   "Internal Server Error",
+		}})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"project": gin.H{
+		"id":          projectID,
+		"name":        req.Project.Name,
+		"description": req.Project.Description,
+		"domain_id":   domainID,
+		"enabled":     enabled,
+		"links": gin.H{
+			"self": c.Request.Host + "/v3/projects/" + projectID,
+		},
+	}})
+}
+
+// UpdateProject handles PATCH /v3/projects/:id
+func (svc *Service) UpdateProject(c *gin.Context) {
+	projectID := c.Param("id")
+
+	var req struct {
+		Project struct {
+			Name        *string `json:"name"`
+			Description *string `json:"description"`
+			Enabled     *bool   `json:"enabled"`
+		} `json:"project" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"message": "invalid request body",
+			"code":    400,
+			"title":   "Bad Request",
+		}})
+		return
+	}
+
+	// Build dynamic update query
+	updates := []string{}
+	args := []interface{}{}
+	argIdx := 1
+
+	if req.Project.Name != nil {
+		updates = append(updates, fmt.Sprintf("name = $%d", argIdx))
+		args = append(args, *req.Project.Name)
+		argIdx++
+	}
+	if req.Project.Description != nil {
+		updates = append(updates, fmt.Sprintf("description = $%d", argIdx))
+		args = append(args, *req.Project.Description)
+		argIdx++
+	}
+	if req.Project.Enabled != nil {
+		updates = append(updates, fmt.Sprintf("enabled = $%d", argIdx))
+		args = append(args, *req.Project.Enabled)
+		argIdx++
+	}
+
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"message": "No fields to update",
+			"code":    400,
+		}})
+		return
+	}
+
+	updates = append(updates, "updated_at = NOW()")
+	args = append(args, projectID)
+
+	query := fmt.Sprintf("UPDATE projects SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
+	_, err := database.DB.Exec(c.Request.Context(), query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+			"message": err.Error(),
+			"code":    500,
+		}})
+		return
+	}
+
+	// Fetch updated project
+	var name, description, domainID string
+	var enabled bool
+	err = database.DB.QueryRow(c.Request.Context(),
+		"SELECT name, description, domain_id, enabled FROM projects WHERE id = $1",
+		projectID,
+	).Scan(&name, &description, &domainID, &enabled)
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
+			"message": "project not found",
+			"code":    404,
+		}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"project": gin.H{
+		"id":          projectID,
+		"name":        name,
+		"description": description,
+		"domain_id":   domainID,
+		"enabled":     enabled,
+		"links": gin.H{
+			"self": c.Request.Host + "/v3/projects/" + projectID,
+		},
+	}})
+}
+
+// DeleteProject handles DELETE /v3/projects/:id
+func (svc *Service) DeleteProject(c *gin.Context) {
+	projectID := c.Param("id")
+
+	result, err := database.DB.Exec(c.Request.Context(),
+		"DELETE FROM projects WHERE id = $1",
+		projectID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+			"message": err.Error(),
+			"code":    500,
+		}})
+		return
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
+			"message": "project not found",
+			"code":    404,
+			"title":   "Not Found",
+		}})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 // ListRoles lists all roles
