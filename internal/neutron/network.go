@@ -53,12 +53,15 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.GET("/networks/:id", svc.GetNetwork)
 		v2.DELETE("/networks/:id", svc.DeleteNetwork)
 		v2.PUT("/networks/:id", svc.UpdateNetwork)
+		v2.PATCH("/networks/:id", svc.UpdateNetwork)
 
 		// Subnets
 		v2.GET("/subnets", svc.ListSubnets)
 		v2.POST("/subnets", svc.CreateSubnet)
 		v2.GET("/subnets/:id", svc.GetSubnet)
 		v2.DELETE("/subnets/:id", svc.DeleteSubnet)
+		v2.PUT("/subnets/:id", svc.UpdateSubnet)
+		v2.PATCH("/subnets/:id", svc.UpdateSubnet)
 
 		// Ports
 		v2.GET("/ports", svc.ListPorts)
@@ -66,12 +69,15 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.GET("/ports/:id", svc.GetPort)
 		v2.DELETE("/ports/:id", svc.DeletePort)
 		v2.PUT("/ports/:id", svc.UpdatePort)
+		v2.PATCH("/ports/:id", svc.UpdatePort)
 
 		// Security Groups
 		v2.GET("/security-groups", svc.ListSecurityGroups)
 		v2.POST("/security-groups", svc.CreateSecurityGroup)
 		v2.GET("/security-groups/:id", svc.GetSecurityGroup)
 		v2.DELETE("/security-groups/:id", svc.DeleteSecurityGroup)
+		v2.PUT("/security-groups/:id", svc.UpdateSecurityGroup)
+		v2.PATCH("/security-groups/:id", svc.UpdateSecurityGroup)
 
 		// Security Group Rules
 		v2.GET("/security-group-rules", svc.ListSecurityGroupRules)
@@ -590,6 +596,77 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// UpdateSubnet updates a subnet
+func (svc *Service) UpdateSubnet(c *gin.Context) {
+	subnetID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	var req struct {
+		Subnet struct {
+			Name *string `json:"name"`
+		} `json:"subnet"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	// Check subnet exists
+	var currentName string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT name FROM subnets WHERE id = $1 AND project_id = $2",
+		subnetID, projectID,
+	).Scan(&currentName)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "subnet not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Apply updates
+	if req.Subnet.Name != nil {
+		currentName = *req.Subnet.Name
+	}
+
+	_, err = database.DB.Exec(c.Request.Context(),
+		"UPDATE subnets SET name = $1 WHERE id = $2",
+		currentName, subnetID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Return updated subnet
+	var networkID, cidr, gatewayIP string
+	var ipVersion int
+	err = database.DB.QueryRow(c.Request.Context(),
+		"SELECT network_id, cidr, gateway_ip, ip_version FROM subnets WHERE id = $1",
+		subnetID,
+	).Scan(&networkID, &cidr, &gatewayIP, &ipVersion)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"subnet": gin.H{
+			"id":          subnetID,
+			"name":        currentName,
+			"network_id":  networkID,
+			"cidr":        cidr,
+			"gateway_ip":  gatewayIP,
+			"ip_version":  ipVersion,
+			"tenant_id":   projectID,
+		},
+	})
 }
 
 // Helper functions

@@ -563,6 +563,66 @@ func (svc *Service) DeleteSecurityGroup(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// UpdateSecurityGroup updates a security group
+func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
+	sgID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	var req struct {
+		SecurityGroup struct {
+			Name        *string `json:"name"`
+			Description *string `json:"description"`
+		} `json:"security_group"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	// Check security group exists
+	var currentName, currentDesc string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT name, description FROM security_groups WHERE id = $1 AND project_id = $2",
+		sgID, projectID,
+	).Scan(&currentName, &currentDesc)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "security group not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Apply updates
+	if req.SecurityGroup.Name != nil {
+		currentName = *req.SecurityGroup.Name
+	}
+	if req.SecurityGroup.Description != nil {
+		currentDesc = *req.SecurityGroup.Description
+	}
+
+	_, err = database.DB.Exec(c.Request.Context(),
+		"UPDATE security_groups SET name = $1, description = $2 WHERE id = $3",
+		currentName, currentDesc, sgID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"security_group": gin.H{
+			"id":          sgID,
+			"name":        currentName,
+			"description": currentDesc,
+			"tenant_id":   projectID,
+		},
+	})
+}
+
+
 // CreateSecurityGroupRuleRequest represents a security group rule creation request
 type CreateSecurityGroupRuleRequest struct {
 	SecurityGroupRule struct {
