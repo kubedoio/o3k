@@ -104,6 +104,10 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.GET("/floatingips/:id", svc.GetFloatingIP)
 		v2.PUT("/floatingips/:id", svc.UpdateFloatingIP)
 		v2.DELETE("/floatingips/:id", svc.DeleteFloatingIP)
+
+		// Quotas
+		v2.GET("/quotas/:id", svc.GetQuota)
+		v2.GET("/quotas/:id/details", svc.GetQuotaDetails)
 	}
 }
 
@@ -166,6 +170,129 @@ func (svc *Service) ListExtensions(c *gin.Context) {
 				"name":        "Quota management support",
 				"description": "Expose resource quotas",
 				"updated":     "2012-07-29T10:00:00-00:00",
+			},
+		},
+	})
+}
+
+// GetQuota returns network quotas for a project
+func (svc *Service) GetQuota(c *gin.Context) {
+	projectID := c.Param("id")
+
+	// Query current usage from database
+	var networksUsed, subnetsUsed, portsUsed, routersUsed, floatingIPsUsed, securityGroupsUsed int
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM networks WHERE project_id = $1",
+		projectID,
+	).Scan(&networksUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM subnets WHERE project_id = $1",
+		projectID,
+	).Scan(&subnetsUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM ports WHERE project_id = $1",
+		projectID,
+	).Scan(&portsUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM routers WHERE project_id = $1",
+		projectID,
+	).Scan(&routersUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM floating_ips WHERE project_id = $1",
+		projectID,
+	).Scan(&floatingIPsUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM security_groups WHERE project_id = $1",
+		projectID,
+	).Scan(&securityGroupsUsed)
+
+	// Return quota response
+	c.JSON(200, gin.H{
+		"quota": gin.H{
+			"network":            100,
+			"subnet":             100,
+			"port":               500,
+			"router":             10,
+			"floatingip":         50,
+			"security_group":     100,
+			"security_group_rule": 500,
+		},
+	})
+}
+
+// GetQuotaDetails returns network quotas with usage details
+func (svc *Service) GetQuotaDetails(c *gin.Context) {
+	projectID := c.Param("id")
+
+	// Query current usage
+	var networksUsed, subnetsUsed, portsUsed, routersUsed, floatingIPsUsed, securityGroupsUsed int
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM networks WHERE project_id = $1",
+		projectID,
+	).Scan(&networksUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM subnets WHERE project_id = $1",
+		projectID,
+	).Scan(&subnetsUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM ports WHERE project_id = $1",
+		projectID,
+	).Scan(&portsUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM routers WHERE project_id = $1",
+		projectID,
+	).Scan(&routersUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM floating_ips WHERE project_id = $1",
+		projectID,
+	).Scan(&floatingIPsUsed)
+
+	database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM security_groups WHERE project_id = $1",
+		projectID,
+	).Scan(&securityGroupsUsed)
+
+	// Return quota details with usage
+	c.JSON(200, gin.H{
+		"quota": gin.H{
+			"network": gin.H{
+				"limit": 100,
+				"used":  networksUsed,
+			},
+			"subnet": gin.H{
+				"limit": 100,
+				"used":  subnetsUsed,
+			},
+			"port": gin.H{
+				"limit": 500,
+				"used":  portsUsed,
+			},
+			"router": gin.H{
+				"limit": 10,
+				"used":  routersUsed,
+			},
+			"floatingip": gin.H{
+				"limit": 50,
+				"used":  floatingIPsUsed,
+			},
+			"security_group": gin.H{
+				"limit": 100,
+				"used":  securityGroupsUsed,
+			},
+			"security_group_rule": gin.H{
+				"limit": 500,
+				"used":  0,
 			},
 		},
 	})
