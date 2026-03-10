@@ -47,6 +47,9 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 	v2 := r.Group("/v2.0")
 	{
+		// Extensions
+		v2.GET("/extensions", svc.ListExtensions)
+
 		// Networks
 		v2.GET("/networks", svc.ListNetworks)
 		v2.POST("/networks", svc.CreateNetwork)
@@ -109,22 +112,68 @@ func (svc *Service) SetVXLANCoordinator(coordinator *VXLANCoordinator) {
 	svc.vxlanCoordinator = coordinator
 }
 
-// GetNamespaceManager returns the namespace manager (for VXLAN coordinator)
-func (svc *Service) GetNamespaceManager() *networking.NetworkNamespaceManager {
-	return svc.nsManager
-}
-
-// GetVersion returns version details
+// GetVersion returns Neutron version information
 func (svc *Service) GetVersion(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"version": gin.H{
 			"id":     "v2.0",
 			"status": "CURRENT",
 			"links": []gin.H{
-				{"rel": "self", "href": "http://localhost:9696/v2.0"},
+				{"rel": "self", "href": "/v2.0"},
 			},
 		},
 	})
+}
+
+// ListExtensions lists available API extensions
+func (svc *Service) ListExtensions(c *gin.Context) {
+	// Return list of supported extensions
+	// Horizon uses this to determine feature availability
+	c.JSON(200, gin.H{
+		"extensions": []gin.H{
+			{
+				"alias":       "security-group",
+				"name":        "security-group",
+				"description": "The security groups extension",
+				"updated":     "2012-10-05T10:00:00-00:00",
+			},
+			{
+				"alias":       "router",
+				"name":        "Neutron L3 Router",
+				"description": "Router abstraction for basic L3 forwarding",
+				"updated":     "2012-07-20T10:00:00-00:00",
+			},
+			{
+				"alias":       "port-security",
+				"name":        "Port Security",
+				"description": "Port security extension",
+				"updated":     "2012-07-23T10:00:00-00:00",
+			},
+			{
+				"alias":       "binding",
+				"name":        "Port Binding",
+				"description": "Expose port bindings of a virtual port to external application",
+				"updated":     "2014-02-03T10:00:00-00:00",
+			},
+			{
+				"alias":       "provider",
+				"name":        "Provider Network",
+				"description": "Provider network extension",
+				"updated":     "2012-09-07T10:00:00-00:00",
+			},
+			{
+				"alias":       "quotas",
+				"name":        "Quota management support",
+				"description": "Expose resource quotas",
+				"updated":     "2012-07-29T10:00:00-00:00",
+			},
+		},
+	})
+}
+
+// GetNamespaceManager returns the namespace manager (for VXLAN coordinator)
+func (svc *Service) GetNamespaceManager() *networking.NetworkNamespaceManager {
+	return svc.nsManager
 }
 
 // CreateNetworkRequest represents a network creation request
