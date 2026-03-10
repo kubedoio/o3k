@@ -40,6 +40,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.GET("/volumes/detail", svc.ListVolumesDetail)
 		v3.POST("/volumes", svc.CreateVolume)
 		v3.GET("/volumes/:id", svc.GetVolume)
+		v3.PATCH("/volumes/:id", svc.UpdateVolume)
 		v3.DELETE("/volumes/:id", svc.DeleteVolume)
 		v3.POST("/volumes/:id/action", svc.VolumeAction)
 
@@ -47,6 +48,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.GET("/snapshots", svc.ListSnapshots)
 		v3.POST("/snapshots", svc.CreateSnapshot)
 		v3.GET("/snapshots/:id", svc.GetSnapshot)
+		v3.PATCH("/snapshots/:id", svc.UpdateSnapshot)
 		v3.DELETE("/snapshots/:id", svc.DeleteSnapshot)
 
 		// Volume types
@@ -631,6 +633,138 @@ func (svc *Service) GetVolumeType(c *gin.Context) {
 			"name":        name,
 			"description": description,
 			"is_public":   isPublic,
+		},
+	})
+}
+
+// UpdateVolume updates volume properties
+func (svc *Service) UpdateVolume(c *gin.Context) {
+	volumeID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	var req struct {
+		Volume struct {
+			Name        *string `json:"name"`
+			Description *string `json:"description"`
+		} `json:"volume"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	// Check volume exists and belongs to project
+	var currentName, currentDesc string
+	var sizeGB int
+	var status string
+	var createdAt, updatedAt time.Time
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT name, COALESCE(description, ''), size_gb, status, created_at, updated_at FROM volumes WHERE id = $1 AND project_id = $2",
+		volumeID, projectID,
+	).Scan(&currentName, &currentDesc, &sizeGB, &status, &createdAt, &updatedAt)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Apply updates
+	if req.Volume.Name != nil {
+		currentName = *req.Volume.Name
+	}
+	if req.Volume.Description != nil {
+		currentDesc = *req.Volume.Description
+	}
+
+	now := time.Now()
+	_, err = database.DB.Exec(c.Request.Context(),
+		"UPDATE volumes SET name = $1, description = $2, updated_at = $3 WHERE id = $4",
+		currentName, currentDesc, now, volumeID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"volume": gin.H{
+			"id":          volumeID,
+			"name":        currentName,
+			"description": currentDesc,
+			"size":        sizeGB,
+			"status":      status,
+			"created_at":  createdAt.Format(time.RFC3339),
+			"updated_at":  now.Format(time.RFC3339),
+		},
+	})
+}
+
+// UpdateSnapshot updates snapshot properties
+func (svc *Service) UpdateSnapshot(c *gin.Context) {
+	snapshotID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	var req struct {
+		Snapshot struct {
+			Name        *string `json:"name"`
+			Description *string `json:"description"`
+		} `json:"snapshot"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	// Check snapshot exists and belongs to project
+	var currentName, currentDesc string
+	var volumeID string
+	var sizeGB int
+	var status string
+	var createdAt time.Time
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT name, COALESCE(description, ''), volume_id, size_gb, status, created_at FROM snapshots WHERE id = $1 AND project_id = $2",
+		snapshotID, projectID,
+	).Scan(&currentName, &currentDesc, &volumeID, &sizeGB, &status, &createdAt)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Apply updates
+	if req.Snapshot.Name != nil {
+		currentName = *req.Snapshot.Name
+	}
+	if req.Snapshot.Description != nil {
+		currentDesc = *req.Snapshot.Description
+	}
+
+	_, err = database.DB.Exec(c.Request.Context(),
+		"UPDATE snapshots SET name = $1, description = $2 WHERE id = $3",
+		currentName, currentDesc, snapshotID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"snapshot": gin.H{
+			"id":          snapshotID,
+			"name":        currentName,
+			"description": currentDesc,
+			"volume_id":   volumeID,
+			"size":        sizeGB,
+			"status":      status,
+			"created_at":  createdAt.Format(time.RFC3339),
 		},
 	})
 }
