@@ -2,8 +2,10 @@ package cinder
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -374,6 +376,96 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			SET attached_to_instance_id = NULL, status = $1, updated_at = $2
 			WHERE id = $3 AND project_id = $4
 		`, "available", time.Now(), volumeID, projectID)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.Status(http.StatusAccepted)
+		return
+	}
+
+	// Handle extend action
+	if extendData, ok := req["os-extend"]; ok {
+		extendMap := extendData.(map[string]interface{})
+		var newSize int
+
+		// Handle different JSON number types
+		newSizeVal := extendMap["new_size"]
+		switch v := newSizeVal.(type) {
+		case float64:
+			newSize = int(v)
+		case int:
+			newSize = v
+		case int64:
+			newSize = int(v)
+		case json.Number:
+			parsed, err := v.Int64()
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid new_size format"})
+				return
+			}
+			newSize = int(parsed)
+		case string:
+			parsed, err := strconv.Atoi(v)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid new_size format"})
+				return
+			}
+			newSize = parsed
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid new_size type: %T", newSizeVal)})
+			return
+		}
+
+		// Update volume size
+		_, err := database.DB.Exec(c.Request.Context(), `
+			UPDATE volumes
+			SET size_gb = $1, updated_at = $2
+			WHERE id = $3 AND project_id = $4
+		`, newSize, time.Now(), volumeID, projectID)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.Status(http.StatusAccepted)
+		return
+	}
+
+	// Handle retype action
+	if retypeData, ok := req["os-retype"]; ok {
+		retypeMap := retypeData.(map[string]interface{})
+		newType := retypeMap["new_type"].(string)
+
+		// Get or create volume type
+		var typeID string
+		err := database.DB.QueryRow(c.Request.Context(),
+			"SELECT id FROM volume_types WHERE name = $1",
+			newType,
+		).Scan(&typeID)
+
+		if err == pgx.ErrNoRows {
+			// Create new volume type if it doesn't exist
+			typeID = uuid.New().String()
+			_, err = database.DB.Exec(c.Request.Context(),
+				"INSERT INTO volume_types (id, name, description, is_public) VALUES ($1, $2, $3, $4)",
+				typeID, newType, "Auto-created volume type", true,
+			)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+
+		// Update volume type
+		_, err = database.DB.Exec(c.Request.Context(), `
+			UPDATE volumes
+			SET volume_type = $1, updated_at = $2
+			WHERE id = $3 AND project_id = $4
+		`, newType, time.Now(), volumeID, projectID)
 
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
