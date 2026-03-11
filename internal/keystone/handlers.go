@@ -99,6 +99,13 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.GET("/endpoints", svc.ListEndpoints)
 		v3.POST("/endpoints", svc.CreateEndpoint)
 		v3.DELETE("/endpoints/:id", svc.DeleteEndpoint)
+
+		// Credentials
+		v3.GET("/credentials", svc.ListCredentials)
+		v3.POST("/credentials", svc.CreateCredential)
+		v3.GET("/credentials/:id", svc.GetCredential)
+		v3.PATCH("/credentials/:id", svc.UpdateCredential)
+		v3.DELETE("/credentials/:id", svc.DeleteCredential)
 	}
 }
 
