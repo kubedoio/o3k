@@ -243,7 +243,7 @@ func (svc *Service) ListGroupUsers(c *gin.Context) {
 	rows, err := database.DB.Query(c.Request.Context(),
 		`SELECT u.id, u.name, u.domain_id, u.enabled
 		 FROM users u
-		 INNER JOIN group_users gu ON u.id = gu.user_id
+		 INNER JOIN group_members gu ON u.id = gu.user_id
 		 WHERE gu.group_id = $1`,
 		groupID,
 	)
@@ -283,7 +283,7 @@ func (svc *Service) AddUserToGroup(c *gin.Context) {
 	userID := c.Param("user_id")
 
 	_, err := database.DB.Exec(c.Request.Context(),
-		`INSERT INTO group_users (group_id, user_id)
+		`INSERT INTO group_members (group_id, user_id)
 		 VALUES ($1, $2)
 		 ON CONFLICT (group_id, user_id) DO NOTHING`,
 		groupID, userID,
@@ -302,7 +302,7 @@ func (svc *Service) RemoveUserFromGroup(c *gin.Context) {
 	userID := c.Param("user_id")
 
 	result, err := database.DB.Exec(c.Request.Context(),
-		"DELETE FROM group_users WHERE group_id = $1 AND user_id = $2",
+		"DELETE FROM group_members WHERE group_id = $1 AND user_id = $2",
 		groupID, userID,
 	)
 	if err != nil {
