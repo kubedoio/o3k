@@ -86,6 +86,14 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		// Stores
 		v2.GET("/stores", svc.ListStores)
 		v2.GET("/stores/info", svc.GetStoresInfo)
+
+		// Metadefs
+		v2.GET("/metadefs/namespaces", svc.ListMetadefNamespaces)
+		v2.POST("/metadefs/namespaces", svc.CreateMetadefNamespace)
+		v2.GET("/metadefs/namespaces/:namespace", svc.GetMetadefNamespace)
+		v2.PUT("/metadefs/namespaces/:namespace", svc.UpdateMetadefNamespace)
+		v2.DELETE("/metadefs/namespaces/:namespace", svc.DeleteMetadefNamespace)
+		v2.GET("/metadefs/resource_types", svc.ListMetadefResourceTypes)
 	}
 }
 
