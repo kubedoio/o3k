@@ -128,6 +128,13 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.GET("/qos/policies/:id/bandwidth_limit_rules/:rule_id", svc.GetBandwidthLimitRule)
 		v2.PUT("/qos/policies/:id/bandwidth_limit_rules/:rule_id", svc.UpdateBandwidthLimitRule)
 		v2.DELETE("/qos/policies/:id/bandwidth_limit_rules/:rule_id", svc.DeleteBandwidthLimitRule)
+
+		// RBAC Policies
+		v2.POST("/rbac-policies", svc.CreateRBACPolicy)
+		v2.GET("/rbac-policies", svc.ListRBACPolicies)
+		v2.GET("/rbac-policies/:id", svc.GetRBACPolicy)
+		v2.PUT("/rbac-policies/:id", svc.UpdateRBACPolicy)
+		v2.DELETE("/rbac-policies/:id", svc.DeleteRBACPolicy)
 	}
 }
 
