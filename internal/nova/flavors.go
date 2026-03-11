@@ -146,3 +146,90 @@ func (svc *Service) CreateFlavorExtraSpecs(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"extra_specs": req.ExtraSpecs})
 }
+
+// GetFlavorExtraSpecKey handles GET /v2.1/flavors/:id/os-extra_specs/:key
+func (svc *Service) GetFlavorExtraSpecKey(c *gin.Context) {
+	flavorID := c.Param("id")
+	key := c.Param("key")
+
+	var value string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT value FROM flavor_extra_specs WHERE flavor_id = $1 AND key = $2",
+		flavorID, key,
+	).Scan(&value)
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"itemNotFound": gin.H{
+			"message": "Extra spec key not found",
+			"code":    404,
+		}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{key: value})
+}
+
+// UpdateFlavorExtraSpecKey handles PUT /v2.1/flavors/:id/os-extra_specs/:key
+func (svc *Service) UpdateFlavorExtraSpecKey(c *gin.Context) {
+	flavorID := c.Param("id")
+	key := c.Param("key")
+
+	var req map[string]string
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
+			"message": err.Error(),
+			"code":    400,
+		}})
+		return
+	}
+
+	// Extract value for the specific key
+	value, ok := req[key]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
+			"message": "Key in URL must match key in request body",
+			"code":    400,
+		}})
+		return
+	}
+
+	_, err := database.DB.Exec(c.Request.Context(),
+		`INSERT INTO flavor_extra_specs (flavor_id, key, value)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (flavor_id, key) DO UPDATE SET value = $3`,
+		flavorID, key, value,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{key: value})
+}
+
+// DeleteFlavorExtraSpecKey handles DELETE /v2.1/flavors/:id/os-extra_specs/:key
+func (svc *Service) DeleteFlavorExtraSpecKey(c *gin.Context) {
+	flavorID := c.Param("id")
+	key := c.Param("key")
+
+	result, err := database.DB.Exec(c.Request.Context(),
+		"DELETE FROM flavor_extra_specs WHERE flavor_id = $1 AND key = $2",
+		flavorID, key,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"itemNotFound": gin.H{
+			"message": "Extra spec key not found",
+			"code":    404,
+		}})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
