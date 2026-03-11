@@ -233,3 +233,108 @@ func (svc *Service) DeleteFlavorExtraSpecKey(c *gin.Context) {
 
 	c.Status(http.StatusNoContent)
 }
+
+// FlavorAction handles POST /v2.1/flavors/:id/action
+func (svc *Service) FlavorAction(c *gin.Context) {
+	flavorID := c.Param("id")
+
+	var req map[string]interface{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
+			"message": err.Error(),
+			"code":    400,
+		}})
+		return
+	}
+
+	// Handle addTenantAccess action
+	if addAccess, ok := req["addTenantAccess"].(map[string]interface{}); ok {
+		tenantID, ok := addAccess["tenant"].(string)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
+				"message": "tenant is required",
+				"code":    400,
+			}})
+			return
+		}
+
+		_, err := database.DB.Exec(c.Request.Context(),
+			`INSERT INTO flavor_access (flavor_id, project_id)
+			 VALUES ($1, $2)
+			 ON CONFLICT (flavor_id, project_id) DO NOTHING`,
+			flavorID, tenantID,
+		)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"flavor_access": gin.H{
+				"flavor_id": flavorID,
+				"tenant_id": tenantID,
+			},
+		})
+		return
+	}
+
+	// Handle removeTenantAccess action
+	if removeAccess, ok := req["removeTenantAccess"].(map[string]interface{}); ok {
+		tenantID, ok := removeAccess["tenant"].(string)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
+				"message": "tenant is required",
+				"code":    400,
+			}})
+			return
+		}
+
+		_, err := database.DB.Exec(c.Request.Context(),
+			"DELETE FROM flavor_access WHERE flavor_id = $1 AND project_id = $2",
+			flavorID, tenantID,
+		)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.Status(http.StatusOK)
+		return
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
+		"message": "Unknown action",
+		"code":    400,
+	}})
+}
+
+// GetFlavorAccess handles GET /v2.1/flavors/:id/os-flavor-access
+func (svc *Service) GetFlavorAccess(c *gin.Context) {
+	flavorID := c.Param("id")
+
+	rows, err := database.DB.Query(c.Request.Context(),
+		"SELECT flavor_id, project_id FROM flavor_access WHERE flavor_id = $1",
+		flavorID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	flavorAccess := []gin.H{}
+	for rows.Next() {
+		var fID, pID string
+		if err := rows.Scan(&fID, &pID); err != nil {
+			continue
+		}
+		flavorAccess = append(flavorAccess, gin.H{
+			"flavor_id": fID,
+			"tenant_id": pID,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flavor_access": flavorAccess})
+}

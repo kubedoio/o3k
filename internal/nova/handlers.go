@@ -76,6 +76,10 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v21.PUT("/flavors/:id/os-extra_specs/:key", svc.UpdateFlavorExtraSpecKey)
 		v21.DELETE("/flavors/:id/os-extra_specs/:key", svc.DeleteFlavorExtraSpecKey)
 
+		// Flavor actions and access
+		v21.POST("/flavors/:id/action", svc.FlavorAction)
+		v21.GET("/flavors/:id/os-flavor-access", svc.GetFlavorAccess)
+
 		// Images (proxy to Glance)
 		v21.GET("/images", svc.ListImages)
 		v21.GET("/images/detail", svc.ListImagesDetail)
