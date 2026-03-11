@@ -80,6 +80,14 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Role Assignments (additional endpoint)
 		v3.GET("/role_assignments", svc.ListRoleAssignments)
+
+		// Domains
+		v3.GET("/domains", svc.ListDomains)
+		v3.POST("/domains", svc.CreateDomain)
+		v3.GET("/domains/:id", svc.GetDomain)
+		v3.PATCH("/domains/:id", svc.UpdateDomain)
+		v3.DELETE("/domains/:id", svc.DeleteDomain)
+		v3.GET("/domains/:id/config", svc.GetDomainConfig)
 	}
 }
 
