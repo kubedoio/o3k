@@ -223,3 +223,82 @@ func hashString(s string) int {
 	}
 	return hash
 }
+
+// GetConsoleOutputAction handles console output requests (os-getConsoleOutput action)
+func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interface{}) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Verify instance exists
+	var id string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&id)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// Parse length parameter
+	length := 0
+	if consoleMap, ok := consoleOutput.(map[string]interface{}); ok {
+		if lengthVal, ok := consoleMap["length"].(float64); ok {
+			length = int(lengthVal)
+		}
+	}
+
+	// In stub mode or without actual libvirt connection, return fake console output
+	output := fmt.Sprintf("Console output for instance %s\n", instanceID)
+	output += "Booting from Hard Disk...\n"
+	output += "Cloud-init v. 22.1-14 running 'init-local' at Wed, 11 Mar 2026 10:00:00 +0000\n"
+	output += "Cloud-init v. 22.1-14 running 'init' at Wed, 11 Mar 2026 10:00:05 +0000\n"
+	output += "System is ready.\n"
+
+	// Trim to requested length if specified
+	if length > 0 && len(output) > length {
+		output = output[len(output)-length:]
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"output": output,
+	})
+}
+
+// GetSerialConsoleAction handles serial console requests (os-getSerialConsole action)
+func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interface{}) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Verify instance exists
+	var id string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&id)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// Parse console type
+	consoleType := "serial"
+	if consoleMap, ok := serialConsole.(map[string]interface{}); ok {
+		if typeVal, ok := consoleMap["type"].(string); ok {
+			consoleType = typeVal
+		}
+	}
+
+	// Generate serial console URL
+	token := generateConsoleToken(instanceID)
+	consoleURL := fmt.Sprintf("ws://localhost:6083/?token=%s", token)
+
+	c.JSON(http.StatusOK, gin.H{
+		"console": gin.H{
+			"type": consoleType,
+			"url":  consoleURL,
+		},
+	})
+}

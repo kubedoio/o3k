@@ -568,6 +568,14 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		svc.GetVNCConsoleAction(c, vncConsole)
 		return
 	}
+	if consoleOutput, ok := req["os-getConsoleOutput"]; ok {
+		svc.GetConsoleOutputAction(c, consoleOutput)
+		return
+	}
+	if serialConsole, ok := req["os-getSerialConsole"]; ok {
+		svc.GetSerialConsoleAction(c, serialConsole)
+		return
+	}
 
 	// Handle advanced actions that don't require libvirt in all cases
 	if _, ok := req["suspend"]; ok {
