@@ -1,0 +1,246 @@
+package cinder
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"net/http"
+	"time"
+
+	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// CreateVolumeTransfer handles POST /v3/:project_id/volume-transfers
+func (svc *Service) CreateVolumeTransfer(c *gin.Context) {
+	projectID := c.GetString("project_id")
+
+	var req struct {
+		Transfer struct {
+			VolumeID string  `json:"volume_id" binding:"required"`
+			Name     *string `json:"name"`
+		} `json:"transfer" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Verify volume exists and belongs to project
+	var volumeStatus string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+		req.Transfer.VolumeID, projectID,
+	).Scan(&volumeStatus)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Volume must be available
+	if volumeStatus != "available" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "volume must be available for transfer"})
+		return
+	}
+
+	// Generate auth key
+	authKeyBytes := make([]byte, 16)
+	rand.Read(authKeyBytes)
+	authKey := hex.EncodeToString(authKeyBytes)
+
+	transferID := uuid.New().String()
+	now := time.Now()
+
+	_, err = database.DB.Exec(c.Request.Context(), `
+		INSERT INTO volume_transfers (id, volume_id, name, source_project_id, auth_key, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, transferID, req.Transfer.VolumeID, req.Transfer.Name, projectID, authKey, now, now)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"transfer": gin.H{
+			"id":        transferID,
+			"volume_id": req.Transfer.VolumeID,
+			"name":      req.Transfer.Name,
+			"auth_key":  authKey,
+			"created_at": now.Format(time.RFC3339),
+		},
+	})
+}
+
+// ListVolumeTransfers handles GET /v3/:project_id/volume-transfers
+func (svc *Service) ListVolumeTransfers(c *gin.Context) {
+	projectID := c.GetString("project_id")
+
+	rows, err := database.DB.Query(c.Request.Context(), `
+		SELECT id, volume_id, name, created_at
+		FROM volume_transfers
+		WHERE source_project_id = $1 AND accepted = false
+		ORDER BY created_at DESC
+	`, projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	transfers := []gin.H{}
+	for rows.Next() {
+		var id, volumeID string
+		var name *string
+		var createdAt time.Time
+
+		if err := rows.Scan(&id, &volumeID, &name, &createdAt); err != nil {
+			continue
+		}
+
+		transfers = append(transfers, gin.H{
+			"id":         id,
+			"volume_id":  volumeID,
+			"name":       name,
+			"created_at": createdAt.Format(time.RFC3339),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"transfers": transfers})
+}
+
+// GetVolumeTransfer handles GET /v3/:project_id/volume-transfers/:id
+func (svc *Service) GetVolumeTransfer(c *gin.Context) {
+	transferID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	var volumeID string
+	var name *string
+	var createdAt time.Time
+
+	err := database.DB.QueryRow(c.Request.Context(), `
+		SELECT volume_id, name, created_at
+		FROM volume_transfers
+		WHERE id = $1 AND source_project_id = $2 AND accepted = false
+	`, transferID, projectID).Scan(&volumeID, &name, &createdAt)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "transfer not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"transfer": gin.H{
+			"id":         transferID,
+			"volume_id":  volumeID,
+			"name":       name,
+			"created_at": createdAt.Format(time.RFC3339),
+		},
+	})
+}
+
+// DeleteVolumeTransfer handles DELETE /v3/:project_id/volume-transfers/:id
+func (svc *Service) DeleteVolumeTransfer(c *gin.Context) {
+	transferID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	result, err := database.DB.Exec(c.Request.Context(),
+		"DELETE FROM volume_transfers WHERE id = $1 AND source_project_id = $2 AND accepted = false",
+		transferID, projectID,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "transfer not found"})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// AcceptVolumeTransfer handles POST /v3/:project_id/volume-transfers/:id/accept
+func (svc *Service) AcceptVolumeTransfer(c *gin.Context) {
+	transferID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	var req struct {
+		Accept struct {
+			AuthKey string `json:"auth_key" binding:"required"`
+		} `json:"accept" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get transfer details and verify auth key
+	var volumeID, storedAuthKey, sourceProjectID string
+	var name *string
+
+	err := database.DB.QueryRow(c.Request.Context(), `
+		SELECT volume_id, name, auth_key, source_project_id
+		FROM volume_transfers
+		WHERE id = $1 AND accepted = false
+	`, transferID).Scan(&volumeID, &name, &storedAuthKey, &sourceProjectID)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "transfer not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Verify auth key
+	if req.Accept.AuthKey != storedAuthKey {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid auth key"})
+		return
+	}
+
+	// Transfer volume ownership
+	_, err = database.DB.Exec(c.Request.Context(),
+		"UPDATE volumes SET project_id = $1 WHERE id = $2",
+		projectID, volumeID,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Mark transfer as accepted
+	_, err = database.DB.Exec(c.Request.Context(),
+		"UPDATE volume_transfers SET accepted = true, destination_project_id = $1 WHERE id = $2",
+		projectID, transferID,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"transfer": gin.H{
+			"id":        transferID,
+			"volume_id": volumeID,
+			"name":      name,
+		},
+	})
+}
