@@ -57,6 +57,11 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.PUT("/images/:id/file", svc.UploadImageData)
 		v2.GET("/images/:id/file", svc.DownloadImageData)
 
+		// Image import
+		v2.POST("/images/:id/stage", svc.StageImageData)
+		v2.POST("/images/:id/import", svc.ImportImage)
+		v2.GET("/images/:id/import", svc.GetImageImportInfo)
+
 		// Image members (sharing)
 		v2.POST("/images/:id/members", svc.CreateImageMember)
 		v2.GET("/images/:id/members", svc.ListImageMembers)
