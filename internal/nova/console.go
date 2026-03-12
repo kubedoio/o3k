@@ -302,3 +302,78 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 		},
 	})
 }
+
+// GetSPICEConsoleAction handles SPICE console requests (os-getSPICEConsole action)
+func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface{}) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Verify instance exists
+	var id string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&id)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// Parse console type
+	consoleType := "spice-html5"
+	if consoleMap, ok := spiceConsole.(map[string]interface{}); ok {
+		if typeVal, ok := consoleMap["type"].(string); ok {
+			consoleType = typeVal
+		}
+	}
+
+	// Generate SPICE console URL
+	token := generateConsoleToken(instanceID)
+	consoleURL := fmt.Sprintf("http://localhost:6082/spice_auto.html?token=%s", token)
+
+	c.JSON(http.StatusOK, gin.H{
+		"console": gin.H{
+			"type": consoleType,
+			"url":  consoleURL,
+		},
+	})
+}
+
+// GetRDPConsoleAction handles RDP console requests (os-getRDPConsole action)
+func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Verify instance exists
+	var id string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&id)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// Parse console type
+	consoleType := "rdp-html5"
+	if consoleMap, ok := rdpConsole.(map[string]interface{}); ok {
+		if typeVal, ok := consoleMap["type"].(string); ok {
+			consoleType = typeVal
+		}
+	}
+
+	// Generate RDP console URL
+	token := generateConsoleToken(instanceID)
+	consoleURL := fmt.Sprintf("http://localhost:6084/rdp.html?token=%s", token)
+
+	c.JSON(http.StatusOK, gin.H{
+		"console": gin.H{
+			"type": consoleType,
+			"url":  consoleURL,
+		},
+	})
+}
+

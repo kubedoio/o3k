@@ -584,6 +584,14 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		svc.GetSerialConsoleAction(c, serialConsole)
 		return
 	}
+	if spiceConsole, ok := req["os-getSPICEConsole"]; ok {
+		svc.GetSPICEConsoleAction(c, spiceConsole)
+		return
+	}
+	if rdpConsole, ok := req["os-getRDPConsole"]; ok {
+		svc.GetRDPConsoleAction(c, rdpConsole)
+		return
+	}
 
 	// Handle advanced actions that don't require libvirt in all cases
 	if _, ok := req["suspend"]; ok {
@@ -957,33 +965,100 @@ func (svc *Service) GetHypervisorStatistics(c *gin.Context) {
 
 // ListAvailabilityZones lists availability zones
 func (svc *Service) ListAvailabilityZones(c *gin.Context) {
-	c.JSON(200, gin.H{"availabilityZoneInfo": []gin.H{
-		{
+	// Query distinct availability zones from host_aggregates
+	rows, err := database.DB.Query(c.Request.Context(),
+		"SELECT DISTINCT availability_zone FROM host_aggregates WHERE availability_zone IS NOT NULL AND availability_zone != ''")
+	if err != nil {
+		c.JSON(500, gin.H{"error": gin.H{"message": "Failed to query availability zones", "code": 500}})
+		return
+	}
+	defer rows.Close()
+
+	var zones []gin.H
+	for rows.Next() {
+		var zoneName string
+		if err := rows.Scan(&zoneName); err != nil {
+			continue
+		}
+		zones = append(zones, gin.H{
+			"zoneName":  zoneName,
+			"zoneState": gin.H{"available": true},
+			"hosts":     nil,
+		})
+	}
+
+	// Fallback to "nova" if no aggregates exist
+	if len(zones) == 0 {
+		zones = append(zones, gin.H{
 			"zoneName":  "nova",
 			"zoneState": gin.H{"available": true},
 			"hosts":     nil,
-		},
-	}})
+		})
+	}
+
+	c.JSON(200, gin.H{"availabilityZoneInfo": zones})
 }
 
 // ListAvailabilityZonesDetail lists availability zones with host details
 func (svc *Service) ListAvailabilityZonesDetail(c *gin.Context) {
-	// Detail view includes compute hosts per zone
-	c.JSON(200, gin.H{"availabilityZoneInfo": []gin.H{
-		{
+	// Query availability zones with hosts from host_aggregates
+	rows, err := database.DB.Query(c.Request.Context(),
+		"SELECT availability_zone, hosts FROM host_aggregates WHERE availability_zone IS NOT NULL AND availability_zone != ''")
+	if err != nil {
+		c.JSON(500, gin.H{"error": gin.H{"message": "Failed to query availability zones", "code": 500}})
+		return
+	}
+	defer rows.Close()
+
+	// Build zone map: zone_name -> []host
+	zoneHosts := make(map[string][]string)
+	for rows.Next() {
+		var zoneName string
+		var hosts []string
+		if err := rows.Scan(&zoneName, &hosts); err != nil {
+			continue
+		}
+		zoneHosts[zoneName] = append(zoneHosts[zoneName], hosts...)
+	}
+
+	var zones []gin.H
+	if len(zoneHosts) == 0 {
+		// Fallback to "nova" with default host
+		zones = append(zones, gin.H{
 			"zoneName":  "nova",
 			"zoneState": gin.H{"available": true},
 			"hosts": gin.H{
 				"o3k-compute-1": gin.H{
 					"nova-compute": gin.H{
-						"active":     true,
-						"available":  true,
-						"updated_at": time.Now(),
+						"active":    true,
+						"available": true,
 					},
 				},
 			},
-		},
-	}})
+		})
+	} else {
+		// Build response for each zone
+		for zoneName, hosts := range zoneHosts {
+			zoneHostsMap := gin.H{}
+			for _, host := range hosts {
+				if host != "" {
+					zoneHostsMap[host] = gin.H{
+						"nova-compute": gin.H{
+							"active":    true,
+							"available": true,
+						},
+					}
+				}
+			}
+			zones = append(zones, gin.H{
+				"zoneName":  zoneName,
+				"zoneState": gin.H{"available": true},
+				"hosts":     zoneHostsMap,
+			})
+		}
+	}
+
+	c.JSON(200, gin.H{"availabilityZoneInfo": zones})
 }
 
 // GetLimits returns compute limits and quota information

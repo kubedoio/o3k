@@ -213,3 +213,107 @@ func TestNovaGetSerialConsole_Contract(t *testing.T) {
 	assert.Equal(t, "serial", result.Console.Type)
 	assert.NotEmpty(t, result.Console.URL)
 }
+
+// TestNovaGetSPICEConsole_Contract tests POST /v2.1/servers/:id/action (os-getSPICEConsole)
+func TestNovaGetSPICEConsole_Contract(t *testing.T) {
+	skipIfO3KNotRunning(t)
+
+	client := setupNovaClient(t)
+
+	// Create test server
+	createOpts := servers.CreateOpts{
+		Name:      "test-spice-console",
+		FlavorRef: "00000000-0000-0000-0000-000000000010",
+		ImageRef:  "00000000-0000-0000-0000-000000000001",
+	}
+	server, err := servers.Create(client, createOpts).Extract()
+	require.NoError(t, err)
+	defer servers.Delete(client, server.ID)
+
+	// Get SPICE console
+	payload := map[string]interface{}{
+		"os-getSPICEConsole": map[string]interface{}{
+			"type": "spice-html5",
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	url := client.ServiceURL("servers", server.ID, "action")
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	require.NoError(t, err)
+
+	req.Header.Set("X-Auth-Token", client.TokenID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Console struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"console"`
+	}
+	err = json.Unmarshal(respBody, &result)
+	require.NoError(t, err)
+
+	assert.Equal(t, "spice-html5", result.Console.Type)
+	assert.NotEmpty(t, result.Console.URL)
+	assert.Contains(t, result.Console.URL, "6082") // SPICE port
+}
+
+// TestNovaGetRDPConsole_Contract tests POST /v2.1/servers/:id/action (os-getRDPConsole)
+func TestNovaGetRDPConsole_Contract(t *testing.T) {
+	skipIfO3KNotRunning(t)
+
+	client := setupNovaClient(t)
+
+	// Create test server
+	createOpts := servers.CreateOpts{
+		Name:      "test-rdp-console",
+		FlavorRef: "00000000-0000-0000-0000-000000000010",
+		ImageRef:  "00000000-0000-0000-0000-000000000001",
+	}
+	server, err := servers.Create(client, createOpts).Extract()
+	require.NoError(t, err)
+	defer servers.Delete(client, server.ID)
+
+	// Get RDP console
+	payload := map[string]interface{}{
+		"os-getRDPConsole": map[string]interface{}{
+			"type": "rdp-html5",
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	url := client.ServiceURL("servers", server.ID, "action")
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	require.NoError(t, err)
+
+	req.Header.Set("X-Auth-Token", client.TokenID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Console struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"console"`
+	}
+	err = json.Unmarshal(respBody, &result)
+	require.NoError(t, err)
+
+	assert.Equal(t, "rdp-html5", result.Console.Type)
+	assert.NotEmpty(t, result.Console.URL)
+	assert.Contains(t, result.Console.URL, "6084") // RDP port
+}
