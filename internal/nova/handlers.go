@@ -657,6 +657,20 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		c.Set("action_data", changePass)
 		svc.ChangePassword(c)
 		return
+	} else if _, ok := req["restore"]; ok {
+		svc.RestoreInstance(c)
+		return
+	} else if createBackup, ok := req["createBackup"]; ok {
+		c.Set("action_data", createBackup)
+		svc.CreateBackupAction(c)
+		return
+	} else if resetState, ok := req["os-resetState"]; ok {
+		c.Set("action_data", resetState)
+		svc.ResetStateAction(c)
+		return
+	} else if _, ok := req["os-resetNetwork"]; ok {
+		svc.ResetNetworkAction(c)
+		return
 	}
 
 	// Get libvirt domain ID for remaining actions (support lookup by ID or name)

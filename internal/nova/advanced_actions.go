@@ -665,3 +665,169 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	// In real mode, would use libvirt guest agent or cloud-init to change password
 	c.Status(http.StatusAccepted)
 }
+
+// RestoreInstance restores a soft-deleted instance
+func (svc *Service) RestoreInstance(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Check if instance exists and is soft-deleted
+	var status string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT status FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&status)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	if status != "SOFT_DELETED" {
+		c.JSON(http.StatusConflict, gin.H{"error": "instance is not soft-deleted"})
+		return
+	}
+
+	// Restore instance to SHUTOFF state
+	_, err = database.DB.Exec(c.Request.Context(), `
+		UPDATE instances
+		SET status = $1, power_state = $2, updated_at = $3
+		WHERE id = $4
+	`, "SHUTOFF", 4, time.Now(), instanceID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// CreateBackupAction creates a backup image of an instance
+func (svc *Service) CreateBackupAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Get action data from context
+	actionData, exists := c.Get("action_data")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing createBackup data"})
+		return
+	}
+
+	backupMap, ok := actionData.(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid createBackup data"})
+		return
+	}
+
+	backupName, ok := backupMap["name"].(string)
+	if !ok || backupName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup name"})
+		return
+	}
+
+	backupType, _ := backupMap["backup_type"].(string)
+	rotation, _ := backupMap["rotation"].(float64)
+
+	_ = backupType
+	_ = rotation
+
+	// Verify instance exists
+	var imageID string
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT image_id FROM instances WHERE id = $1 AND project_id = $2",
+		instanceID, projectID,
+	).Scan(&imageID)
+
+	if err == pgx.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// In stub mode, just return success
+	// In real mode, would create snapshot image
+	// Return image location in header (OpenStack pattern)
+	c.Header("Location", fmt.Sprintf("/v2/images/%s", imageID))
+	c.Status(http.StatusAccepted)
+}
+
+// ResetStateAction resets instance state (admin operation)
+func (svc *Service) ResetStateAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Get action data from context
+	actionData, exists := c.Get("action_data")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing os-resetState data"})
+		return
+	}
+
+	resetMap, ok := actionData.(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid os-resetState data"})
+		return
+	}
+
+	state, ok := resetMap["state"].(string)
+	if !ok || state == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing state"})
+		return
+	}
+
+	// Verify instance exists
+	var exists_check bool
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		instanceID, projectID,
+	).Scan(&exists_check)
+
+	if err != nil || !exists_check {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// Update instance state (convert lowercase to uppercase)
+	statusUpper := fmt.Sprintf("%s", state)
+	if state == "error" {
+		statusUpper = "ERROR"
+	} else if state == "active" {
+		statusUpper = "ACTIVE"
+	}
+
+	_, err = database.DB.Exec(c.Request.Context(), `
+		UPDATE instances
+		SET status = $1, updated_at = $2
+		WHERE id = $3
+	`, statusUpper, time.Now(), instanceID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(http.StatusAccepted)
+}
+
+// ResetNetworkAction resets instance network
+func (svc *Service) ResetNetworkAction(c *gin.Context) {
+	instanceID := c.Param("id")
+	projectID := c.GetString("project_id")
+
+	// Verify instance exists
+	var exists_check bool
+	err := database.DB.QueryRow(c.Request.Context(),
+		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		instanceID, projectID,
+	).Scan(&exists_check)
+
+	if err != nil || !exists_check {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// In stub mode, just return success
+	// In real mode, would reset network interfaces via libvirt/netlink
+	c.Status(http.StatusAccepted)
+}
