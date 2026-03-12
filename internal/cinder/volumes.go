@@ -108,10 +108,6 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.GET("/groups/:id", svc.GetGroup)
 		v3.PUT("/groups/:id", svc.UpdateGroup)
 		v3.DELETE("/groups/:id", svc.DeleteGroup)
-		v3.GET("/os-volume-transfer", svc.ListVolumeTransfers)
-		v3.GET("/os-volume-transfer/:id", svc.GetVolumeTransfer)
-		v3.DELETE("/os-volume-transfer/:id", svc.DeleteVolumeTransfer)
-		v3.POST("/os-volume-transfer/:id/accept", svc.AcceptVolumeTransfer)
 
 		// Volume/Snapshot management
 		v3.POST("/os-volume-manage", svc.ManageVolume)
@@ -121,6 +117,13 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		// Quotas
 		v3.GET("/quota-sets/:id", svc.GetQuotaSet)
 		v3.PUT("/quota-sets/:id", svc.UpdateQuotaSet)
+
+		// QoS Specs
+		v3.GET("/qos-specs", svc.ListQosSpecs)
+		v3.POST("/qos-specs", svc.CreateQosSpec)
+		v3.GET("/qos-specs/:id", svc.GetQosSpec)
+		v3.PUT("/qos-specs/:id", svc.UpdateQosSpec)
+		v3.DELETE("/qos-specs/:id", svc.DeleteQosSpec)
 		v3.DELETE("/quota-sets/:id", svc.DeleteQuotaSet)
 	}
 }
