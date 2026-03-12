@@ -49,6 +49,52 @@ func TestNovaAddSecurityGroup_Contract(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 }
 
+// TestNovaAddSecurityGroupDuplicate_Contract tests adding same SG twice returns 409
+func TestNovaAddSecurityGroupDuplicate_Contract(t *testing.T) {
+	skipIfO3KNotRunning(t)
+
+	client := setupNovaClient(t)
+
+	// Create test server
+	server, err := servers.Create(client, servers.CreateOpts{
+		Name:      "sg-duplicate-test",
+		FlavorRef: "00000000-0000-0000-0000-000000000010",
+		ImageRef:  "00000000-0000-0000-0000-000000000001",
+	}).Extract()
+	require.NoError(t, err)
+	defer servers.Delete(client, server.ID)
+
+	// Add security group first time
+	actionBody := `{
+		"addSecurityGroup": {
+			"name": "default"
+		}
+	}`
+
+	url := client.ServiceURL("servers", server.ID, "action")
+	req, err := http.NewRequest("POST", url, strings.NewReader(actionBody))
+	require.NoError(t, err)
+	req.Header.Set("X-Auth-Token", client.TokenID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	// Try to add same security group again - should get 409
+	req, err = http.NewRequest("POST", url, strings.NewReader(actionBody))
+	require.NoError(t, err)
+	req.Header.Set("X-Auth-Token", client.TokenID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
 // TestNovaRemoveSecurityGroup_Contract tests POST /v2.1/servers/:id/action (removeSecurityGroup)
 func TestNovaRemoveSecurityGroup_Contract(t *testing.T) {
 	skipIfO3KNotRunning(t)
@@ -64,7 +110,7 @@ func TestNovaRemoveSecurityGroup_Contract(t *testing.T) {
 	require.NoError(t, err)
 	defer servers.Delete(client, server.ID)
 
-	// Add security group first
+	// Add "default" security group
 	addBody := `{
 		"addSecurityGroup": {
 			"name": "default"
@@ -76,7 +122,18 @@ func TestNovaRemoveSecurityGroup_Contract(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	http.DefaultClient.Do(req)
 
-	// Remove security group
+	// Add second security group "test-sg"
+	addBody2 := `{
+		"addSecurityGroup": {
+			"name": "test-sg"
+		}
+	}`
+	req, _ = http.NewRequest("POST", url, strings.NewReader(addBody2))
+	req.Header.Set("X-Auth-Token", client.TokenID)
+	req.Header.Set("Content-Type", "application/json")
+	http.DefaultClient.Do(req)
+
+	// Now remove "default" security group (test-sg will remain)
 	removeBody := `{
 		"removeSecurityGroup": {
 			"name": "default"

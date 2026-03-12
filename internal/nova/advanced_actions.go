@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -440,15 +442,52 @@ func (svc *Service) MigrateInstance(c *gin.Context) {
 		return
 	}
 
+	// In stub mode, simulate hosts (compute-1, compute-2)
+	// In real mode, would query compute_nodes table for available hosts
+	currentHost := "compute-1"
+	destHost := "compute-2"
+
+	// Create migration record
+	migrationID := uuid.New().String()
 	_, err = database.DB.Exec(c.Request.Context(), `
-		UPDATE instances SET status = $1, task_state = $2, updated_at = $3
-		WHERE id = $4
-	`, "ACTIVE", "migrating", time.Now(), instanceID)
+		INSERT INTO server_migrations (id, server_uuid, source_node, dest_node, migration_type, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'migration', 'running', $5, $5)
+	`, migrationID, instanceID, currentHost, destHost, time.Now())
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create migration: %v", err)})
+		return
+	}
+
+	// Update instance to set migrating state
+	_, err = database.DB.Exec(c.Request.Context(), `
+		UPDATE instances SET task_state = 'migrating', updated_at = $1
+		WHERE id = $2
+	`, time.Now(), instanceID)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Background goroutine to complete migration after 5 seconds (stub mode)
+	go func() {
+		time.Sleep(5 * time.Second)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Clear task_state and mark migration as complete
+		database.DB.Exec(ctx, `
+			UPDATE instances SET task_state = NULL, updated_at = $1
+			WHERE id = $2
+		`, time.Now(), instanceID)
+
+		database.DB.Exec(ctx, `
+			UPDATE server_migrations SET status = 'completed', updated_at = $1
+			WHERE id = $2
+		`, time.Now(), migrationID)
+	}()
 
 	c.Status(http.StatusAccepted)
 }
@@ -561,8 +600,36 @@ func (svc *Service) AddSecurityGroup(c *gin.Context) {
 		return
 	}
 
+	// Check if security group is already associated with instance
+	var alreadyAssociated bool
+	err = database.DB.QueryRow(c.Request.Context(),
+		"SELECT EXISTS(SELECT 1 FROM server_security_groups WHERE server_id = $1 AND security_group_id = $2)",
+		instanceID, sgID,
+	).Scan(&alreadyAssociated)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if alreadyAssociated {
+		c.JSON(http.StatusConflict, gin.H{"error": "security group already associated with instance"})
+		return
+	}
+
+	// Add security group association
+	_, err = database.DB.Exec(c.Request.Context(), `
+		INSERT INTO server_security_groups (server_id, security_group_id, created_at)
+		VALUES ($1, $2, $3)
+	`, instanceID, sgID, time.Now())
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	// In stub mode, just return success
-	// In real mode, would apply iptables rules
+	// In real mode, would apply iptables rules and update Neutron port security groups
 	c.Status(http.StatusAccepted)
 }
 
@@ -614,8 +681,53 @@ func (svc *Service) RemoveSecurityGroup(c *gin.Context) {
 		return
 	}
 
+	// Check if security group is actually associated with instance
+	var isAssociated bool
+	err = database.DB.QueryRow(c.Request.Context(),
+		"SELECT EXISTS(SELECT 1 FROM server_security_groups WHERE server_id = $1 AND security_group_id = $2)",
+		instanceID, sgID,
+	).Scan(&isAssociated)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !isAssociated {
+		c.JSON(http.StatusNotFound, gin.H{"error": "security group not associated with instance"})
+		return
+	}
+
+	// Check if this is the last security group (cannot remove last one)
+	var sgCount int
+	err = database.DB.QueryRow(c.Request.Context(),
+		"SELECT COUNT(*) FROM server_security_groups WHERE server_id = $1",
+		instanceID,
+	).Scan(&sgCount)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if sgCount <= 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove last security group from instance"})
+		return
+	}
+
+	// Remove security group association
+	_, err = database.DB.Exec(c.Request.Context(), `
+		DELETE FROM server_security_groups
+		WHERE server_id = $1 AND security_group_id = $2
+	`, instanceID, sgID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	// In stub mode, just return success
-	// In real mode, would remove iptables rules
+	// In real mode, would remove iptables rules and update Neutron port security groups
 	c.Status(http.StatusAccepted)
 }
 
@@ -661,8 +773,33 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// Validate password strength (minimum 8 characters)
+	if len(adminPass) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
+		return
+	}
+
+	// Hash password using bcrypt
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		return
+	}
+
+	// Update admin password hash in database
+	_, err = database.DB.Exec(c.Request.Context(), `
+		UPDATE instances
+		SET admin_password_hash = $1, updated_at = $2
+		WHERE id = $3
+	`, string(hashedPassword), time.Now(), instanceID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	// In stub mode, just return success
-	// In real mode, would use libvirt guest agent or cloud-init to change password
+	// In real mode, would use libvirt guest agent or cloud-init to inject password
 	c.Status(http.StatusAccepted)
 }
 
@@ -730,32 +867,112 @@ func (svc *Service) CreateBackupAction(c *gin.Context) {
 	backupType, _ := backupMap["backup_type"].(string)
 	rotation, _ := backupMap["rotation"].(float64)
 
-	_ = backupType
-	_ = rotation
+	if backupType == "" {
+		backupType = "daily"
+	}
+	if rotation == 0 {
+		rotation = 7 // default rotation
+	}
 
 	// Verify instance exists
-	var imageID string
+	var sourceImageID string
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT image_id FROM instances WHERE id = $1 AND project_id = $2",
 		instanceID, projectID,
-	).Scan(&imageID)
+	).Scan(&sourceImageID)
 
 	if err == pgx.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return
 	}
 
-	// In stub mode, just return success
-	// In real mode, would create snapshot image
+	// Generate new UUID for backup image
+	backupImageID := uuid.New().String()
+
+	// Create backup image in images table
+	// Image name pattern: {backup_name}-{backup_type}-{timestamp}
+	timestamp := time.Now().Format("20060102-150405")
+	fullImageName := fmt.Sprintf("%s-%s-%s", backupName, backupType, timestamp)
+
+	_, err = database.DB.Exec(c.Request.Context(), `
+		INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', 'private', 'qcow2', 'bare', $4, $4)
+	`, backupImageID, fullImageName, projectID, time.Now())
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create backup image: %v", err)})
+		return
+	}
+
+	// Add tags to identify this as a backup
+	database.DB.Exec(c.Request.Context(), `
+		INSERT INTO image_tags (image_id, tag) VALUES ($1, 'backup'), ($1, $2), ($1, $3)
+	`, backupImageID, fmt.Sprintf("backup_type:%s", backupType), fmt.Sprintf("source_server:%s", instanceID))
+
+	// Implement rotation: delete old backups of same type for this server
+	// Query all backup images for this server with same backup_type
+	rows, err := database.DB.Query(c.Request.Context(), `
+		SELECT DISTINCT i.id, i.created_at
+		FROM images i
+		JOIN image_tags t1 ON i.id = t1.image_id AND t1.tag = 'backup'
+		JOIN image_tags t2 ON i.id = t2.image_id AND t2.tag = $1
+		JOIN image_tags t3 ON i.id = t3.image_id AND t3.tag = $2
+		WHERE i.project_id = $3
+		ORDER BY i.created_at DESC
+	`, fmt.Sprintf("backup_type:%s", backupType), fmt.Sprintf("source_server:%s", instanceID), projectID)
+
+	if err == nil {
+		defer rows.Close()
+
+		var backupIDs []string
+		for rows.Next() {
+			var id string
+			var createdAt time.Time
+			rows.Scan(&id, &createdAt)
+			backupIDs = append(backupIDs, id)
+		}
+
+		// Delete backups beyond rotation limit
+		if len(backupIDs) > int(rotation) {
+			oldBackups := backupIDs[int(rotation):]
+			for _, oldID := range oldBackups {
+				database.DB.Exec(c.Request.Context(), "DELETE FROM images WHERE id = $1", oldID)
+			}
+		}
+	}
+
 	// Return image location in header (OpenStack pattern)
-	c.Header("Location", fmt.Sprintf("/v2/images/%s", imageID))
-	c.Status(http.StatusAccepted)
+	c.Header("Location", fmt.Sprintf("/v2/images/%s", backupImageID))
+
+	// Microversion 2.45+ returns image_id in response body
+	c.JSON(http.StatusAccepted, gin.H{
+		"image_id": backupImageID,
+	})
 }
 
 // ResetStateAction resets instance state (admin operation)
 func (svc *Service) ResetStateAction(c *gin.Context) {
 	instanceID := c.Param("id")
 	projectID := c.GetString("project_id")
+
+	// Admin-only operation - check roles
+	roles := c.GetStringSlice("roles")
+	isAdmin := false
+	for _, role := range roles {
+		if role == "admin" {
+			isAdmin = true
+			break
+		}
+	}
+	if !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{
+			"forbidden": gin.H{
+				"message": "Policy doesn't allow os-resetState to be performed",
+				"code":    403,
+			},
+		})
+		return
+	}
 
 	// Get action data from context
 	actionData, exists := c.Get("action_data")

@@ -4,11 +4,66 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestNovaMigrateServer_Contract tests POST /v2.1/servers/:id/action (migrate)
+func TestNovaMigrateServer_Contract(t *testing.T) {
+	skipIfO3KNotRunning(t)
+
+	client := setupNovaClient(t)
+
+	// Create test server
+	server, err := servers.Create(client, servers.CreateOpts{
+		Name:      "migrate-test",
+		FlavorRef: "00000000-0000-0000-0000-000000000010",
+		ImageRef:  "00000000-0000-0000-0000-000000000001",
+	}).Extract()
+	require.NoError(t, err)
+	defer servers.Delete(client, server.ID)
+
+	// Wait for server to be ACTIVE
+	for i := 0; i < 30; i++ {
+		s, _ := servers.Get(client, server.ID).Extract()
+		if s.Status == "ACTIVE" {
+			break
+		}
+		if i == 29 {
+			t.Skip("Server did not become ACTIVE in time")
+		}
+		time.Sleep(time.Second)
+	}
+
+	// Trigger cold migration
+	actionBody := `{
+		"migrate": null
+	}`
+
+	url := client.ServiceURL("servers", server.ID, "action")
+	req, err := http.NewRequest("POST", url, strings.NewReader(actionBody))
+	require.NoError(t, err)
+
+	req.Header.Set("X-Auth-Token", client.TokenID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	// Wait for migration to complete (5-10 seconds)
+	time.Sleep(7 * time.Second)
+
+	// Verify server is still ACTIVE (migration complete)
+	s, err := servers.Get(client, server.ID).Extract()
+	require.NoError(t, err)
+	assert.Equal(t, "ACTIVE", s.Status)
+}
 
 // TestNovaRestoreInstance_Contract tests POST /v2.1/servers/:id/action (restore)
 func TestNovaRestoreInstance_Contract(t *testing.T) {
