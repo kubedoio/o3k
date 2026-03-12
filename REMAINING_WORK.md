@@ -1,8 +1,8 @@
 # Remaining Work for 100% OpenStack API Compliance
 
-**Current Status**: 82% complete (273/330 endpoints)
-**Remaining**: ~57 endpoints to reach 100%
-**Updated**: 2026-03-12 (Post Sprint 58-59)
+**Current Status**: 82.6% complete (276/330 endpoints)
+**Remaining**: ~54 endpoints to reach 100%
+**Updated**: 2026-03-12 (Post Sprint 60-61)
 
 ---
 
@@ -11,9 +11,9 @@
 | Priority | Count | Effort | Timeline |
 |----------|-------|--------|----------|
 | 🔴 **HIGH** | ~20 endpoints | 4-6 sprints | 8-12 weeks |
-| 🟡 **MEDIUM** | ~14 endpoints | 2-4 sprints | 4-8 weeks |
+| 🟡 **MEDIUM** | ~11 endpoints | 2-3 sprints | 4-6 weeks |
 | 🟢 **LOW** | ~23 endpoints | 3-5 sprints | 6-10 weeks |
-| **TOTAL** | **~57 endpoints** | **9-15 sprints** | **18-30 weeks** |
+| **TOTAL** | **~54 endpoints** | **9-14 sprints** | **18-28 weeks** |
 
 ---
 
@@ -50,18 +50,18 @@
 **Effort**: 2 sprints (multi-service coordination required)
 **Complexity**: HIGH (affects all services)
 
-### 3. Cinder Volume Actions (Remaining) - 6 endpoints
-**Status**: 🟡 MEDIUM PRIORITY
+### 3. Cinder Volume Actions (Remaining) - 6 endpoints ✅ COMPLETE (Sprint 60-61)
+**Status**: ✅ ALL IMPLEMENTED
 ```
-❌ os-update_readonly_flag - Toggle readonly
-❌ os-set_image_metadata   - Set bootable image metadata
-❌ os-unset_image_metadata - Remove image metadata
-❌ os-reimage              - Re-image volume
-❌ os-force_detach         - Force detach from server
-❌ os-reset_status         - Reset volume status (admin)
+✅ os-update_readonly_flag - Toggle readonly
+✅ os-set_image_metadata   - Set bootable image metadata
+✅ os-unset_image_metadata - Remove image metadata (NEW)
+✅ os-reimage              - Re-image volume (NEW)
+✅ os-force_detach         - Force detach from server
+✅ os-reset_status         - Reset volume status (admin) + admin check added
 ```
-**Impact**: Missing some volume operations
-**Effort**: 1 sprint (6 days)
+**Status**: Complete volume image management and admin operations
+**Coverage**: All 6 volume action endpoints functional
 
 ---
 
@@ -194,7 +194,7 @@
 
 - **Sprint 56-57**: Nova Server Actions (8 endpoints) ✅ COMPLETE
 - **Sprint 58-59**: Nova Console Access (4) + Tenant Usage (3) + Availability Zones (4) ✅ COMPLETE
-- **Sprint 60-61**: Cinder Volume Actions (6 endpoints)
+- **Sprint 60-61**: Cinder Volume Actions (6 endpoints) ✅ COMPLETE
 
 **Result**: 90% coverage, all core operational features complete
 

@@ -589,6 +589,70 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		return
 	}
 
+	// Handle unset image metadata action
+	if unsetImageMetadata, ok := req["os-unset_image_metadata"]; ok {
+		unsetMap := unsetImageMetadata.(map[string]interface{})
+		key := unsetMap["key"].(string)
+
+		// Delete metadata entry with prefixed key
+		metadataKey := "volume_image_" + key
+		_, err := database.DB.Exec(c.Request.Context(), `
+			DELETE FROM volume_metadata
+			WHERE volume_id = $1 AND meta_key = $2
+		`, volumeID, metadataKey)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+				"message": fmt.Sprintf("Failed to unset image metadata: %v", err),
+				"code":    500,
+			}})
+			return
+		}
+
+		c.Status(http.StatusOK)
+		return
+	}
+
+	// Handle reimage volume action
+	if reimageData, ok := req["os-reimage"]; ok {
+		reimageMap := reimageData.(map[string]interface{})
+		imageID := reimageMap["image_id"].(string)
+
+		// Update volume to bootable and store image ID
+		_, err := database.DB.Exec(c.Request.Context(), `
+			UPDATE volumes
+			SET bootable = true, updated_at = $1
+			WHERE id = $2 AND project_id = $3
+		`, time.Now(), volumeID, projectID)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+				"message": fmt.Sprintf("Failed to reimage volume: %v", err),
+				"code":    500,
+			}})
+			return
+		}
+
+		// Store image_id as metadata
+		_, err = database.DB.Exec(c.Request.Context(), `
+			INSERT INTO volume_metadata (volume_id, meta_key, meta_value, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (volume_id, meta_key)
+			DO UPDATE SET meta_value = EXCLUDED.meta_value, updated_at = EXCLUDED.updated_at
+		`, volumeID, "volume_image_id", imageID, time.Now(), time.Now())
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+				"message": fmt.Sprintf("Failed to store image metadata: %v", err),
+				"code":    500,
+			}})
+			return
+		}
+
+		c.Status(http.StatusAccepted)
+		return
+	}
+
 	// Handle force detach action
 	if _, ok := req["os-force_detach"]; ok {
 		// Force detach volume from any server
@@ -611,6 +675,33 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 
 	// Handle reset status action (admin operation)
 	if resetStatusData, ok := req["os-reset_status"]; ok {
+		// Verify admin role
+		roles, exists := c.Get("roles")
+		if !exists {
+			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+				"message": "Policy doesn't allow os-reset_status to be performed.",
+				"code":    403,
+			}})
+			return
+		}
+
+		roleList := roles.([]string)
+		isAdmin := false
+		for _, role := range roleList {
+			if role == "admin" {
+				isAdmin = true
+				break
+			}
+		}
+
+		if !isAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+				"message": "Policy doesn't allow os-reset_status to be performed.",
+				"code":    403,
+			}})
+			return
+		}
+
 		resetStatusMap := resetStatusData.(map[string]interface{})
 		newStatus := resetStatusMap["status"].(string)
 
