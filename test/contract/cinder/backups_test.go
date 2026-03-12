@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gophercloud/gophercloud/openstack/blockstorage/v3/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+
+
+
 
 // TestCinderListBackups_Contract tests GET /v3/:project_id/backups
 func TestCinderListBackups_Contract(t *testing.T) {
@@ -46,18 +49,41 @@ func TestCinderCreateBackup_Contract(t *testing.T) {
 
 	client := setupCinderClient(t)
 
-	// Create test volume first
-	volume, err := volumes.Create(client, volumes.CreateOpts{
-		Size: 1,
-		Name: "test-backup-volume",
-	}).Extract()
+	// Create test volume using raw HTTP
+	createVolBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"size": 1,
+			"name": "test-backup-volume",
+		},
+	}
+	createVolBodyJSON, _ := json.Marshal(createVolBody)
+	createVolReq, _ := http.NewRequest("POST", client.Endpoint+"volumes", bytes.NewReader(createVolBodyJSON))
+	createVolReq.Header.Set("X-Auth-Token", client.TokenID)
+	createVolReq.Header.Set("Content-Type", "application/json")
+
+	createVolResp, err := http.DefaultClient.Do(createVolReq)
 	require.NoError(t, err)
-	defer volumes.Delete(client, volume.ID, volumes.DeleteOpts{})
+	defer createVolResp.Body.Close()
+
+	createVolRespBody, _ := io.ReadAll(createVolResp.Body)
+	var createVolResult struct {
+		Volume struct {
+			ID string `json:"id"`
+		} `json:"volume"`
+	}
+	json.Unmarshal(createVolRespBody, &createVolResult)
+	volumeID := createVolResult.Volume.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
 
 	// Create backup
 	payload := map[string]interface{}{
 		"backup": map[string]interface{}{
-			"volume_id":   volume.ID,
+			"volume_id":   volumeID,
 			"name":        "test-backup",
 			"description": "Test backup",
 		},
@@ -86,7 +112,7 @@ func TestCinderCreateBackup_Contract(t *testing.T) {
 
 	assert.NotEmpty(t, result.Backup["id"])
 	assert.Equal(t, "test-backup", result.Backup["name"])
-	assert.Equal(t, volume.ID, result.Backup["volume_id"])
+	assert.Equal(t, volumeID, result.Backup["volume_id"])
 
 	// Cleanup backup
 	backupID := result.Backup["id"].(string)
@@ -101,18 +127,40 @@ func TestCinderGetBackup_Contract(t *testing.T) {
 
 	client := setupCinderClient(t)
 
-	// Create test volume
-	volume, err := volumes.Create(client, volumes.CreateOpts{
-		Size: 1,
-		Name: "test-backup-get-volume",
-	}).Extract()
-	require.NoError(t, err)
-	defer volumes.Delete(client, volume.ID, volumes.DeleteOpts{})
+	// Create test volume using raw HTTP
+	createVolBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"size": 1,
+			"name": "test-backup-get-volume",
+		},
+	}
+	createVolBodyJSON, _ := json.Marshal(createVolBody)
+	createVolReq, _ := http.NewRequest("POST", client.Endpoint+"volumes", bytes.NewReader(createVolBodyJSON))
+	createVolReq.Header.Set("X-Auth-Token", client.TokenID)
+	createVolReq.Header.Set("Content-Type", "application/json")
+
+	createVolResp, _ := http.DefaultClient.Do(createVolReq)
+	defer createVolResp.Body.Close()
+
+	createVolRespBody, _ := io.ReadAll(createVolResp.Body)
+	var createVolResult struct {
+		Volume struct {
+			ID string `json:"id"`
+		} `json:"volume"`
+	}
+	json.Unmarshal(createVolRespBody, &createVolResult)
+	volumeID := createVolResult.Volume.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
 
 	// Create test backup
 	createPayload := map[string]interface{}{
 		"backup": map[string]interface{}{
-			"volume_id": volume.ID,
+			"volume_id": volumeID,
 			"name":      "test-backup-get",
 		},
 	}
@@ -159,7 +207,7 @@ func TestCinderGetBackup_Contract(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, backupID, result.Backup["id"])
-	assert.Equal(t, volume.ID, result.Backup["volume_id"])
+	assert.Equal(t, volumeID, result.Backup["volume_id"])
 }
 
 // TestCinderDeleteBackup_Contract tests DELETE /v3/:project_id/backups/:id
@@ -168,18 +216,40 @@ func TestCinderDeleteBackup_Contract(t *testing.T) {
 
 	client := setupCinderClient(t)
 
-	// Create test volume
-	volume, err := volumes.Create(client, volumes.CreateOpts{
-		Size: 1,
-		Name: "test-backup-delete-volume",
-	}).Extract()
-	require.NoError(t, err)
-	defer volumes.Delete(client, volume.ID, volumes.DeleteOpts{})
+	// Create test volume using raw HTTP
+	createVolBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"size": 1,
+			"name": "test-backup-delete-volume",
+		},
+	}
+	createVolBodyJSON, _ := json.Marshal(createVolBody)
+	createVolReq, _ := http.NewRequest("POST", client.Endpoint+"volumes", bytes.NewReader(createVolBodyJSON))
+	createVolReq.Header.Set("X-Auth-Token", client.TokenID)
+	createVolReq.Header.Set("Content-Type", "application/json")
+
+	createVolResp, _ := http.DefaultClient.Do(createVolReq)
+	defer createVolResp.Body.Close()
+
+	createVolRespBody, _ := io.ReadAll(createVolResp.Body)
+	var createVolResult struct {
+		Volume struct {
+			ID string `json:"id"`
+		} `json:"volume"`
+	}
+	json.Unmarshal(createVolRespBody, &createVolResult)
+	volumeID := createVolResult.Volume.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
 
 	// Create test backup
 	createPayload := map[string]interface{}{
 		"backup": map[string]interface{}{
-			"volume_id": volume.ID,
+			"volume_id": volumeID,
 			"name":      "test-backup-delete",
 		},
 	}
@@ -219,18 +289,40 @@ func TestCinderRestoreBackup_Contract(t *testing.T) {
 
 	client := setupCinderClient(t)
 
-	// Create test volume
-	volume, err := volumes.Create(client, volumes.CreateOpts{
-		Size: 1,
-		Name: "test-backup-restore-volume",
-	}).Extract()
-	require.NoError(t, err)
-	defer volumes.Delete(client, volume.ID, volumes.DeleteOpts{})
+	// Create test volume using raw HTTP
+	createVolBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"size": 1,
+			"name": "test-backup-restore-volume",
+		},
+	}
+	createVolBodyJSON, _ := json.Marshal(createVolBody)
+	createVolReq, _ := http.NewRequest("POST", client.Endpoint+"volumes", bytes.NewReader(createVolBodyJSON))
+	createVolReq.Header.Set("X-Auth-Token", client.TokenID)
+	createVolReq.Header.Set("Content-Type", "application/json")
+
+	createVolResp, _ := http.DefaultClient.Do(createVolReq)
+	defer createVolResp.Body.Close()
+
+	createVolRespBody, _ := io.ReadAll(createVolResp.Body)
+	var createVolResult struct {
+		Volume struct {
+			ID string `json:"id"`
+		} `json:"volume"`
+	}
+	json.Unmarshal(createVolRespBody, &createVolResult)
+	volumeID := createVolResult.Volume.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
 
 	// Create test backup
 	createPayload := map[string]interface{}{
 		"backup": map[string]interface{}{
-			"volume_id": volume.ID,
+			"volume_id": volumeID,
 			"name":      "test-backup-restore",
 		},
 	}
@@ -259,7 +351,7 @@ func TestCinderRestoreBackup_Contract(t *testing.T) {
 	// Restore backup
 	payload := map[string]interface{}{
 		"restore": map[string]interface{}{
-			"volume_id": volume.ID,
+			"volume_id": volumeID,
 		},
 	}
 
@@ -285,5 +377,5 @@ func TestCinderRestoreBackup_Contract(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, backupID, result.Restore["backup_id"])
-	assert.Equal(t, volume.ID, result.Restore["volume_id"])
+	assert.Equal(t, volumeID, result.Restore["volume_id"])
 }
