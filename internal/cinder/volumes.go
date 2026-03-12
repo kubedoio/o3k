@@ -93,7 +93,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.POST("/backups", svc.CreateBackup)
 		v3.GET("/backups/:id", svc.GetBackup)
 		v3.DELETE("/backups/:id", svc.DeleteBackup)
-		v3.POST("/backups/:id/restore", svc.RestoreBackup)
+		v3.POST("/backups/:id/action", svc.BackupAction)
 
 		// Volume transfers
 		v3.POST("/os-volume-transfer", svc.CreateVolumeTransfer)

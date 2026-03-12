@@ -277,3 +277,20 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 		},
 	})
 }
+
+// BackupAction handles backup actions
+func (svc *Service) BackupAction(c *gin.Context) {
+	var req map[string]interface{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Check for restore action
+	if _, ok := req["restore"]; ok {
+		svc.RestoreBackup(c)
+		return
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+}
