@@ -67,7 +67,7 @@ func (svc *Service) CreateGroup(c *gin.Context) {
 	// Default to "default" domain
 	domainID := req.Group.DomainID
 	if domainID == "" {
-		domainID = "00000000-0000-0000-0000-000000000001" // default domain
+		domainID = "00000000-0000-0000-0000-000000000100" // default domain (corrected UUID)
 	}
 
 	groupID := uuid.New().String()

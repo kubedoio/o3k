@@ -224,7 +224,7 @@ func (svc *Service) RevokeToken(c *gin.Context) {
 // ListUsers lists all users
 func (svc *Service) ListUsers(c *gin.Context) {
 	rows, err := database.DB.Query(c.Request.Context(),
-		"SELECT id, name, enabled FROM users ORDER BY name",
+		"SELECT id, name, enabled, domain_id FROM users ORDER BY name",
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -234,17 +234,17 @@ func (svc *Service) ListUsers(c *gin.Context) {
 
 	var users []gin.H
 	for rows.Next() {
-		var id, name string
+		var id, name, domainID string
 		var enabled bool
-		if err := rows.Scan(&id, &name, &enabled); err != nil {
+		if err := rows.Scan(&id, &name, &enabled, &domainID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		users = append(users, gin.H{
-			"id":      id,
-			"name":    name,
-			"enabled": enabled,
-			"domain_id": "default",
+			"id":        id,
+			"name":      name,
+			"enabled":   enabled,
+			"domain_id": domainID,
 		})
 	}
 
@@ -255,12 +255,12 @@ func (svc *Service) ListUsers(c *gin.Context) {
 func (svc *Service) GetUser(c *gin.Context) {
 	userID := c.Param("id")
 
-	var id, name string
+	var id, name, domainID string
 	var enabled bool
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT id, name, enabled FROM users WHERE id = $1",
+		"SELECT id, name, enabled, domain_id FROM users WHERE id = $1",
 		userID,
-	).Scan(&id, &name, &enabled)
+	).Scan(&id, &name, &enabled, &domainID)
 
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
@@ -272,17 +272,17 @@ func (svc *Service) GetUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"user": gin.H{
-		"id":      id,
-		"name":    name,
-		"enabled": enabled,
-		"domain_id": "default",
+		"id":        id,
+		"name":      name,
+		"enabled":   enabled,
+		"domain_id": domainID,
 	}})
 }
 
 // ListProjects lists all projects
 func (svc *Service) ListProjects(c *gin.Context) {
 	rows, err := database.DB.Query(c.Request.Context(),
-		"SELECT id, name, description, enabled FROM projects ORDER BY name",
+		"SELECT id, name, description, enabled, domain_id FROM projects ORDER BY name",
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -292,9 +292,9 @@ func (svc *Service) ListProjects(c *gin.Context) {
 
 	var projects []gin.H
 	for rows.Next() {
-		var id, name, description string
+		var id, name, description, domainID string
 		var enabled bool
-		if err := rows.Scan(&id, &name, &description, &enabled); err != nil {
+		if err := rows.Scan(&id, &name, &description, &enabled, &domainID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -303,7 +303,7 @@ func (svc *Service) ListProjects(c *gin.Context) {
 			"name":        name,
 			"description": description,
 			"enabled":     enabled,
-			"domain_id":   "default",
+			"domain_id":   domainID,
 		})
 	}
 
@@ -314,12 +314,12 @@ func (svc *Service) ListProjects(c *gin.Context) {
 func (svc *Service) GetProject(c *gin.Context) {
 	projectID := c.Param("id")
 
-	var id, name, description string
+	var id, name, description, domainID string
 	var enabled bool
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT id, name, description, enabled FROM projects WHERE id = $1",
+		"SELECT id, name, description, enabled, domain_id FROM projects WHERE id = $1",
 		projectID,
-	).Scan(&id, &name, &description, &enabled)
+	).Scan(&id, &name, &description, &enabled, &domainID)
 
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
@@ -335,7 +335,7 @@ func (svc *Service) GetProject(c *gin.Context) {
 		"name":        name,
 		"description": description,
 		"enabled":     enabled,
-		"domain_id":   "default",
+		"domain_id":   domainID,
 	}})
 }
 
@@ -943,19 +943,36 @@ func (svc *Service) CreateUser(c *gin.Context) {
 		enabled = *req.User.Enabled
 	}
 
-	// Always use "Default" domain for now (TODO: support multiple domains)
+	// Get domain ID from request or default to "Default" domain
 	var domainID string
-	domainErr := database.DB.QueryRow(c.Request.Context(),
-		"SELECT id FROM domains WHERE name = $1",
-		"Default",
-	).Scan(&domainID)
-	if domainErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to resolve default domain: " + domainErr.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
-		return
+	if req.User.DomainID != "" {
+		// User specified domain by ID - verify it exists and is enabled
+		domainErr := database.DB.QueryRow(c.Request.Context(),
+			"SELECT id FROM domains WHERE id = $1 AND enabled = true",
+			req.User.DomainID,
+		).Scan(&domainID)
+		if domainErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+				"message": "specified domain not found or disabled",
+				"code":    400,
+				"title":   "Bad Request",
+			}})
+			return
+		}
+	} else {
+		// Default to "Default" domain
+		domainErr := database.DB.QueryRow(c.Request.Context(),
+			"SELECT id FROM domains WHERE name = $1 AND enabled = true",
+			"Default",
+		).Scan(&domainID)
+		if domainErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+				"message": "failed to resolve default domain: " + domainErr.Error(),
+				"code":    500,
+				"title":   "Internal Server Error",
+			}})
+			return
+		}
 	}
 
 	// Hash password if provided
@@ -1290,7 +1307,7 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 
 	// Fetch projects via role_assignments
 	rows, err := database.DB.Query(c.Request.Context(),
-		`SELECT DISTINCT p.id, p.name, p.description, p.enabled
+		`SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id
 		 FROM projects p
 		 INNER JOIN role_assignments ra ON ra.project_id = p.id
 		 WHERE ra.user_id = $1
@@ -1310,9 +1327,9 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 
 	var projects []gin.H
 	for rows.Next() {
-		var id, name, description string
+		var id, name, description, domainID string
 		var enabled bool
-		if err := rows.Scan(&id, &name, &description, &enabled); err != nil {
+		if err := rows.Scan(&id, &name, &description, &enabled, &domainID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
 				"message": "failed to scan project: " + err.Error(),
 				"code":    500,
@@ -1325,7 +1342,7 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 			"name":        name,
 			"description": description,
 			"enabled":     enabled,
-			"domain_id":   "default",
+			"domain_id":   domainID,
 		})
 	}
 

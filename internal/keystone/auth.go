@@ -235,23 +235,44 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 	resp.Token.ExpiresAt = expiresAt.Format(time.RFC3339)
 	resp.Token.IssuedAt = now.Format(time.RFC3339)
 	resp.Token.Methods = req.Auth.Identity.Methods
+
+	// Query user's domain name
+	var userDomainName string
+	err = database.DB.QueryRow(ctx,
+		"SELECT name FROM domains WHERE id = $1",
+		user.DomainID,
+	).Scan(&userDomainName)
+	if err != nil {
+		userDomainName = "Default" // fallback
+	}
+
 	resp.Token.User = map[string]interface{}{
 		"id":   user.ID,
 		"name": user.Name,
 		"domain": map[string]interface{}{
-			"id":   "default",
-			"name": "Default",
+			"id":   user.DomainID,
+			"name": userDomainName,
 		},
 	}
 
 	// Add project and catalog if scoped
 	if projectID != "" {
+		// Query project's domain name
+		var projectDomainName string
+		err = database.DB.QueryRow(ctx,
+			"SELECT name FROM domains WHERE id = $1",
+			project.DomainID,
+		).Scan(&projectDomainName)
+		if err != nil {
+			projectDomainName = "Default" // fallback
+		}
+
 		resp.Token.Project = &map[string]interface{}{
 			"id":   project.ID,
 			"name": project.Name,
 			"domain": map[string]interface{}{
-				"id":   "default",
-				"name": "Default",
+				"id":   project.DomainID,
+				"name": projectDomainName,
 			},
 		}
 
