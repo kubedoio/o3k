@@ -164,6 +164,10 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v2.POST("/auto-allocated-topology/:project", svc.CreateAutoAllocatedTopology)
 		v2.DELETE("/auto-allocated-topology/:project", svc.DeleteAutoAllocatedTopology)
 
+		// Network IP Availability
+		v2.GET("/network-ip-availabilities", svc.ListNetworkIPAvailabilities)
+		v2.GET("/network-ip-availabilities/:id", svc.GetNetworkIPAvailability)
+
 		// Metering
 		v2.GET("/metering/metering-labels", svc.ListMeteringLabels)
 		v2.POST("/metering/metering-labels", svc.CreateMeteringLabel)
