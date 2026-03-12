@@ -1,12 +1,13 @@
-package cinder
+package cinder_test
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/snapshots"
-	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,30 +18,73 @@ func TestCinderVolumeUpdate_Contract(t *testing.T) {
 
 	client := setupCinderClient(t)
 
-	// Setup: Create volume
+	// Setup: Create volume using raw HTTP
 	volumeName := "test-volume-update-" + uuid.New().String()[:8]
-	volume, err := volumes.Create(context.Background(), client, volumes.CreateOpts{
-		Size: 1,
-		Name: volumeName,
-	}, nil).Extract()
-	require.NoError(t, err, "Setup: CreateVolume should succeed")
-	defer volumes.Delete(context.Background(), client, volume.ID, volumes.DeleteOpts{})
+	createBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"size": 1,
+			"name": volumeName,
+		},
+	}
+	createBodyJSON, _ := json.Marshal(createBody)
+	createReq, _ := http.NewRequest("POST", client.ServiceURL("volumes"), bytes.NewReader(createBodyJSON))
+	createReq.Header.Set("X-Auth-Token", client.TokenID)
+	createReq.Header.Set("Content-Type", "application/json")
 
-	// Test: Update volume name and description
+	createResp, err := http.DefaultClient.Do(createReq)
+	require.NoError(t, err, "Setup: CreateVolume should succeed")
+	defer createResp.Body.Close()
+
+	createRespBody, _ := io.ReadAll(createResp.Body)
+	var createResult struct {
+		Volume struct {
+			ID string `json:"id"`
+		} `json:"volume"`
+	}
+	json.Unmarshal(createRespBody, &createResult)
+	volumeID := createResult.Volume.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.ServiceURL("volumes", volumeID), nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
+
+	// Test: Update volume name and description using PATCH
 	newName := volumeName + "-updated"
 	newDesc := "Updated description"
-	updateOpts := volumes.UpdateOpts{
-		Name:        &newName,
-		Description: &newDesc,
+	updateBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"name":        newName,
+			"description": newDesc,
+		},
 	}
+	updateBodyJSON, _ := json.Marshal(updateBody)
+	updateReq, _ := http.NewRequest("PATCH", client.ServiceURL("volumes", volumeID), bytes.NewReader(updateBodyJSON))
+	updateReq.Header.Set("X-Auth-Token", client.TokenID)
+	updateReq.Header.Set("Content-Type", "application/json")
 
-	updated, err := volumes.Update(context.Background(), client, volume.ID, updateOpts).Extract()
+	updateResp, err := http.DefaultClient.Do(updateReq)
+	require.NoError(t, err, "UpdateVolume should succeed")
+	defer updateResp.Body.Close()
 
 	// Assertions
-	require.NoError(t, err, "UpdateVolume should succeed")
-	assert.Equal(t, newName, updated.Name, "Volume name should be updated")
-	assert.Equal(t, newDesc, updated.Description, "Volume description should be updated")
-	assert.Equal(t, volume.ID, updated.ID, "Volume ID should not change")
+	assert.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+	updateRespBody, _ := io.ReadAll(updateResp.Body)
+	var updateResult struct {
+		Volume struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"volume"`
+	}
+	err = json.Unmarshal(updateRespBody, &updateResult)
+	require.NoError(t, err)
+
+	assert.Equal(t, newName, updateResult.Volume.Name, "Volume name should be updated")
+	assert.Equal(t, newDesc, updateResult.Volume.Description, "Volume description should be updated")
+	assert.Equal(t, volumeID, updateResult.Volume.ID, "Volume ID should not change")
 }
 
 // TestCinderSnapshotUpdate_Contract tests PATCH /v3/{project_id}/snapshots/{id}
@@ -49,36 +93,103 @@ func TestCinderSnapshotUpdate_Contract(t *testing.T) {
 
 	client := setupCinderClient(t)
 
-	// Setup: Create volume and snapshot
+	// Setup: Create volume using raw HTTP
 	volumeName := "test-volume-for-snap-" + uuid.New().String()[:8]
-	volume, err := volumes.Create(context.Background(), client, volumes.CreateOpts{
-		Size: 1,
-		Name: volumeName,
-	}, nil).Extract()
+	createVolBody := map[string]interface{}{
+		"volume": map[string]interface{}{
+			"size": 1,
+			"name": volumeName,
+		},
+	}
+	createVolBodyJSON, _ := json.Marshal(createVolBody)
+	createVolReq, _ := http.NewRequest("POST", client.ServiceURL("volumes"), bytes.NewReader(createVolBodyJSON))
+	createVolReq.Header.Set("X-Auth-Token", client.TokenID)
+	createVolReq.Header.Set("Content-Type", "application/json")
+
+	createVolResp, err := http.DefaultClient.Do(createVolReq)
 	require.NoError(t, err, "Setup: CreateVolume should succeed")
-	defer volumes.Delete(context.Background(), client, volume.ID, volumes.DeleteOpts{})
+	defer createVolResp.Body.Close()
 
+	createVolRespBody, _ := io.ReadAll(createVolResp.Body)
+	var createVolResult struct {
+		Volume struct {
+			ID string `json:"id"`
+		} `json:"volume"`
+	}
+	json.Unmarshal(createVolRespBody, &createVolResult)
+	volumeID := createVolResult.Volume.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.ServiceURL("volumes", volumeID), nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
+
+	// Setup: Create snapshot using raw HTTP
 	snapName := "test-snapshot-update-" + uuid.New().String()[:8]
-	snapshot, err := snapshots.Create(context.Background(), client, snapshots.CreateOpts{
-		VolumeID: volume.ID,
-		Name:     snapName,
-	}).Extract()
-	require.NoError(t, err, "Setup: CreateSnapshot should succeed")
-	defer snapshots.Delete(context.Background(), client, snapshot.ID)
+	createSnapBody := map[string]interface{}{
+		"snapshot": map[string]interface{}{
+			"volume_id": volumeID,
+			"name":      snapName,
+		},
+	}
+	createSnapBodyJSON, _ := json.Marshal(createSnapBody)
+	createSnapReq, _ := http.NewRequest("POST", client.ServiceURL("snapshots"), bytes.NewReader(createSnapBodyJSON))
+	createSnapReq.Header.Set("X-Auth-Token", client.TokenID)
+	createSnapReq.Header.Set("Content-Type", "application/json")
 
-	// Test: Update snapshot name and description
+	createSnapResp, err := http.DefaultClient.Do(createSnapReq)
+	require.NoError(t, err, "Setup: CreateSnapshot should succeed")
+	defer createSnapResp.Body.Close()
+
+	createSnapRespBody, _ := io.ReadAll(createSnapResp.Body)
+	var createSnapResult struct {
+		Snapshot struct {
+			ID string `json:"id"`
+		} `json:"snapshot"`
+	}
+	json.Unmarshal(createSnapRespBody, &createSnapResult)
+	snapshotID := createSnapResult.Snapshot.ID
+
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", client.ServiceURL("snapshots", snapshotID), nil)
+		deleteReq.Header.Set("X-Auth-Token", client.TokenID)
+		http.DefaultClient.Do(deleteReq)
+	}()
+
+	// Test: Update snapshot name and description using PATCH
 	newName := snapName + "-updated"
 	newDesc := "Updated snapshot description"
-	updateOpts := snapshots.UpdateOpts{
-		Name:        &newName,
-		Description: &newDesc,
+	updateBody := map[string]interface{}{
+		"snapshot": map[string]interface{}{
+			"name":        newName,
+			"description": newDesc,
+		},
 	}
+	updateBodyJSON, _ := json.Marshal(updateBody)
+	updateReq, _ := http.NewRequest("PATCH", client.ServiceURL("snapshots", snapshotID), bytes.NewReader(updateBodyJSON))
+	updateReq.Header.Set("X-Auth-Token", client.TokenID)
+	updateReq.Header.Set("Content-Type", "application/json")
 
-	updated, err := snapshots.Update(context.Background(), client, snapshot.ID, updateOpts).Extract()
+	updateResp, err := http.DefaultClient.Do(updateReq)
+	require.NoError(t, err, "UpdateSnapshot should succeed")
+	defer updateResp.Body.Close()
 
 	// Assertions
-	require.NoError(t, err, "UpdateSnapshot should succeed")
-	assert.Equal(t, newName, updated.Name, "Snapshot name should be updated")
-	assert.Equal(t, newDesc, updated.Description, "Snapshot description should be updated")
-	assert.Equal(t, snapshot.ID, updated.ID, "Snapshot ID should not change")
+	assert.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+	updateRespBody, _ := io.ReadAll(updateResp.Body)
+	var updateResult struct {
+		Snapshot struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"snapshot"`
+	}
+	err = json.Unmarshal(updateRespBody, &updateResult)
+	require.NoError(t, err)
+
+	assert.Equal(t, newName, updateResult.Snapshot.Name, "Snapshot name should be updated")
+	assert.Equal(t, newDesc, updateResult.Snapshot.Description, "Snapshot description should be updated")
+	assert.Equal(t, snapshotID, updateResult.Snapshot.ID, "Snapshot ID should not change")
 }
