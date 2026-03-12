@@ -94,7 +94,7 @@ git clone https://github.com/cobaltcore-dev/o3k.git
 cd o3k
 
 # 2. Start services
-docker compose up -d
+docker compose -f deployments/docker-compose.yml up -d
 
 # 3. Install OpenStack CLI
 brew install pipx && pipx install python-openstackclient

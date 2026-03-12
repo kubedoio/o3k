@@ -5,6 +5,10 @@ bin/
 *.so
 *.dylib
 
+# Compiled binaries in root (should be in bin/)
+/o3k
+/o3k-migrate
+
 # Test binary
 *.test
 

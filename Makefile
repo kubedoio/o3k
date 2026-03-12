@@ -35,7 +35,7 @@ test:
 test-contract:
 	@echo "Running contract tests..."
 	@echo "Checking O3K is running..."
-	@curl -s http://localhost:35357/v3 > /dev/null || (echo "ERROR: O3K not running. Run 'docker compose up -d' or 'make run' first." && exit 1)
+	@curl -s http://localhost:35357/v3 > /dev/null || (echo "ERROR: O3K not running. Run 'docker compose -f deployments/docker-compose.yml up -d' or 'make run' first." && exit 1)
 	@echo "Running gophercloud contract tests..."
 	go test -v ./test/contract/... -timeout 5m
 

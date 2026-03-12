@@ -66,7 +66,7 @@ O3K is a lightweight OpenStack implementation in Go, inspired by K3s. It provide
 
 ```bash
 # Start all services (PostgreSQL + O3K)
-docker compose up -d
+docker compose -f deployments/docker-compose.yml up -d
 
 # Configure environment
 source ~/.o3k-env         # Sets OS_AUTH_URL, OS_USERNAME, etc.
@@ -99,14 +99,15 @@ make test                     # Runs all Go unit tests
 go test ./internal/nova/...   # Test specific package
 
 # Integration tests
-./test/quick_test.sh          # Fast integration test suite
-./test/integration_test.sh    # Full integration test suite
-./test-all.sh                 # Comprehensive test suite
+./scripts/test-all.sh                 # Comprehensive test suite
+./scripts/test-keystone.sh            # Keystone-specific tests
+./test/quick_test.sh                  # Fast integration test suite
+./test/integration_test.sh            # Full integration test suite
 
 # Specific feature tests
-./test/horizon_compat_test.sh      # Horizon dashboard compatibility
-./test/volume_attach_test.sh       # Volume attachment workflow
-./test/vxlan_multinode_test.sh     # Multi-node VXLAN networking
+./test/horizon_compat_test.sh         # Horizon dashboard compatibility
+./test/volume_attach_test.sh          # Volume attachment workflow
+./test/vxlan_multinode_test.sh        # Multi-node VXLAN networking
 ```
 
 ### Database Operations
