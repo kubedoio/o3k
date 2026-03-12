@@ -1,6 +1,7 @@
 package cinder
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -182,10 +183,11 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 		return
 	}
 
-	// Update status to available
+	// Update status to available in background
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		database.DB.Exec(c.Request.Context(),
+		// Use context.Background() instead of c.Request.Context() to avoid cancellation
+		database.DB.Exec(context.Background(),
 			"UPDATE volumes SET status = $1, updated_at = $2 WHERE id = $3",
 			"available", time.Now(), volumeID)
 	}()
@@ -871,7 +873,7 @@ func (svc *Service) GetVolumeType(c *gin.Context) {
 	var isPublic bool
 
 	err := database.DB.QueryRow(c.Request.Context(), `
-		SELECT id, name, description, is_public
+		SELECT id, name, COALESCE(description, ''), is_public
 		FROM volume_types
 		WHERE id = $1
 	`, typeID).Scan(&id, &name, &description, &isPublic)

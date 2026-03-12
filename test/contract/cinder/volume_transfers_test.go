@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,13 +42,8 @@ func TestCinderCreateVolumeTransfer_Contract(t *testing.T) {
 	json.Unmarshal(createVolRespBody, &createVolResult)
 	volumeID := createVolResult.Volume.ID
 
-	// WORKAROUND: The volume status update goroutine in internal/cinder/volumes.go:186-191
-	// uses c.Request.Context() which gets cancelled when the HTTP response is sent.
-	// This means volumes never actually become "available" automatically.
-	// Manually update status in database as a test workaround.
-	// TODO: Fix implementation to use context.Background() in the goroutine.
-	exec.Command("docker", "exec", "o3k-postgres", "psql", "-U", "lightstack", "-d", "lightstack", "-c",
-		"UPDATE volumes SET status='available' WHERE id='"+volumeID+"';").Run()
+	// Wait for volume status to become available (goroutine takes 100ms + DB update time)
+	time.Sleep(200 * time.Millisecond)
 
 	defer func() {
 		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
@@ -131,13 +126,8 @@ func TestCinderListVolumeTransfers_Contract(t *testing.T) {
 	json.Unmarshal(createVolRespBody, &createVolResult)
 	volumeID := createVolResult.Volume.ID
 
-	// WORKAROUND: The volume status update goroutine in internal/cinder/volumes.go:186-191
-	// uses c.Request.Context() which gets cancelled when the HTTP response is sent.
-	// This means volumes never actually become "available" automatically.
-	// Manually update status in database as a test workaround.
-	// TODO: Fix implementation to use context.Background() in the goroutine.
-	exec.Command("docker", "exec", "o3k-postgres", "psql", "-U", "lightstack", "-d", "lightstack", "-c",
-		"UPDATE volumes SET status='available' WHERE id='"+volumeID+"';").Run()
+	// Wait for volume status to become available (goroutine takes 100ms + DB update time)
+	time.Sleep(200 * time.Millisecond)
 
 	defer func() {
 		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
@@ -211,13 +201,8 @@ func TestCinderGetVolumeTransfer_Contract(t *testing.T) {
 	json.Unmarshal(createVolRespBody, &createVolResult)
 	volumeID := createVolResult.Volume.ID
 
-	// WORKAROUND: The volume status update goroutine in internal/cinder/volumes.go:186-191
-	// uses c.Request.Context() which gets cancelled when the HTTP response is sent.
-	// This means volumes never actually become "available" automatically.
-	// Manually update status in database as a test workaround.
-	// TODO: Fix implementation to use context.Background() in the goroutine.
-	exec.Command("docker", "exec", "o3k-postgres", "psql", "-U", "lightstack", "-d", "lightstack", "-c",
-		"UPDATE volumes SET status='available' WHERE id='"+volumeID+"';").Run()
+	// Wait for volume status to become available (goroutine takes 100ms + DB update time)
+	time.Sleep(200 * time.Millisecond)
 
 	defer func() {
 		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
@@ -305,13 +290,8 @@ func TestCinderDeleteVolumeTransfer_Contract(t *testing.T) {
 	json.Unmarshal(createVolRespBody, &createVolResult)
 	volumeID := createVolResult.Volume.ID
 
-	// WORKAROUND: The volume status update goroutine in internal/cinder/volumes.go:186-191
-	// uses c.Request.Context() which gets cancelled when the HTTP response is sent.
-	// This means volumes never actually become "available" automatically.
-	// Manually update status in database as a test workaround.
-	// TODO: Fix implementation to use context.Background() in the goroutine.
-	exec.Command("docker", "exec", "o3k-postgres", "psql", "-U", "lightstack", "-d", "lightstack", "-c",
-		"UPDATE volumes SET status='available' WHERE id='"+volumeID+"';").Run()
+	// Wait for volume status to become available (goroutine takes 100ms + DB update time)
+	time.Sleep(200 * time.Millisecond)
 
 	defer func() {
 		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)
@@ -384,13 +364,8 @@ func TestCinderAcceptVolumeTransfer_Contract(t *testing.T) {
 	json.Unmarshal(createVolRespBody, &createVolResult)
 	volumeID := createVolResult.Volume.ID
 
-	// WORKAROUND: The volume status update goroutine in internal/cinder/volumes.go:186-191
-	// uses c.Request.Context() which gets cancelled when the HTTP response is sent.
-	// This means volumes never actually become "available" automatically.
-	// Manually update status in database as a test workaround.
-	// TODO: Fix implementation to use context.Background() in the goroutine.
-	exec.Command("docker", "exec", "o3k-postgres", "psql", "-U", "lightstack", "-d", "lightstack", "-c",
-		"UPDATE volumes SET status='available' WHERE id='"+volumeID+"';").Run()
+	// Wait for volume status to become available (goroutine takes 100ms + DB update time)
+	time.Sleep(200 * time.Millisecond)
 
 	defer func() {
 		deleteReq, _ := http.NewRequest("DELETE", client.Endpoint+"volumes/"+volumeID, nil)

@@ -1,6 +1,7 @@
 package cinder
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
@@ -97,13 +98,24 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 
 	// Update each quota resource
 	for resource, limitVal := range req.QuotaSet {
-		// Skip non-integer fields
+		// Skip non-integer fields like "id"
+		if resource == "id" {
+			continue
+		}
+
 		var limit int
 		switch v := limitVal.(type) {
 		case float64:
 			limit = int(v)
 		case int:
 			limit = v
+		case json.Number:
+			// Handle json.Number from interface{} unmarshaling
+			val, err := v.Int64()
+			if err != nil {
+				continue
+			}
+			limit = int(val)
 		default:
 			continue
 		}

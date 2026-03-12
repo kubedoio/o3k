@@ -1,6 +1,7 @@
 package glance
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -104,17 +105,18 @@ func (svc *Service) GetTask(c *gin.Context) {
 	taskID := c.Param("id")
 
 	var taskType, status, owner, message string
-	var input, result map[string]interface{}
+	var inputJSON, resultJSON []byte
 	var createdAt, updatedAt time.Time
 
 	err := database.DB.QueryRow(c.Request.Context(), `
-		SELECT type, status, input, result, owner, message, created_at, updated_at
+		SELECT type, status, input, result, COALESCE(owner, ''), COALESCE(message, ''), created_at, updated_at
 		FROM image_tasks
 		WHERE id = $1
-	`, taskID).Scan(&taskType, &status, &input, &result, &owner, &message, &createdAt, &updatedAt)
+	`, taskID).Scan(&taskType, &status, &inputJSON, &resultJSON, &owner, &message, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"message": "Task not found"})
+		// Log the actual error for debugging
+		c.JSON(http.StatusNotFound, gin.H{"message": "Task not found", "debug_error": err.Error()})
 		return
 	}
 
@@ -130,11 +132,20 @@ func (svc *Service) GetTask(c *gin.Context) {
 		"schema":     "/v2/schemas/task",
 	}
 
-	if input != nil {
-		task["input"] = input
+	// Parse input JSON if present
+	if len(inputJSON) > 0 {
+		var input map[string]interface{}
+		if err := json.Unmarshal(inputJSON, &input); err == nil {
+			task["input"] = input
+		}
 	}
-	if result != nil {
-		task["result"] = result
+
+	// Parse result JSON if present
+	if len(resultJSON) > 0 {
+		var result map[string]interface{}
+		if err := json.Unmarshal(resultJSON, &result); err == nil {
+			task["result"] = result
+		}
 	}
 
 	c.JSON(http.StatusOK, task)

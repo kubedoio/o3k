@@ -142,9 +142,13 @@ func TestGlanceGetTask_Contract(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("GET response status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]interface{}
 	err = json.Unmarshal(respBody, &result)
 	require.NoError(t, err)

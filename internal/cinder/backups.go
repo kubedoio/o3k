@@ -201,28 +201,35 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 	backupID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	var req struct {
-		Restore struct {
-			Name     *string `json:"name"`
-			VolumeID *string `json:"volume_id"`
-		} `json:"restore" binding:"required"`
+	// Get restore data from context (set by BackupAction)
+	restoreData, exists := c.Get("restore_data")
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing restore data"})
+		return
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	// Parse restore data
+	restoreMap, ok := restoreData.(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid restore data format"})
 		return
+	}
+
+	var requestedVolumeID *string
+	if volID, ok := restoreMap["volume_id"].(string); ok {
+		requestedVolumeID = &volID
 	}
 
 	// Get backup details
 	var (
-		volumeID string
-		sizeGB   int
+		originalVolumeID string
+		sizeGB           int
 	)
 
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT volume_id, size_gb FROM volume_backups WHERE id = $1 AND project_id = $2",
 		backupID, projectID,
-	).Scan(&volumeID, &sizeGB)
+	).Scan(&originalVolumeID, &sizeGB)
 
 	if err == pgx.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "backup not found"})
@@ -234,9 +241,9 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 	}
 
 	// If volume_id specified, restore to existing volume
-	restoredVolumeID := volumeID
-	if req.Restore.VolumeID != nil {
-		restoredVolumeID = *req.Restore.VolumeID
+	restoredVolumeID := originalVolumeID
+	if requestedVolumeID != nil {
+		restoredVolumeID = *requestedVolumeID
 
 		// Verify target volume exists
 		var exists bool
@@ -255,8 +262,8 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 		now := time.Now()
 
 		volumeName := fmt.Sprintf("restored-from-%s", backupID[:8])
-		if req.Restore.Name != nil {
-			volumeName = *req.Restore.Name
+		if nameVal, ok := restoreMap["name"].(string); ok && nameVal != "" {
+			volumeName = nameVal
 		}
 
 		_, err = database.DB.Exec(c.Request.Context(), `
@@ -287,7 +294,9 @@ func (svc *Service) BackupAction(c *gin.Context) {
 	}
 
 	// Check for restore action
-	if _, ok := req["restore"]; ok {
+	if restoreData, ok := req["restore"]; ok {
+		// Pass the restore data to RestoreBackup via context
+		c.Set("restore_data", restoreData)
 		svc.RestoreBackup(c)
 		return
 	}
