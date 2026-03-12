@@ -106,6 +106,11 @@ func TestCinderGetVolumeType_Contract(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("Response status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Clean up

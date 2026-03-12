@@ -119,6 +119,7 @@ func TestGlanceGetTask_Contract(t *testing.T) {
 	defer createResp.Body.Close()
 
 	createBody, _ := io.ReadAll(createResp.Body)
+	t.Logf("Create task status: %d, body: %s", createResp.StatusCode, string(createBody))
 
 	if createResp.StatusCode != http.StatusCreated {
 		t.Logf("Create task failed: %d, body: %s", createResp.StatusCode, string(createBody))
@@ -131,6 +132,7 @@ func TestGlanceGetTask_Contract(t *testing.T) {
 
 	// Test: Get task
 	url := client.ServiceURL("tasks", taskID)
+	t.Logf("GET URL: %s", url)
 	req, err := http.NewRequest("GET", url, nil)
 	require.NoError(t, err)
 

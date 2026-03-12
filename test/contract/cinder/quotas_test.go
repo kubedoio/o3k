@@ -57,7 +57,10 @@ func TestCinderUpdateQuotaSet_Contract(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(payload)
-	url := client.ServiceURL("quota-sets", "default")
+	// Use project UUID directly instead of name to avoid resolution issues
+	projectID := "00000000-0000-0000-0000-000000000002"
+	url := client.Endpoint + "quota-sets/" + projectID
+	t.Logf("PUT URL: %s", url)
 	req, err := http.NewRequest("PUT", url, bytes.NewReader(body))
 	require.NoError(t, err)
 
@@ -71,6 +74,7 @@ func TestCinderUpdateQuotaSet_Contract(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	respBody, _ := io.ReadAll(resp.Body)
+	t.Logf("Response body: %s", string(respBody))
 	var result struct {
 		QuotaSet map[string]interface{} `json:"quota_set"`
 	}
