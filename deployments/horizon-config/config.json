@@ -22,6 +22,11 @@
     ],
     "permissions": [
         {
+            "path": "/tmp/horizon_sessions",
+            "owner": "horizon:horizon",
+            "recurse": true
+        },
+        {
             "path": "/var/log/kolla/horizon",
             "owner": "horizon:kolla",
             "recurse": true
