@@ -3,6 +3,9 @@
 **Feature**: OpenStack Horizon 100% Compatibility
 **Time to Complete**: 15-30 minutes
 **Target Audience**: Cloud administrators, developers evaluating O3K
+**Status**: Documentation Complete - Deployment configuration in progress
+
+**Important Note**: OpenStack Horizon deployment using official Kolla images requires specific configuration including KOLLA_CONFIG_STRATEGY environment variables and proper volume mount structures. This guide documents the configuration approach. Alternative deployment methods (DevStack, manual installation) are being evaluated for simpler setup experiences.
 
 ## Overview
 
@@ -544,6 +547,102 @@ After completing this quickstart, you should be able to:
 - ✅ Upload and manage images
 
 **Total Time**: 15-30 minutes (depending on Docker download speeds)
+
+---
+
+## Troubleshooting
+
+### Kolla Configuration Issues
+
+**Problem**: Container restart loops with "KOLLA_CONFIG_STRATEGY is not set properly"
+
+**Solution**:
+```yaml
+# Ensure docker-compose.yml includes:
+environment:
+  - KOLLA_INSTALL_TYPE=source
+  - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+
+volumes:
+  - ./kolla-config/config.json:/var/lib/kolla/config_files/config.json:ro
+  - ./config/local_settings.py:/var/lib/kolla/config_files/local_settings:ro
+```
+
+**Problem**: Container fails with "FileNotFoundError: config.json"
+
+**Solution**: Create `kolla-config/config.json`:
+```json
+{
+    "command": "/usr/sbin/apache2ctl -DFOREGROUND",
+    "config_files": [
+        {
+            "source": "/var/lib/kolla/config_files/local_settings",
+            "dest": "/etc/openstack-dashboard/local_settings.py",
+            "owner": "horizon",
+            "perm": "0644"
+        }
+    ],
+    "permissions": [
+        {
+            "path": "/var/log/kolla/horizon",
+            "owner": "horizon:horizon",
+            "recurse": true
+        }
+    ]
+}
+```
+
+### Docker Image Issues
+
+**Problem**: `manifest for quay.io/openstack.kolla/horizon:zed not found`
+
+**Solution**: Use release-specific tags:
+```yaml
+image: quay.io/openstack.kolla/horizon:zed-ubuntu-jammy
+# or
+image: quay.io/openstack.kolla/horizon:2023.2-ubuntu-jammy
+```
+
+**Problem**: Platform mismatch warnings on ARM64 (Apple Silicon)
+
+**Solution**: These warnings are informational only. Kolla images are built for AMD64 but run via Rosetta emulation. For native ARM64 support, build custom images or use DevStack.
+
+### Network Connectivity
+
+**Problem**: Horizon can't connect to O3K services
+
+**Solution**:
+```bash
+# Check network exists
+docker network ls | grep o3k
+
+# Verify containers on same network
+docker network inspect deployments_o3k-network
+
+# Test connectivity from Horizon container
+docker exec o3k-horizon ping -c 3 o3k
+docker exec o3k-horizon curl -v http://o3k:35357/v3
+```
+
+### Authentication Issues
+
+**Problem**: "Unable to authenticate" errors
+
+**Solution**:
+- Verify O3K Keystone is running: `curl http://localhost:35357/v3`
+- Check `local_settings.py` OPENSTACK_HOST matches container name
+- Ensure project "default" and user "admin" exist in O3K
+- Verify token TTL matches SESSION_TIMEOUT (14400 seconds)
+
+### Alternative Deployment Methods
+
+If Kolla containers prove challenging, consider:
+
+1. **DevStack-based Horizon** (simpler configuration)
+2. **Manual installation** (Python venv + Apache/Nginx)
+3. **Standalone Horizon Docker image** (community-built, less complex than Kolla)
+
+Documentation for alternative methods forthcoming.
 
 ---
 

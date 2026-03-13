@@ -134,60 +134,12 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the complete quick start guide.
 
 ### 🖥️ Deploy Horizon Dashboard
 
-Deploy OpenStack Horizon dashboard with O3K as the backend (100% compatible):
+**Note**: OpenStack Horizon deployment requires proper Kolla configuration or alternative Docker images. The official Kolla images (`quay.io/openstack.kolla/horizon`) require complex Kolla-specific configuration including KOLLA_CONFIG_STRATEGY environment variables and proper volume mounts for configuration files. A simplified deployment guide is being developed.
 
-```bash
-# 1. Ensure O3K is running
-docker compose -f deployments/docker-compose.yml up -d
+For the complete Horizon integration guide, see [specs/002-horizon-full-compatibility/quickstart.md](specs/002-horizon-full-compatibility/quickstart.md).
 
-# 2. Create Horizon configuration
-mkdir -p ~/o3k-horizon/config
-cd ~/o3k-horizon
-
-# 3. Create local_settings.py
-cat > config/local_settings.py <<'EOF'
-OPENSTACK_HOST = "o3k"
-OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
-OPENSTACK_API_VERSIONS = {"identity": 3, "image": 2, "volume": 3, "compute": 2.1}
-OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
-OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
-SESSION_TIMEOUT = 14400  # 4 hours
-CONSOLE_TYPE = 'novnc'
-SECRET_KEY = 'change-this-in-production'
-EOF
-
-# 4. Create docker-compose.yml
-cat > docker-compose.yml <<'EOF'
-version: '3.8'
-services:
-  horizon:
-    image: kolla/ubuntu-horizon:zed
-    ports: ["80:80"]
-    volumes:
-      - ./config/local_settings.py:/etc/openstack-dashboard/local_settings.py:ro
-    networks: [o3k-network]
-    depends_on: [novnc]
-
-  novnc:
-    image: novnc/noVNC:latest
-    ports: ["6080:6080"]
-    networks: [o3k-network]
-
-networks:
-  o3k-network:
-    external: true
-    name: o3k_default
-EOF
-
-# 5. Start Horizon
-docker compose up -d
-
-# 6. Access dashboard
-open http://localhost/dashboard
-# Login: Domain=Default, User=admin, Password=secret
-```
-
-**Features Available in Horizon:**
+**O3K API Compatibility with Horizon**:
+All Horizon dashboard features are 100% compatible with O3K APIs:
 - ✅ Instance lifecycle (launch, start, stop, delete, resize, rebuild)
 - ✅ VNC console access (integrated with noVNC proxy)
 - ✅ Network topology visualization
@@ -197,7 +149,24 @@ open http://localhost/dashboard
 - ✅ Floating IPs and port forwarding
 - ✅ Multi-project isolation and RBAC
 
-**Comprehensive Guide**: See [specs/002-horizon-full-compatibility/quickstart.md](specs/002-horizon-full-compatibility/quickstart.md) for complete 15-30 minute walkthrough.
+To use Horizon with O3K, configure Horizon's `local_settings.py`:
+
+```python
+OPENSTACK_HOST = "o3k"  # or your O3K server address
+OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
+OPENSTACK_API_VERSIONS = {
+    "identity": 3,
+    "image": 2,
+    "volume": 3,
+    "compute": 2.1,
+}
+OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
+SESSION_TIMEOUT = 14400  # 4 hours (matches O3K token TTL)
+CONSOLE_TYPE = 'novnc'
+```
+
+Login credentials: Domain=Default, User=admin, Password=secret
 
 ### 📖 Installation Options
 
