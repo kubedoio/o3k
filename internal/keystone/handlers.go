@@ -37,6 +37,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.POST("/auth/tokens", svc.AuthenticateToken)
 		v3.GET("/auth/tokens", svc.ValidateToken)
 		v3.DELETE("/auth/tokens", svc.RevokeToken)
+		v3.GET("/auth/projects", svc.ListAuthProjects)
 
 		// Users
 		v3.GET("/users", svc.ListUsers)
@@ -227,6 +228,80 @@ func (svc *Service) RevokeToken(c *gin.Context) {
 	// In JWT implementation, we don't maintain token blacklist
 	// Tokens expire naturally based on TTL
 	c.Status(http.StatusNoContent)
+}
+
+// ListAuthProjects lists projects available to the authenticated user (GET /v3/auth/projects)
+func (svc *Service) ListAuthProjects(c *gin.Context) {
+	// Extract user ID from token
+	tokenString := c.GetHeader("X-Auth-Token")
+	if tokenString == "" {
+		tokenString = c.GetHeader("X-Subject-Token")
+	}
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
+			"message": "authentication required",
+			"code":    401,
+			"title":   "Unauthorized",
+		}})
+		return
+	}
+
+	claims, err := svc.authService.ValidateToken(tokenString)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
+			"message": "invalid token",
+			"code":    401,
+			"title":   "Unauthorized",
+		}})
+		return
+	}
+
+	// Query projects the user has access to
+	rows, err := database.DB.Query(c.Request.Context(), `
+		SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id, d.name as domain_name
+		FROM projects p
+		JOIN role_assignments ra ON ra.project_id = p.id
+		JOIN domains d ON p.domain_id = d.id
+		WHERE ra.user_id = $1 AND p.enabled = true
+		ORDER BY p.name
+	`, claims.UserID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+			"message": err.Error(),
+			"code":    500,
+			"title":   "Internal Server Error",
+		}})
+		return
+	}
+	defer rows.Close()
+
+	var projects []gin.H
+	for rows.Next() {
+		var id, name, description, domainID, domainName string
+		var enabled bool
+		if err := rows.Scan(&id, &name, &description, &enabled, &domainID, &domainName); err != nil {
+			continue
+		}
+
+		projects = append(projects, gin.H{
+			"id":          id,
+			"name":        name,
+			"description": description,
+			"enabled":     enabled,
+			"domain_id":   domainID,
+			"domain": gin.H{
+				"id":   domainID,
+				"name": domainName,
+			},
+		})
+	}
+
+	if projects == nil {
+		projects = []gin.H{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"projects": projects})
 }
 
 // ListUsers lists all users
