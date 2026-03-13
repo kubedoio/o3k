@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,20 @@ import (
 )
 
 var logger zerolog.Logger
+
+// SensitiveFields lists fields that should be redacted from logs
+var SensitiveFields = []string{
+	"password",
+	"token",
+	"secret",
+	"api_key",
+	"auth_token",
+	"x-auth-token",
+	"x-subject-token",
+	"authorization",
+	"jwt",
+	"credential",
+}
 
 // InitLogger initializes the global logger based on configuration
 func InitLogger(config *common.LoggingConfig) {
@@ -50,15 +65,27 @@ func LoggingMiddleware() gin.HandlerFunc {
 		// Start timer
 		start := time.Now()
 
+		// Extract user/project from context (populated by auth middleware)
+		userID, _ := c.Get("user_id")
+		projectID, _ := c.Get("project_id")
+
 		// Log incoming request
-		logger.Debug().
+		logEvent := logger.Debug().
 			Str("request_id", requestID).
 			Str("method", c.Request.Method).
 			Str("path", c.Request.URL.Path).
-			Str("query", c.Request.URL.RawQuery).
+			Str("query", redactSensitiveQuery(c.Request.URL.RawQuery)).
 			Str("remote_addr", c.ClientIP()).
-			Str("user_agent", c.Request.UserAgent()).
-			Msg("incoming request")
+			Str("user_agent", c.Request.UserAgent())
+
+		if userID != nil {
+			logEvent.Str("user_id", userID.(string))
+		}
+		if projectID != nil {
+			logEvent.Str("project_id", projectID.(string))
+		}
+
+		logEvent.Msg("incoming request")
 
 		// Process request
 		c.Next()
@@ -68,14 +95,14 @@ func LoggingMiddleware() gin.HandlerFunc {
 
 		// Determine log level based on status code
 		statusCode := c.Writer.Status()
-		logEvent := logger.Info()
+		logEvent = logger.Info()
 		if statusCode >= 500 {
 			logEvent = logger.Error()
 		} else if statusCode >= 400 {
 			logEvent = logger.Warn()
 		}
 
-		// Log response
+		// Log response with performance metrics
 		logEvent.
 			Str("request_id", requestID).
 			Str("method", c.Request.Method).
@@ -83,7 +110,21 @@ func LoggingMiddleware() gin.HandlerFunc {
 			Int("status", statusCode).
 			Dur("duration", duration).
 			Int("response_size", c.Writer.Size()).
-			Msg("request completed")
+			Dur("duration_ms", duration/time.Millisecond)
+
+		if userID != nil {
+			logEvent.Str("user_id", userID.(string))
+		}
+		if projectID != nil {
+			logEvent.Str("project_id", projectID.(string))
+		}
+
+		// Add slow request warning
+		if duration > 1*time.Second {
+			logEvent.Bool("slow_request", true)
+		}
+
+		logEvent.Msg("request completed")
 
 		// Log errors if any occurred
 		if len(c.Errors) > 0 {
@@ -92,10 +133,29 @@ func LoggingMiddleware() gin.HandlerFunc {
 					Str("request_id", requestID).
 					Uint("type", uint(err.Type)).
 					Err(err.Err).
+					Str("path", c.Request.URL.Path).
+					Str("method", c.Request.Method).
 					Msg("request error")
 			}
 		}
 	}
+}
+
+// redactSensitiveQuery removes sensitive values from query strings
+func redactSensitiveQuery(query string) string {
+	if query == "" {
+		return ""
+	}
+
+	// Simple check for sensitive field names
+	lowerQuery := strings.ToLower(query)
+	for _, field := range SensitiveFields {
+		if strings.Contains(lowerQuery, field) {
+			return "[REDACTED]"
+		}
+	}
+
+	return query
 }
 
 // GetLogger returns a logger with request context
@@ -105,8 +165,80 @@ func GetLogger(c *gin.Context) *zerolog.Logger {
 		return &logger
 	}
 
-	ctxLogger := logger.With().Str("request_id", requestID.(string)).Logger()
-	return &ctxLogger
+	ctxLogger := logger.With().Str("request_id", requestID.(string))
+
+	// Add user and project context if available
+	if userID, exists := c.Get("user_id"); exists {
+		ctxLogger = ctxLogger.Str("user_id", userID.(string))
+	}
+	if projectID, exists := c.Get("project_id"); exists {
+		ctxLogger = ctxLogger.Str("project_id", projectID.(string))
+	}
+
+	loggerWithContext := ctxLogger.Logger()
+	return &loggerWithContext
+}
+
+// LogOperationStart logs the start of an operation with context
+func LogOperationStart(c *gin.Context, operation, resourceType, resourceID string) {
+	logger := GetLogger(c)
+	logger.Info().
+		Str("operation", operation).
+		Str("resource_type", resourceType).
+		Str("resource_id", resourceID).
+		Msg("operation started")
+}
+
+// LogOperationEnd logs the end of an operation with duration
+func LogOperationEnd(c *gin.Context, operation, resourceType, resourceID string, duration time.Duration, err error) {
+	logger := GetLogger(c)
+	logEvent := logger.Info()
+
+	if err != nil {
+		logEvent = logger.Error().Err(err)
+	}
+
+	logEvent.
+		Str("operation", operation).
+		Str("resource_type", resourceType).
+		Str("resource_id", resourceID).
+		Dur("duration", duration).
+		Msg("operation completed")
+}
+
+// LogExternalService logs calls to external services (libvirt, Ceph, S3)
+func LogExternalService(c *gin.Context, service, operation string, duration time.Duration, err error) {
+	logger := GetLogger(c)
+	logEvent := logger.Info()
+
+	if err != nil {
+		logEvent = logger.Warn().Err(err)
+	}
+
+	logEvent.
+		Str("external_service", service).
+		Str("operation", operation).
+		Dur("duration", duration).
+		Msg("external service call")
+}
+
+// LogDatabaseQuery logs database operations (used by query logger)
+func LogDatabaseQuery(c *gin.Context, query string, duration time.Duration, err error) {
+	logger := GetLogger(c)
+	logEvent := logger.Debug()
+
+	if duration > 100*time.Millisecond {
+		logEvent = logger.Warn().Bool("slow_query", true)
+	}
+
+	if err != nil {
+		logEvent = logger.Error().Err(err)
+	}
+
+	logEvent.
+		Str("query", query).
+		Dur("duration", duration).
+		Msg("database query")
 }
 
 // RecoveryMiddleware handles panics

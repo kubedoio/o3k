@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/internal/middleware"
 	"github.com/cobaltcore-dev/o3k/pkg/hypervisor"
 )
 
@@ -206,8 +207,12 @@ type CreateServerRequest struct {
 
 // CreateServer creates a new server instance
 func (svc *Service) CreateServer(c *gin.Context) {
+	logger := middleware.GetLogger(c)
+	start := time.Now()
+
 	var req CreateServerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Warn().Err(err).Msg("Invalid request body for server creation")
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
 			"message": "invalid request body",
 			"code":    400,
@@ -219,14 +224,20 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	projectID := c.GetString("project_id")
 	userID := c.GetString("user_id")
 
+	middleware.LogOperationStart(c, "create", "server", req.Server.Name)
+
 	// Fetch flavor (support lookup by UUID or name)
 	var flavor database.Flavor
+	queryStart := time.Now()
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT id, name, vcpus, ram_mb, disk_gb FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1",
 		req.Server.FlavorRef,
 	).Scan(&flavor.ID, &flavor.Name, &flavor.VCPUs, &flavor.RAMMB, &flavor.DiskGB)
+	middleware.LogDatabaseQuery(c, "SELECT flavor", time.Since(queryStart), err)
 
 	if err == pgx.ErrNoRows {
+		logger.Warn().Str("flavor_ref", req.Server.FlavorRef).Msg("Flavor not found")
+		middleware.LogOperationEnd(c, "create", "server", req.Server.Name, time.Since(start), err)
 		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
 			"message": "flavor not found",
 			"code":    404,
@@ -235,6 +246,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		logger.Error().Err(err).Msg("Failed to query flavor")
+		middleware.LogOperationEnd(c, "create", "server", req.Server.Name, time.Since(start), err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -295,15 +308,21 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		imageID = nil
 	}
 
+	queryStart = time.Now()
 	_, err = database.DB.Exec(c.Request.Context(), `
 		INSERT INTO instances (id, name, project_id, user_id, flavor_id, image_id, status, power_state, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, instanceID, req.Server.Name, projectID, userID, flavor.ID, imageID, "BUILD", 0, now, now)
+	middleware.LogDatabaseQuery(c, "INSERT instance", time.Since(queryStart), err)
 
 	if err != nil {
+		logger.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create instance in database")
+		middleware.LogOperationEnd(c, "create", "server", instanceID, time.Since(start), err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	logger.Info().Str("instance_id", instanceID).Str("flavor", flavor.Name).Msg("Instance record created")
 
 	// Log instance action
 	requestID := uuid.New().String()
@@ -314,9 +333,12 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Create VM asynchronously (or synchronously if libvirt is available)
 	if svc.vmManager != nil {
+		logger.Info().Str("instance_id", instanceID).Msg("Starting VM creation via libvirt")
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
+
+			libvirtStart := time.Now()
 
 			// Generate VM XML
 			spec := hypervisor.VMSpec{
@@ -333,13 +355,21 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 			// Create VM
 			libvirtUUID, err := svc.vmManager.CreateVM(ctx, xml)
+
 			if err != nil {
+				logger.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create VM via libvirt")
 				// Update instance status to ERROR
 				database.DB.Exec(context.Background(),
 					"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3",
 					"ERROR", time.Now(), instanceID)
 				return
 			}
+
+			logger.Info().
+				Str("instance_id", instanceID).
+				Str("libvirt_uuid", libvirtUUID).
+				Dur("duration", time.Since(libvirtStart)).
+				Msg("VM created successfully via libvirt")
 
 			// Update instance with libvirt UUID
 			database.DB.Exec(context.Background(), `
@@ -348,7 +378,11 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				WHERE id = $6
 			`, "ACTIVE", 1, libvirtUUID, time.Now(), time.Now(), instanceID)
 		}()
+	} else {
+		logger.Debug().Msg("Stub mode: skipping libvirt VM creation")
 	}
+
+	middleware.LogOperationEnd(c, "create", "server", instanceID, time.Since(start), nil)
 
 	// Return instance details
 	c.JSON(http.StatusAccepted, gin.H{
@@ -518,17 +552,26 @@ func (svc *Service) GetServer(c *gin.Context) {
 
 // DeleteServer deletes a server
 func (svc *Service) DeleteServer(c *gin.Context) {
+	logger := middleware.GetLogger(c)
+	start := time.Now()
+
 	instanceID := c.Param("id")
 	projectID := c.GetString("project_id")
 
+	middleware.LogOperationStart(c, "delete", "server", instanceID)
+
 	// Get libvirt domain ID (support lookup by ID or name)
 	var libvirtDomainID string
+	queryStart := time.Now()
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT libvirt_domain_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
+	middleware.LogDatabaseQuery(c, "SELECT libvirt_domain_id", time.Since(queryStart), err)
 
 	if err == pgx.ErrNoRows {
+		logger.Warn().Str("instance_id", instanceID).Msg("Instance not found")
+		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return
 	}
@@ -538,21 +581,35 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
 
+		libvirtStart := time.Now()
 		if err := svc.vmManager.DeleteVM(ctx, libvirtDomainID); err != nil {
+			logger.Error().Err(err).Str("libvirt_domain_id", libvirtDomainID).Msg("Failed to delete VM from libvirt")
+			middleware.LogExternalService(c, "libvirt", "delete_vm", time.Since(libvirtStart), err)
+			middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		middleware.LogExternalService(c, "libvirt", "delete_vm", time.Since(libvirtStart), nil)
+		logger.Info().Str("libvirt_domain_id", libvirtDomainID).Msg("VM deleted from libvirt")
 	}
 
 	// Delete from database (support lookup by ID or name)
+	queryStart = time.Now()
 	_, err = database.DB.Exec(c.Request.Context(),
 		"DELETE FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	)
+	middleware.LogDatabaseQuery(c, "DELETE instance", time.Since(queryStart), err)
+
 	if err != nil {
+		logger.Error().Err(err).Msg("Failed to delete instance from database")
+		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	logger.Info().Str("instance_id", instanceID).Msg("Instance deleted successfully")
+	middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), nil)
 
 	c.Status(http.StatusNoContent)
 }
