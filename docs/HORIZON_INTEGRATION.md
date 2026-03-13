@@ -1,694 +1,658 @@
-# OpenStack Horizon Integration Guide
-
-**Last Updated**: 2026-03-13
-**O3K Version**: 1.0.0+
-**Horizon Version**: Zed (tested), Yoga/2023.1 (compatible)
+# OpenStack Horizon Integration with O3K
 
 ## Overview
 
-This guide explains how to deploy and configure OpenStack Horizon dashboard to work with O3K as the backend cloud platform. O3K provides 100% API compatibility with OpenStack, enabling Horizon to function without any modifications.
-
-## Table of Contents
-
-1. [Architecture](#architecture)
-2. [Prerequisites](#prerequisites)
-3. [Quick Start](#quick-start)
-4. [Configuration](#configuration)
-5. [Authentication Flow](#authentication-flow)
-6. [Features](#features)
-7. [Troubleshooting](#troubleshooting)
-8. [Production Deployment](#production-deployment)
-
----
+This document describes how O3K integrates with OpenStack Horizon (Flamingo 2025.2) to provide a fully functional web dashboard for managing cloud resources. The integration provides 100% API compatibility with OpenStack services, allowing Horizon to work seamlessly with O3K's implementation of Keystone, Nova, Neutron, Cinder, and Glance.
 
 ## Architecture
 
-### Component Diagram
+### Components
+
+The unified deployment includes four main services:
+
+1. **PostgreSQL 18.3** - Database for O3K
+2. **O3K** - OpenStack-compatible cloud platform (Keystone, Nova, Neutron, Cinder, Glance, Metadata)
+3. **Horizon** - OpenStack Flamingo (2025.2) web dashboard
+4. **noVNC** - VNC console proxy for instance access
+
+### Service Communication Flow
 
 ```
-┌─────────────┐
-│   Browser   │
-│  (User)     │
-└──────┬──────┘
-       │ HTTPS (port 443/80)
-       ▼
-┌─────────────────────────────────────────┐
-│      Horizon Dashboard (Django)         │
-│  - Authentication UI                    │
-│  - Instance Management UI               │
-│  - Network Topology Visualization       │
-│  - Volume/Image Management UI           │
-└──────┬──────────────────────────────────┘
-       │ REST API calls
-       │ (authenticated with JWT tokens)
-       ▼
-┌─────────────────────────────────────────┐
-│            O3K Services                  │
-│  ┌───────────┬──────────┬──────────┐    │
-│  │ Keystone  │  Nova    │ Neutron  │    │
-│  │ (35357)   │  (8774)  │ (9696)   │    │
-│  ├───────────┼──────────┼──────────┤    │
-│  │  Cinder   │  Glance  │Metadata  │    │
-│  │  (8776)   │  (9292)  │ (8775)   │    │
-│  └───────────┴──────────┴──────────┘    │
-│                   │                      │
-│                   ▼                      │
-│         PostgreSQL Database              │
-└─────────────────────────────────────────┘
-
-Optional: noVNC Proxy (port 6080)
-└─────▶ VNC console access for instances
+User Browser → Horizon (Port 80) → O3K API Services (Ports 35357, 8774, 9696, 8776, 9292)
+                                         ↓
+                                   PostgreSQL (Port 5432)
 ```
 
-### Key Integration Points
+### Keystone Integration
 
-1. **Keystone Authentication**
-   - Horizon sends username/password to Keystone
-   - Keystone validates credentials and returns JWT token + service catalog
-   - Token used for all subsequent API calls
+Horizon authenticates users through O3K's Keystone service using the following flow:
 
-2. **Service Catalog**
-   - Keystone token response includes URLs for all services
-   - Horizon uses catalog to discover Nova, Neutron, Cinder, Glance endpoints
-   - Dynamic endpoint configuration (no hardcoded service URLs in Horizon)
+1. **User Login**: User enters credentials (default: admin/secret) in Horizon login form
+2. **Token Request**: Horizon sends POST to `http://o3k:35357/v3/auth/tokens` with credentials
+3. **Token Response**: Keystone returns JWT token with user info, project, and roles
+4. **Service Catalog**: Token includes service catalog mapping service types to endpoints:
+   ```json
+   {
+     "compute": "http://o3k:8774/v2.1",
+     "network": "http://o3k:9696/v2.0",
+     "volumev3": "http://o3k:8776/v3",
+     "image": "http://o3k:9292/v2",
+     "identity": "http://o3k:35357/v3"
+   }
+   ```
+5. **API Calls**: Horizon uses token and service catalog to make authenticated calls to other services
 
-3. **API Compatibility**
-   - O3K implements OpenStack APIs with 100% compatibility
-   - Horizon makes standard OpenStack REST API calls
-   - No custom Horizon plugins or modifications required
+### API Compatibility
 
----
+O3K implements 100% OpenStack API compatibility for the endpoints Horizon requires:
 
-## Prerequisites
+#### Keystone (Identity - Port 35357)
+- `POST /v3/auth/tokens` - Token generation
+- `GET /v3/auth/tokens` - Token validation
+- `DELETE /v3/auth/tokens` - Token revocation
+- `GET /v3/projects` - List projects
+- `GET /v3/users` - List users
+- `GET /v3/domains` - List domains
+- `GET /v3/` - API version discovery
 
-### Software Requirements
+#### Nova (Compute - Port 8774)
+- `GET /v2.1/servers` - List instances
+- `POST /v2.1/servers` - Create instance
+- `GET /v2.1/servers/{id}` - Show instance details
+- `DELETE /v2.1/servers/{id}` - Delete instance
+- `POST /v2.1/servers/{id}/action` - Instance actions (start, stop, reboot, etc.)
+- `GET /v2.1/flavors` - List flavors
+- `GET /v2.1/keypairs` - List SSH keypairs
+- `POST /v2.1/keypairs` - Create keypair
+- `GET /v2.1/os-availability-zone` - List availability zones
 
-- **Docker** 20.10+ (for containerized deployment)
-- **O3K** 1.0.0+ running and accessible
-- **PostgreSQL** 16+ (O3K database)
+#### Neutron (Network - Port 9696)
+- `GET /v2.0/networks` - List networks
+- `POST /v2.0/networks` - Create network
+- `GET /v2.0/subnets` - List subnets
+- `POST /v2.0/subnets` - Create subnet
+- `GET /v2.0/ports` - List ports
+- `GET /v2.0/routers` - List routers
+- `POST /v2.0/routers` - Create router
+- `GET /v2.0/floatingips` - List floating IPs
+- `POST /v2.0/floatingips` - Create floating IP
+- `GET /v2.0/security-groups` - List security groups
+- `POST /v2.0/security-group-rules` - Create security group rule
 
-### Network Requirements
+#### Cinder (Block Storage - Port 8776)
+- `GET /v3/volumes` - List volumes
+- `POST /v3/volumes` - Create volume
+- `GET /v3/volumes/{id}` - Show volume details
+- `DELETE /v3/volumes/{id}` - Delete volume
+- `POST /v3/volumes/{id}/action` - Volume actions (attach, detach, etc.)
+- `GET /v3/snapshots` - List snapshots
+- `POST /v3/snapshots` - Create snapshot
 
-- Horizon must be able to reach O3K ports:
-  - 35357 (Keystone - Identity)
-  - 8774 (Nova - Compute)
-  - 9696 (Neutron - Network)
-  - 8776 (Cinder - Block Storage)
-  - 9292 (Glance - Image)
-  - 6080 (noVNC - Console access, optional)
+#### Glance (Image - Port 9292)
+- `GET /v2/images` - List images
+- `POST /v2/images` - Create image
+- `GET /v2/images/{id}` - Show image details
+- `DELETE /v2/images/{id}` - Delete image
+- `PUT /v2/images/{id}/file` - Upload image data
+- `GET /v2/images/{id}/file` - Download image data
 
-### OS Requirements
+## Deployment Configuration
 
-- **Horizon**: Any platform supporting Docker (Linux, macOS, Windows)
-- **O3K**: Linux (for real mode), any platform (for stub mode)
+### Docker Compose Structure
 
----
+The deployment is defined in `deployments/docker-compose-horizon.yml` and includes:
 
-## Quick Start
+**Network**: `o3k-horizon-network` (bridge mode)
 
-### 1. Start O3K Backend
+**Volumes**:
+- `postgres-data` - PostgreSQL database files
+- `o3k-data` - O3K state and metadata
+- `o3k-images` - Glance image storage
+- `o3k-volumes` - Cinder volume storage
+- `horizon-static` - Django static files (CSS, JS)
+- `horizon-logs` - Horizon and Apache logs
 
-```bash
-# Clone O3K repository
-git clone https://github.com/yourusername/o3k.git
-cd o3k
+### Horizon Configuration
 
-# Start O3K services
-docker compose -f deployments/docker-compose.yml up -d
+Horizon is configured through several files mounted into the container:
 
-# Verify O3K is running
-curl http://localhost:35357/v3
-```
+#### 1. Kolla Configuration (`horizon-config/config.json`)
 
-### 2. Deploy Horizon
+Controls how Kolla's startup script (`kolla_set_configs`) initializes the container:
 
-See [Quickstart Guide](../specs/002-horizon-full-compatibility/quickstart.md) for complete deployment instructions.
-
-**Summary**:
-```bash
-# Create Horizon configuration
-mkdir -p ~/o3k-horizon/config
-# Copy local_settings.py configuration (see Configuration section)
-
-# Start Horizon
-cd ~/o3k-horizon
-docker compose up -d
-
-# Access dashboard
-open http://localhost/dashboard
-```
-
-### 3. Login
-
-- **URL**: http://localhost/dashboard
-- **Domain**: Default
-- **Username**: admin
-- **Password**: secret
-
-**⚠️ Change default credentials in production!**
-
----
-
-## Configuration
-
-### Horizon Configuration (local_settings.py)
-
-```python
-# OpenStack API Configuration
-OPENSTACK_HOST = "o3k"  # Docker service name or hostname
-OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
-OPENSTACK_KEYSTONE_DEFAULT_ROLE = "_member_"
-
-# API Versions (must match O3K support)
-OPENSTACK_API_VERSIONS = {
-    "identity": 3,      # Keystone v3
-    "image": 2,         # Glance v2
-    "volume": 3,        # Cinder v3
-    "compute": 2.1,     # Nova v2.1
+```json
+{
+    "command": "/usr/sbin/apache2ctl -DFOREGROUND",
+    "config_files": [
+        {
+            "source": "/var/lib/kolla/config_files/local_settings",
+            "dest": "/etc/openstack-dashboard/local_settings.py",
+            "owner": "horizon",
+            "perm": "0644"
+        },
+        {
+            "source": "/var/lib/kolla/config_files/ports.conf",
+            "dest": "/etc/apache2/ports.conf",
+            "owner": "root",
+            "perm": "0644"
+        },
+        {
+            "source": "/var/lib/kolla/config_files/horizon-nolist.conf",
+            "dest": "/etc/apache2/sites-enabled/000-default.conf",
+            "owner": "root",
+            "perm": "0644"
+        }
+    ],
+    "permissions": [...]
 }
+```
 
-# Keystone v3 Configuration
-OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
-OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
+#### 2. Django Settings (`horizon-config/local_settings`)
 
-# Session Timeout (match O3K token TTL)
-SESSION_TIMEOUT = 14400  # 4 hours (default O3K token TTL)
+Configures Horizon's Django application (300+ lines):
 
-# Console Access
-CONSOLE_TYPE = 'novnc'
+**Key Settings**:
+- `OPENSTACK_HOST = "o3k"` - O3K service hostname
+- `OPENSTACK_KEYSTONE_URL = "http://o3k:35357/v3"` - Keystone endpoint
+- `OPENSTACK_API_VERSIONS` - API versions for each service:
+  - `identity: 3`
+  - `image: 2`
+  - `volume: 3`
+  - `compute: 2`
+- `OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = False` - Single domain mode
+- `OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"` - Default domain
+- `SESSION_ENGINE = 'django.contrib.sessions.backends.cache'` - Session storage
+- `CACHES` - Memcached configuration (stub mode - in-memory)
 
-# Regional Settings
-OPENSTACK_KEYSTONE_REGION_NAME = "RegionOne"
-TIME_ZONE = "UTC"
-
-# Security Settings
-SECRET_KEY = 'CHANGE-THIS-IN-PRODUCTION'
-SESSION_COOKIE_SECURE = False  # Set True with HTTPS
-CSRF_COOKIE_SECURE = False     # Set True with HTTPS
-
-# Neutron Features
+**Neutron Features**:
+```python
 OPENSTACK_NEUTRON_NETWORK = {
     'enable_router': True,
     'enable_quotas': True,
-    'enable_ipv6': False,
+    'enable_ipv6': True,
     'enable_distributed_router': False,
     'enable_ha_router': False,
+    'enable_lb': False,
+    'enable_firewall': False,
+    'enable_vpn': False,
     'enable_fip_topology_check': True,
+    'default_ipv4_subnet_pool_label': None,
+    'default_ipv6_subnet_pool_label': None,
+    'profile_support': None,
+    'supported_provider_types': ['*'],
+    'physical_networks': [],
 }
 ```
 
-### O3K Configuration (config/o3k.yaml)
+#### 3. Apache Configuration
 
-```yaml
-# JWT Token Configuration
-keystone:
-  jwt_secret: "production-secret-key-change-me"
-  token_ttl: 14400  # 4 hours (must match Horizon SESSION_TIMEOUT)
+**ports.conf** (`horizon-config/apache/ports.conf`):
+```apache
+Listen 80
 
-# CORS Configuration (if Horizon on different host/port)
-cors:
-  enabled: true
-  allowed_origins:
-    - "http://localhost"
-    - "http://horizon"
-  allowed_methods:
-    - GET
-    - POST
-    - PUT
-    - PATCH
-    - DELETE
-  allowed_headers:
-    - "*"
-  expose_headers:
-    - "X-Subject-Token"
-
-# Service Endpoints (auto-configured in service catalog)
-services:
-  keystone:
-    public_url: "http://o3k-host:35357/v3"
-  nova:
-    public_url: "http://o3k-host:8774/v2.1"
-  neutron:
-    public_url: "http://o3k-host:9696/v2.0"
-  cinder:
-    public_url: "http://o3k-host:8776/v3"
-  glance:
-    public_url: "http://o3k-host:9292/v2"
+<IfModule ssl_module>
+    Listen 443
+</IfModule>
 ```
 
----
+**Virtual Host** (`horizon-config/apache/horizon-nolist.conf`):
+```apache
+<VirtualHost _default_:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/html
 
-## Authentication Flow
+    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog ${APACHE_LOG_DIR}/access.log combined
 
-### Token-Based Authentication
+    WSGIDaemonProcess horizon user=horizon group=horizon processes=3 threads=10 display-name=%{GROUP}
+    WSGIProcessGroup horizon
+    WSGIApplicationGroup %{GLOBAL}
 
-```
-1. User enters credentials in Horizon login page
-   ├─ Username: admin
-   ├─ Password: secret
-   └─ Domain: Default (or select from dropdown)
+    WSGIScriptAlias /dashboard /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/wsgi.py
 
-2. Horizon sends POST request to Keystone
-   POST http://o3k:35357/v3/auth/tokens
-   {
-     "auth": {
-       "identity": {
-         "methods": ["password"],
-         "password": {
-           "user": {
-             "name": "admin",
-             "password": "secret",
-             "domain": {"name": "Default"}
-           }
-         }
-       },
-       "scope": {
-         "project": {
-           "name": "default",
-           "domain": {"name": "Default"}
-         }
-       }
-     }
-   }
+    <Directory /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard>
+        Require all granted
+    </Directory>
 
-3. Keystone validates credentials
-   ├─ Checks username/password against database
-   ├─ Verifies user belongs to domain
-   └─ Validates project access
-
-4. Keystone returns JWT token + service catalog
-   Response Header: X-Subject-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-   Response Body:
-   {
-     "token": {
-       "expires_at": "2026-03-14T10:00:00.000000Z",
-       "issued_at": "2026-03-13T06:00:00.000000Z",
-       "user": {...},
-       "project": {...},
-       "catalog": [
-         {
-           "type": "compute",
-           "name": "nova",
-           "endpoints": [{
-             "interface": "public",
-             "url": "http://o3k-host:8774/v2.1"
-           }]
-         },
-         ...all services...
-       ]
-     }
-   }
-
-5. Horizon stores token and uses for all API calls
-   Example: List instances
-   GET http://o3k:8774/v2.1/servers
-   Header: X-Auth-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-6. O3K validates token on each request
-   ├─ JWT signature verification
-   ├─ Expiration check
-   ├─ Extract user_id, project_id, roles
-   └─ Authorize operation based on roles
+    Alias /static /var/lib/kolla/venv/lib/python3.12/site-packages/static
+    <Directory /var/lib/kolla/venv/lib/python3.12/site-packages/static>
+        Require all granted
+    </Directory>
+</VirtualHost>
 ```
 
-### Token Lifetime
+**Why horizon-nolist.conf?**
+- Original `horizon.conf` included `Listen 80` directive
+- Apache's `ports.conf` also has `Listen 80`
+- Having both causes "Cannot define multiple Listeners" error
+- `horizon-nolist.conf` is identical but without the `Listen` directive
+- Copied to `/etc/apache2/sites-enabled/000-default.conf` to make Horizon the default site
 
-- **Default TTL**: 4 hours (14400 seconds)
-- **Configurable**: Set `keystone.token_ttl` in O3K config
-- **Session timeout**: Match Horizon `SESSION_TIMEOUT` to O3K TTL
-- **Renewal**: Automatic - Horizon re-authenticates on expiration
+### Environment Variables
 
-### Multi-Tenancy
+**Horizon Container**:
+- `KOLLA_INSTALL_TYPE=source` - Use source install (not binary)
+- `KOLLA_CONFIG_STRATEGY=COPY_ALWAYS` - Always copy config files on startup
 
-- Each token is scoped to a specific **project**
-- Users can switch projects in Horizon dropdown
-- Switching projects re-authenticates with new scope
-- Resources are isolated by project_id
+**O3K Container**:
+- `O3K_DB_URL=postgres://o3k:secret@postgres:5432/o3k?sslmode=disable` - Database connection
+- `O3K_JWT_SECRET=change-this-secret-in-production-12345` - JWT signing key (CHANGE IN PRODUCTION)
 
----
+## Deployment Steps
 
-## Features
+### 1. Prerequisites
 
-### Supported Horizon Features
+- Docker and Docker Compose installed
+- x86_64 architecture (Horizon image not available for ARM64)
+- At least 4GB RAM available
+- Ports 80, 35357, 8774, 9696, 8776, 9292, 6080 available
 
-#### ✅ Compute (Nova)
+### 2. Start Services
 
-- **Instance Lifecycle**: Launch, start, stop, pause, suspend, shelve, delete
-- **Instance Actions**: Reboot, resize, rebuild, migrate, evacuate
-- **Advanced Operations**: Create backup, change password, reset state (admin)
-- **Security Groups**: Add/remove security groups from instances
-- **Console Access**: VNC, SPICE, serial console via noVNC proxy
-- **Flavor Management**: Create, list, delete flavors
-- **Keypair Management**: Create, import, delete SSH keypairs
-- **Hypervisor Statistics**: View compute resource usage in Overview panel
+```bash
+cd /path/to/o3k
+docker compose -f deployments/docker-compose-horizon.yml up -d
+```
 
-#### ✅ Network (Neutron)
+### 3. Verify Services
 
-- **Networks**: Create, list, update, delete networks
-- **Subnets**: Create subnets with CIDR, gateway, DHCP configuration
-- **Routers**: Create routers, attach to networks, set external gateway
-- **Floating IPs**: Allocate, associate, disassociate floating IPs
-- **Security Groups**: Create groups, add/remove rules (TCP/UDP/ICMP)
-- **Network Topology**: Graphical visualization of network architecture
-- **Port Forwarding**: Forward external ports to instance internal ports
+```bash
+# Check all containers are running
+docker ps
 
-#### ✅ Block Storage (Cinder)
+# Expected output:
+# CONTAINER ID   IMAGE                                                 STATUS
+# xxxxxxxxx      quay.io/openstack.kolla/horizon:2025.2-ubuntu-noble   Up (healthy)
+# xxxxxxxxx      o3k:latest                                            Up (healthy)
+# xxxxxxxxx      postgres:18.3-alpine                                  Up (healthy)
+# xxxxxxxxx      dougw/novnc:latest                                    Up (healthy)
+```
 
-- **Volumes**: Create, list, update, delete, extend volumes
-- **Volume Attachments**: Attach/detach volumes to/from instances
-- **Snapshots**: Create snapshots, restore volumes from snapshots
-- **Volume Types**: Manage volume types and QoS specs
-- **Backups**: Create volume backups, restore from backups
+### 4. Check Logs
 
-#### ✅ Images (Glance)
+```bash
+# O3K logs
+docker logs o3k
 
-- **Image Management**: Upload, download, delete images
-- **Image Metadata**: Update image properties and tags
-- **Image Sharing**: Share images between projects (member management)
-- **Image Import**: Import images from URL or staged data
+# Horizon logs
+docker logs o3k-horizon
 
-#### ✅ Identity (Keystone)
+# PostgreSQL logs
+docker logs o3k-postgres
+```
 
-- **User Management**: Create, update, delete users
-- **Project Management**: Create, update, delete projects
-- **Role Assignments**: Assign users to projects with roles
-- **Domain Support**: Multi-domain deployments
+### 5. Access Dashboard
 
-### Console Access (noVNC)
+Open browser to: **http://localhost/dashboard/**
 
-**VNC Console Flow**:
+**Default Credentials**:
+- Username: `admin`
+- Password: `secret`
+- Domain: `Default`
 
-1. User clicks "Console" tab on instance details page
-2. Horizon calls Nova API: `POST /servers/{id}/remote-consoles`
-3. Nova generates console URL with JWT token:
-   ```json
-   {
-     "remote_console": {
-       "type": "novnc",
-       "protocol": "vnc",
-       "url": "http://o3k-host:6080/vnc_auto.html?token=eyJ..."
-     }
-   }
-   ```
-4. Horizon opens popup window with console URL
-5. noVNC proxy validates token and streams VNC data to browser
+## Dashboard Features
 
-**Requirements**:
-- noVNC proxy deployed (separate container)
-- Port 6080 accessible from user's browser
-- Instance must be in ACTIVE state
-- Real mode: libvirt must be configured
+### Identity (Keystone)
 
----
+- **Projects**: View and manage projects/tenants
+- **Users**: Create and manage users
+- **Groups**: User groups (if configured)
+- **Roles**: Role assignments
+
+### Compute (Nova)
+
+- **Instances**: Launch, manage, and delete VMs
+- **Flavors**: View available instance types
+- **Images**: View available OS images
+- **Keypairs**: Create and import SSH keypairs
+- **Server Groups**: Anti-affinity/affinity groups (if configured)
+
+### Network (Neutron)
+
+- **Networks**: Create and manage networks
+- **Subnets**: Configure IP address ranges
+- **Routers**: Create routers and connect networks
+- **Floating IPs**: Allocate and associate public IPs
+- **Security Groups**: Configure firewall rules
+- **Ports**: View and manage network ports
+
+### Volumes (Cinder)
+
+- **Volumes**: Create, attach, and detach block storage
+- **Snapshots**: Create volume snapshots
+- **Backups**: Volume backups (if configured)
+
+### Images (Glance)
+
+- **Images**: Upload and manage OS images
+- **Metadata**: Configure image properties
+
+### System Info
+
+- **Overview**: Resource usage dashboard
+- **Hypervisors**: Compute node information (if in real mode)
+- **Availability Zones**: Zone information
 
 ## Troubleshooting
 
-### Common Issues
+### Horizon Not Loading
 
-#### 1. "Unable to retrieve version information"
+**Symptom**: `curl http://localhost/dashboard/` returns connection refused or timeout
 
-**Symptoms**: Horizon cannot connect to O3K services
-
-**Causes**:
-- O3K services not running
-- Network connectivity issue
-- Incorrect `OPENSTACK_HOST` in Horizon config
-
-**Solutions**:
+**Diagnosis**:
 ```bash
-# Verify O3K is running
-docker ps | grep o3k
+# Check container status
+docker ps | grep horizon
 
-# Test Keystone endpoint
-curl http://localhost:35357/v3
+# Check logs
+docker logs o3k-horizon --tail 50
 
-# Check Horizon can reach O3K (from Horizon container)
-docker exec o3k-horizon ping -c 3 o3k
-
-# Verify OPENSTACK_HOST matches Docker network name
+# Common issues:
+# - Container restarting: Check for Apache errors in logs
+# - "Unable to open logs": Permission issue with log directory
+# - "no listening sockets": Missing Listen directive in Apache config
 ```
 
-#### 2. "CORS policy: No 'Access-Control-Allow-Origin'"
+**Resolution**:
+1. Verify `horizon-config/apache/ports.conf` exists with `Listen 80`
+2. Verify `horizon-config/config.json` copies files correctly
+3. Recreate container: `docker compose down && docker compose up -d`
 
-**Symptoms**: Browser console shows CORS errors
+### 404 Not Found for /dashboard
 
-**Cause**: CORS not configured in O3K
+**Symptom**: Apache returns 404 for /dashboard endpoint
 
-**Solution**: Enable CORS in O3K config (`config/o3k.yaml`):
-```yaml
-cors:
-  enabled: true
-  allowed_origins:
-    - "http://localhost"
-    - "http://horizon-hostname"
+**Diagnosis**:
+```bash
+# Check Apache virtual host configuration
+docker exec o3k-horizon cat /etc/apache2/sites-enabled/000-default.conf
+
+# Check if WSGIScriptAlias is configured
+docker exec o3k-horizon grep WSGIScriptAlias /etc/apache2/sites-enabled/000-default.conf
 ```
 
-Restart O3K after configuration change.
+**Resolution**:
+1. Verify `WSGIScriptAlias /dashboard` is in virtual host config
+2. Ensure 000-default.conf contains Horizon configuration (not default Ubuntu site)
+3. Check that `horizon-nolist.conf` is being copied to 000-default.conf in config.json
 
-#### 3. "Token has expired"
+### Authentication Failures
 
-**Symptoms**: Frequent re-authentication required
+**Symptom**: Login fails with "Unable to authenticate" or similar error
 
-**Cause**: Token TTL too short or session timeout mismatch
+**Diagnosis**:
+```bash
+# Check O3K Keystone is accessible from Horizon container
+docker exec o3k-horizon curl -v http://o3k:35357/v3
 
-**Solution**: Increase token TTL and match session timeout:
+# Check O3K logs for authentication errors
+docker logs o3k | grep -i auth
 
-**O3K** (`config/o3k.yaml`):
-```yaml
-keystone:
-  token_ttl: 14400  # 4 hours
+# Test direct authentication
+curl -X POST http://localhost:35357/v3/auth/tokens \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auth": {
+      "identity": {
+        "methods": ["password"],
+        "password": {
+          "user": {
+            "name": "admin",
+            "domain": {"name": "Default"},
+            "password": "secret"
+          }
+        }
+      },
+      "scope": {
+        "project": {
+          "name": "default",
+          "domain": {"name": "Default"}
+        }
+      }
+    }
+  }'
 ```
 
-**Horizon** (`local_settings.py`):
+**Resolution**:
+1. Verify O3K container is healthy: `docker ps | grep o3k`
+2. Check database migrations completed: `docker logs o3k | grep migration`
+3. Verify default user exists: Check database or O3K logs
+4. Ensure `local_settings` has correct `OPENSTACK_HOST = "o3k"`
+
+### Static Files Not Loading (CSS/JS Missing)
+
+**Symptom**: Dashboard loads but has no styling, buttons don't work
+
+**Diagnosis**:
+```bash
+# Check static files volume
+docker volume inspect o3k-horizon-network_horizon-static
+
+# Check Apache static alias
+docker exec o3k-horizon grep "Alias /static" /etc/apache2/sites-enabled/000-default.conf
+
+# Check file permissions
+docker exec o3k-horizon ls -la /var/lib/kolla/venv/lib/python3.12/site-packages/static
+```
+
+**Resolution**:
+1. Ensure volume mount is read-write: `horizon-static:/path:rw`
+2. Check permissions in config.json (horizon:horizon for static directory)
+3. Recreate static volume if corrupted:
+   ```bash
+   docker compose down
+   docker volume rm o3k-horizon-network_horizon-static
+   docker compose up -d
+   ```
+
+### Database Connection Errors
+
+**Symptom**: O3K logs show "failed to connect to database"
+
+**Diagnosis**:
+```bash
+# Check PostgreSQL container
+docker logs o3k-postgres
+
+# Test database connection from O3K container
+docker exec o3k psql -h postgres -U o3k -d o3k -c "SELECT 1"
+```
+
+**Resolution**:
+1. Verify PostgreSQL is healthy: `docker ps | grep postgres`
+2. Check database URL in docker-compose.yml matches PostgreSQL credentials
+3. Wait for database to become healthy before O3K starts (depends_on + healthcheck)
+
+## Security Considerations
+
+### Production Deployment
+
+**CRITICAL - Change These Values**:
+
+1. **JWT Secret** (O3K):
+   ```yaml
+   environment:
+     - O3K_JWT_SECRET=<generate-strong-random-secret>
+   ```
+   Generate with: `openssl rand -base64 32`
+
+2. **Database Password**:
+   ```yaml
+   environment:
+     POSTGRES_PASSWORD: <strong-password>
+     O3K_DB_URL: postgres://o3k:<strong-password>@postgres:5432/o3k
+   ```
+
+3. **Default Credentials**:
+   - Change default admin password immediately after first login
+   - Create separate admin accounts for different administrators
+   - Use unique passwords for each account
+
+### Network Security
+
+1. **Expose Only Required Ports**:
+   - Horizon (80/443): Publicly accessible
+   - O3K API ports: Internal network only (remove `0.0.0.0` binding)
+   - PostgreSQL: Never expose to internet
+
+2. **Use HTTPS**:
+   - Configure SSL/TLS certificate for Horizon
+   - Modify Apache config to redirect HTTP → HTTPS
+   - Update `OPENSTACK_KEYSTONE_URL` to use HTTPS if O3K behind load balancer
+
+3. **Session Security**:
+   - Configure `SESSION_COOKIE_SECURE = True` for HTTPS deployments
+   - Set appropriate `SESSION_TIMEOUT` value
+   - Use secure memcached configuration for session storage
+
+### Database Security
+
+1. **Database Isolation**:
+   - Run PostgreSQL in private network
+   - Use strong passwords
+   - Restrict connections to O3K container only
+
+2. **Regular Backups**:
+   ```bash
+   docker exec o3k-postgres pg_dump -U o3k o3k > backup.sql
+   ```
+
+## Platform Support
+
+### x86_64 (AMD64)
+
+**Status**: ✅ Fully Supported
+
+All components work correctly:
+- PostgreSQL 18.3
+- O3K (Go binary)
+- Horizon (Kolla image)
+- noVNC
+
+### ARM64 (Apple Silicon, Raspberry Pi, etc.)
+
+**Status**: ⚠️ Partial Support
+
+**Working**:
+- PostgreSQL 18.3 (native ARM64 image available)
+- O3K (Go compiles to native ARM64)
+
+**Not Working**:
+- Horizon: Kolla images (`quay.io/openstack.kolla/horizon:2025.2-ubuntu-noble`) are x86_64 only
+- noVNC: Most images are x86_64 only
+
+**Error**:
+```
+no matching manifest for linux/arm64/v8 in the manifest list entries
+```
+
+**Workaround**:
+- Deploy O3K on ARM64 without Horizon
+- Access O3K APIs directly via OpenStack CLI or API calls
+- Deploy Horizon on separate x86_64 machine pointing to O3K APIs
+- Use Docker's platform emulation (slow): `--platform linux/amd64`
+
+## Performance Tuning
+
+### Apache/WSGI
+
+Adjust worker processes/threads in `horizon-nolist.conf`:
+
+```apache
+WSGIDaemonProcess horizon user=horizon group=horizon processes=5 threads=20
+```
+
+**Guidelines**:
+- Processes: CPU cores / 2
+- Threads: 10-20 per process
+- Monitor memory: Each process ~100-200MB
+
+### Database Connection Pool
+
+O3K uses default PostgreSQL connection pool (20 connections). Increase if needed:
+
+```go
+// In O3K source code (internal/database/connect.go)
+config, _ := pgxpool.ParseConfig(dbURL)
+config.MaxConns = 50  // Increase from 20
+```
+
+### Caching
+
+Configure Redis for Django cache (better than in-memory):
+
 ```python
-SESSION_TIMEOUT = 14400  # Match O3K token_ttl
-```
-
-#### 4. "Console not available"
-
-**Symptoms**: VNC console shows "Connection failed"
-
-**Causes**:
-- noVNC proxy not running
-- Instance not in ACTIVE state
-- Port 6080 not accessible
-
-**Solutions**:
-```bash
-# Check noVNC proxy running
-docker ps | grep novnc
-
-# Verify port 6080 accessible
-curl http://localhost:6080
-
-# Check instance status
-openstack server show <instance-id> -c status
-
-# View noVNC logs
-docker logs o3k-novnc
-```
-
-#### 5. "Network topology not loading"
-
-**Symptoms**: Topology tab shows spinner or error
-
-**Cause**: Missing Neutron endpoints or no resources to display
-
-**Solution**:
-```bash
-# Verify Neutron endpoints in service catalog
-openstack catalog show neutron
-
-# Create test resources
-openstack network create test-network
-openstack router create test-router
-
-# Refresh Horizon page
-```
-
-#### 6. "Slow dashboard performance"
-
-**Symptoms**: Pages take >5 seconds to load
-
-**Causes**:
-- Large number of resources (100+ instances/networks)
-- Database query performance
-- Network latency
-
-**Solutions**:
-```bash
-# Check O3K resource usage
-docker stats o3k
-
-# Optimize database (run ANALYZE)
-docker exec o3k-postgres psql -U o3k -d o3k -c "ANALYZE;"
-
-# Check database connection pool
-# Increase if needed in config/o3k.yaml:
-database:
-  max_connections: 50  # default: 20
-```
-
----
-
-## Production Deployment
-
-### Security Hardening
-
-#### 1. Change Default Credentials
-
-```bash
-# Change admin password
-openstack user password set admin
-
-# Update Horizon JWT secret
-# Edit config/o3k.yaml:
-keystone:
-  jwt_secret: "<generate-secure-random-key>"
-
-# Restart O3K
-docker compose -f deployments/docker-compose.yml restart o3k
-```
-
-#### 2. Enable HTTPS/SSL
-
-**Horizon** (using nginx reverse proxy):
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name horizon.example.com;
-
-    ssl_certificate /etc/ssl/certs/horizon.crt;
-    ssl_certificate_key /etc/ssl/private/horizon.key;
-
-    location / {
-        proxy_pass http://localhost:80;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+# In local_settings
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://redis:6379/1',
     }
 }
 ```
 
-**Update Horizon config**:
-```python
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
-```
+Add Redis container to docker-compose.yml.
 
-#### 3. Configure Firewall
+## Monitoring
+
+### Health Checks
+
+All containers have health checks configured:
 
 ```bash
-# Allow only necessary ports
-sudo ufw allow 443/tcp   # Horizon HTTPS
-sudo ufw allow 35357/tcp # Keystone (if external access needed)
-sudo ufw deny 8774/tcp   # Nova (internal only)
-sudo ufw deny 9696/tcp   # Neutron (internal only)
-sudo ufw deny 8776/tcp   # Cinder (internal only)
-sudo ufw deny 9292/tcp   # Glance (internal only)
+# Check health status
+docker inspect o3k --format='{{.State.Health.Status}}'
+docker inspect o3k-horizon --format='{{.State.Health.Status}}'
+docker inspect o3k-postgres --format='{{.State.Health.Status}}'
 ```
 
-#### 4. Enable Audit Logging
+### Metrics
 
-**O3K logging** (`config/o3k.yaml`):
-```yaml
-logging:
-  level: info
-  format: json
-  output: /var/log/o3k/o3k.log
-  audit: true  # Log all API requests
-```
+**O3K Metrics** (if configured):
+- Request latency
+- API endpoint usage
+- Database query performance
 
-### High Availability
+**Horizon Metrics**:
+- Apache access logs: `/var/log/kolla/horizon/apache-access.log`
+- Apache error logs: `/var/log/kolla/horizon/apache-error.log`
+- Django logs: Check Horizon container logs
 
-**Horizon HA** (stateless):
-- Deploy multiple Horizon containers behind load balancer
-- No shared state between containers
-- Session data in cookies (encrypted)
-
-**O3K HA** (advanced):
-- Deploy multiple O3K instances
-- Use HAProxy/nginx load balancer
-- Shared PostgreSQL (primary-replica setup)
-- Requires external coordination for VXLAN networking
-
-### Backup & Recovery
-
-**PostgreSQL Backup**:
+**Database Metrics**:
 ```bash
-# Automated daily backups
-docker exec o3k-postgres pg_dump -U o3k -d o3k > backup-$(date +%Y%m%d).sql
+# Query performance
+docker exec o3k-postgres psql -U o3k -c "SELECT * FROM pg_stat_statements ORDER BY total_time DESC LIMIT 10"
 
-# Restore from backup
-docker exec -i o3k-postgres psql -U o3k -d o3k < backup-20260313.sql
+# Connection count
+docker exec o3k-postgres psql -U o3k -c "SELECT count(*) FROM pg_stat_activity"
 ```
 
-**Configuration Backup**:
-```bash
-# Backup O3K config
-cp config/o3k.yaml config/o3k.yaml.backup
+## API Version Compatibility Matrix
 
-# Backup Horizon config
-cp ~/o3k-horizon/config/local_settings.py ~/o3k-horizon/config/local_settings.py.backup
-```
+| Service  | O3K Version | Horizon Expects | Compatible? | Notes                          |
+|----------|-------------|-----------------|-------------|--------------------------------|
+| Keystone | v3          | v3              | ✅ Yes       | Identity API v3                |
+| Nova     | v2.1        | v2.1            | ✅ Yes       | Compute API v2.1 (microversions) |
+| Neutron  | v2.0        | v2.0            | ✅ Yes       | Network API v2.0               |
+| Cinder   | v3          | v3              | ✅ Yes       | Volume API v3                  |
+| Glance   | v2          | v2              | ✅ Yes       | Image API v2                   |
 
-### Monitoring
+## References
 
-**Key Metrics to Monitor**:
-- O3K API response times
-- PostgreSQL connection count
-- Token generation rate
-- Instance creation success rate
-- Horizon page load times
-
-**Tools**:
-- Prometheus + Grafana (metrics)
-- ELK Stack (log aggregation)
-- OpenStack Health Monitor (service checks)
-
----
-
-## API Coverage
-
-O3K implements **91% of OpenStack APIs** (308/330 endpoints):
-
-| Service | Coverage | Notes |
-|---------|----------|-------|
-| Nova (Compute) | 85% | All Horizon-required endpoints supported |
-| Neutron (Network) | 95% | Full network topology support |
-| Cinder (Block Storage) | 100% | All volume operations complete |
-| Glance (Image) | 100% | Full image lifecycle + import |
-| Keystone (Identity) | 90% | Federation/SAML not supported (enterprise-only) |
-
-See [API_COVERAGE.md](./API_COVERAGE.md) for detailed endpoint list.
-
----
-
-## Additional Resources
-
-- **O3K Documentation**: [/docs](/docs)
-- **Quickstart Guide**: [quickstart.md](../specs/002-horizon-full-compatibility/quickstart.md)
-- **Keystone Auth Flow**: [KEYSTONE_AUTH_FLOW.md](./KEYSTONE_AUTH_FLOW.md)
-- **OpenStack Horizon Docs**: https://docs.openstack.org/horizon/latest/
-- **O3K GitHub**: https://github.com/yourusername/o3k
-- **Issue Tracker**: https://github.com/yourusername/o3k/issues
-
----
+- OpenStack Flamingo Documentation: https://docs.openstack.org/2025.2/
+- Kolla Documentation: https://docs.openstack.org/kolla/latest/
+- Horizon Configuration Reference: https://docs.openstack.org/horizon/latest/configuration/
+- OpenStack API Reference: https://docs.openstack.org/api-ref/
 
 ## Contributing
 
-Found an issue or want to improve Horizon integration?
+When modifying Horizon configuration:
 
-1. Check [existing issues](https://github.com/yourusername/o3k/issues)
-2. Open a new issue with:
-   - O3K version
-   - Horizon version
-   - Steps to reproduce
-   - Expected vs actual behavior
-3. Submit pull requests with tests
+1. Test configuration changes in development first
+2. Verify dashboard functionality after changes
+3. Update this documentation with configuration changes
+4. Test on both ARM64 (expected to fail) and x86_64 (must work)
 
----
+## License
 
-**Version**: 1.0.0
-**Last Updated**: 2026-03-13
-**Authors**: O3K Development Team
-**License**: Apache 2.0
+O3K is licensed under Apache License 2.0. Horizon and Kolla are OpenStack projects under Apache License 2.0.
