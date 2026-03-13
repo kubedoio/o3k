@@ -490,7 +490,7 @@ func substituteURLTemplates(url, projectID string) string {
 
 // buildHardcodedCatalog provides fallback catalog (previous implementation)
 func buildHardcodedCatalog(projectID string) []CatalogEntry {
-	baseURL := "http://localhost"
+	baseURL := "http://o3k"
 
 	return []CatalogEntry{
 		{
