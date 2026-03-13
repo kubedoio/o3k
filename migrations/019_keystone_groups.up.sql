@@ -17,6 +17,6 @@ CREATE TABLE IF NOT EXISTS group_users (
 );
 
 -- Indexes for faster queries
-CREATE INDEX idx_groups_domain_id ON groups(domain_id);
-CREATE INDEX idx_group_users_group_id ON group_users(group_id);
-CREATE INDEX idx_group_users_user_id ON group_users(user_id);
+CREATE INDEX IF NOT EXISTS idx_groups_domain_id ON groups(domain_id);
+CREATE INDEX IF NOT EXISTS idx_group_users_group_id ON group_users(group_id);
+CREATE INDEX IF NOT EXISTS idx_group_users_user_id ON group_users(user_id);
