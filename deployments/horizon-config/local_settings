@@ -277,7 +277,7 @@ LOGGING = {
         },
         'openstack_auth': {
             'handlers': ['console'],
-            'level': 'INFO',
+            'level': 'DEBUG',
         },
         'django.db.backends': {
             'handlers': ['null'],
