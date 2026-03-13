@@ -80,13 +80,13 @@ O3K uses single-project structure with Go packages:
 ### Tests for User Story 2 ⚠️ WRITE FIRST - MUST FAIL BEFORE IMPLEMENTATION
 
 - [x] T014 [P] [US2] Contract test for server migration in test/contract/nova/server_actions_test.go ✅ Complete - PASSED
-- [ ] T015 [P] [US2] Contract test for server evacuate in test/contract/nova/server_actions_test.go
+- [x] T015 [P] [US2] Contract test for server evacuate in test/contract/nova/server_actions_test.go ✅ Complete - TestEvacuateAdmin_Contract PASS
 - [x] T016 [P] [US2] Contract test for changePassword in test/contract/nova/server_actions_test.go ✅ Complete - PASSED
 - [x] T017 [P] [US2] Contract test for createBackup in test/contract/nova/server_actions_test.go ✅ Complete - PASSED
-- [ ] T018 [P] [US2] Contract test for addSecurityGroup in test/contract/nova/server_actions_test.go
-- [ ] T019 [P] [US2] Contract test for removeSecurityGroup in test/contract/nova/server_actions_test.go
+- [x] T018 [P] [US2] Contract test for addSecurityGroup in test/contract/nova/server_actions_test.go ✅ Complete - TestAddSecurityGroup_Contract PASS
+- [x] T019 [P] [US2] Contract test for removeSecurityGroup in test/contract/nova/server_actions_test.go ✅ Complete - TestRemoveSecurityGroup_Contract PASS
 - [x] T020 [P] [US2] Contract test for os-resetState (admin vs non-admin) in test/contract/nova/server_actions_test.go ✅ Complete - PASSED (admin test only)
-- [ ] T021 [US2] Integration test for full server lifecycle in test/horizon_server_lifecycle_test.sh
+- [x] T021 [US2] Integration test for full resource lifecycle in test/horizon_resource_lifecycle_test.sh ✅ Complete - 15-step test (network, volume, instance, snapshot, backup)
 
 ### Implementation for User Story 2 - Server Actions
 
