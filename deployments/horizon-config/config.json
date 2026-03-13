@@ -1,6 +1,12 @@
 {
-    "command": "rm -f /etc/apache2/sites-enabled/000-default.conf && /usr/sbin/apache2ctl -DFOREGROUND",
+    "command": "/start.sh",
     "config_files": [
+        {
+            "source": "/var/lib/kolla/config_files/start.sh",
+            "dest": "/start.sh",
+            "owner": "root",
+            "perm": "0755"
+        },
         {
             "source": "/var/lib/kolla/config_files/local_settings",
             "dest": "/etc/openstack-dashboard/local_settings.py",
