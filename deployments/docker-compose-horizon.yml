@@ -68,7 +68,6 @@ services:
       - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
     volumes:
       - ./horizon-config/config.json:/var/lib/kolla/config_files/config.json:ro
-      - ./horizon-config/start.sh:/var/lib/kolla/config_files/start.sh:ro
       - ./horizon-config/local_settings:/var/lib/kolla/config_files/local_settings:ro
       - ./horizon-config/apache/horizon.conf:/var/lib/kolla/config_files/horizon.conf:ro
       - horizon-static:/var/lib/kolla/venv/lib/python3.12/site-packages/static:rw
