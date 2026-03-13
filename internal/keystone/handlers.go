@@ -1,7 +1,9 @@
 package keystone
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -137,10 +139,12 @@ func (svc *Service) GetVersion(c *gin.Context) {
 
 // AuthenticateToken handles token authentication (POST /v3/auth/tokens)
 func (svc *Service) AuthenticateToken(c *gin.Context) {
+	// Read request body for debug logging
+	bodyBytes, _ := io.ReadAll(c.Request.Body)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 	var req AuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		// Debug: Log the request body for troubleshooting
-		bodyBytes, _ := c.GetRawData()
 		fmt.Printf("DEBUG: Failed to parse auth request. Error: %v, Body: %s\n", err, string(bodyBytes))
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
 			"message": "invalid request body: " + err.Error(),
