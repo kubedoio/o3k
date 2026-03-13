@@ -1,0 +1,406 @@
+# OpenStack Horizon Configuration for O3K
+# OpenStack Release: Flamingo (2025.2)
+# O3K Version: v0.5.0+
+# Last Updated: 2026-03-13
+
+import os
+from django.utils.translation import gettext_lazy as _
+
+# ==========================================
+# Basic Django Settings
+# ==========================================
+
+DEBUG = False
+ALLOWED_HOSTS = ['*']
+
+# Generate a unique secret key for production
+# SECURITY WARNING: Keep this secret and change it in production!
+SECRET_KEY = 'o3k-horizon-flamingo-change-in-production-' + os.urandom(32).hex()
+
+# Web root for Horizon dashboard
+WEBROOT = '/dashboard/'
+LOGIN_URL = '/dashboard/auth/login/'
+LOGOUT_URL = '/dashboard/auth/logout/'
+LOGIN_REDIRECT_URL = '/dashboard/'
+STATIC_ROOT = '/var/lib/kolla/venv/lib/python3.12/site-packages/static'
+STATIC_URL = '/static/'
+
+# ==========================================
+# OpenStack Backend Configuration
+# ==========================================
+
+# O3K Service Discovery
+OPENSTACK_HOST = "o3k"  # Docker service name
+OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
+OPENSTACK_KEYSTONE_DEFAULT_ROLE = "_member_"
+
+# API Version Configuration (O3K Flamingo Compatible)
+OPENSTACK_API_VERSIONS = {
+    "identity": 3,      # Keystone v3
+    "image": 2,         # Glance v2
+    "volume": 3,        # Cinder v3
+    "compute": 2.1,     # Nova v2.1
+}
+
+# ==========================================
+# Keystone v3 Configuration
+# ==========================================
+
+OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
+
+# Default user domain for authentication
+OPENSTACK_KEYSTONE_DOMAIN_DROPDOWN = True
+OPENSTACK_KEYSTONE_DOMAIN_CHOICES = (
+    ('Default', 'Default'),
+)
+
+# ==========================================
+# Session Configuration
+# ==========================================
+
+# Session timeout (matches O3K token TTL - 4 hours)
+SESSION_TIMEOUT = 14400
+
+# Session engine (use cache for better performance)
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+
+# Security settings (enable in production with HTTPS)
+SESSION_COOKIE_SECURE = False  # Set True with HTTPS
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SECURE = False     # Set True with HTTPS
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# ==========================================
+# Console Access Configuration
+# ==========================================
+
+CONSOLE_TYPE = 'novnc'  # VNC console type
+NOVNC_PROXY_URL = 'http://localhost:6080'  # noVNC proxy URL
+
+# Console types available in dropdown
+CONSOLE_TYPES = [
+    ('novnc', _('noVNC')),
+    ('spice', _('SPICE')),
+]
+
+# ==========================================
+# Regional Settings
+# ==========================================
+
+OPENSTACK_KEYSTONE_REGION_NAME = "RegionOne"
+TIME_ZONE = "UTC"
+LANGUAGE_CODE = 'en'
+
+# Available regions (add more if multi-region)
+AVAILABLE_REGIONS = [
+    ('http://o3k:35357/v3', 'RegionOne'),
+]
+
+# ==========================================
+# Service Feature Configuration
+# ==========================================
+
+# Nova (Compute) Features
+OPENSTACK_HYPERVISOR_FEATURES = {
+    'can_set_mount_point': False,
+    'can_set_password': True,
+    'requires_keypair': False,
+    'enable_quotas': True,
+}
+
+# Neutron (Network) Features
+OPENSTACK_NEUTRON_NETWORK = {
+    'enable_router': True,
+    'enable_quotas': True,
+    'enable_ipv6': False,
+    'enable_distributed_router': False,
+    'enable_ha_router': False,
+    'enable_lb': False,
+    'enable_firewall': False,
+    'enable_vpn': False,
+    'enable_fip_topology_check': True,
+
+    # Supported network types
+    'supported_provider_types': ['local', 'flat', 'vlan', 'vxlan'],
+    'segmentation_id_range': {
+        'vlan': [1, 4094],
+        'vxlan': [1, 16777215],
+    },
+
+    # Default network settings
+    'default_dns_nameservers': ['8.8.8.8', '8.8.4.4'],
+    'supported_vnic_types': ['normal', 'direct', 'macvtap'],
+    'enable_port_forwarding': True,
+}
+
+# Cinder (Block Storage) Features
+OPENSTACK_CINDER_FEATURES = {
+    'enable_backup': False,  # Disable if not using Cinder backup
+    'enable_volume_transfer': True,
+}
+
+# Glance (Image) Features
+OPENSTACK_IMAGE_FORMATS = (
+    ('', _('Select format')),
+    ('aki', _('AKI - Amazon Kernel Image')),
+    ('ami', _('AMI - Amazon Machine Image')),
+    ('ari', _('ARI - Amazon Ramdisk Image')),
+    ('docker', _('Docker')),
+    ('iso', _('ISO - Optical Disk Image')),
+    ('ova', _('OVA - Open Virtual Appliance')),
+    ('qcow2', _('QCOW2 - QEMU Emulator')),
+    ('raw', _('Raw')),
+    ('vdi', _('VDI - Virtual Disk Image')),
+    ('vhd', _('VHD - Virtual Hard Disk')),
+    ('vhdx', _('VHDX - Large Virtual Hard Disk')),
+    ('vmdk', _('VMDK - Virtual Machine Disk')),
+)
+
+# ==========================================
+# Dashboard Configuration
+# ==========================================
+
+# Disable unwanted panels (customize as needed)
+HORIZON_CONFIG = {
+    'user_home': 'openstack_dashboard.views.get_user_home',
+    'ajax_queue_limit': 10,
+    'auto_fade_alerts': {
+        'delay': 3000,
+        'fade_duration': 1500,
+        'types': ['alert-success', 'alert-info']
+    },
+    'help_url': "https://docs.openstack.org",
+    'exceptions': {
+        'recoverable': [],
+        'not_found': [],
+        'unauthorized': [],
+    },
+    'modal_backdrop': 'static',
+    'angular_modules': [],
+    'js_files': [],
+    'js_spec_files': [],
+
+    # Password validation rules
+    'password_validator': {
+        'regex': '.*',
+        'help_text': _("Password must be at least 8 characters."),
+    },
+    'password_autocomplete': 'off',
+
+    # Disable customization endpoint (for security)
+    'customization_module': '',
+}
+
+# Disable features not supported by O3K stub mode
+HORIZON_IMAGES_UPLOAD_MODE = 'direct'
+
+# ==========================================
+# Policy Configuration
+# ==========================================
+
+# Policy files path (use defaults)
+POLICY_FILES_PATH = '/etc/openstack-dashboard'
+POLICY_FILES = {
+    'identity': 'keystone_policy.yaml',
+    'compute': 'nova_policy.yaml',
+    'volume': 'cinder_policy.yaml',
+    'image': 'glance_policy.yaml',
+    'network': 'neutron_policy.yaml',
+}
+
+# ==========================================
+# Logging Configuration
+# ==========================================
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'console': {
+            'format': '%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+        },
+        'operation': {
+            'format': '%(asctime)s %(message)s',
+        },
+    },
+    'handlers': {
+        'null': {
+            'level': 'DEBUG',
+            'class': 'logging.NullHandler',
+        },
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'console',
+        },
+        'operation': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'operation',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'horizon': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'openstack_dashboard': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'novaclient': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'cinderclient': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'keystoneauth': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'neutronclient': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'glanceclient': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'openstack_auth': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'django.db.backends': {
+            'handlers': ['null'],
+            'propagate': False,
+        },
+        'requests': {
+            'handlers': ['null'],
+            'propagate': False,
+        },
+        'urllib3': {
+            'handlers': ['null'],
+            'propagate': False,
+        },
+    },
+}
+
+# ==========================================
+# Cache Configuration
+# ==========================================
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    }
+}
+
+# ==========================================
+# Security Configuration
+# ==========================================
+
+# CORS Headers (if needed)
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+# Content Security Policy (disable for development)
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_BROWSER_XSS_FILTER = True
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
+# ==========================================
+# Integration Settings
+# ==========================================
+
+# Disable external integrations
+OPENSTACK_ENABLE_PASSWORD_RETRIEVE = False
+OPENSTACK_ENDPOINT_TYPE = "publicURL"
+
+# Image backend
+IMAGE_BACKEND = {
+    'image_formats': OPENSTACK_IMAGE_FORMATS,
+}
+
+# Instance features
+LAUNCH_INSTANCE_LEGACY_ENABLED = False
+LAUNCH_INSTANCE_NG_ENABLED = True
+
+# Create volume from image
+OPENSTACK_IMAGE_BACKEND = {
+    'image_formats': OPENSTACK_IMAGE_FORMATS,
+}
+
+# ==========================================
+# Theme Configuration
+# ==========================================
+
+# Default theme
+AVAILABLE_THEMES = [
+    ('default', 'Default', 'themes/default'),
+    ('material', 'Material', 'themes/material'),
+]
+DEFAULT_THEME = 'default'
+
+# Site branding
+SITE_BRANDING = "O3K Cloud Dashboard"
+SITE_BRANDING_LINK = "/"
+
+# ==========================================
+# Debug Settings (Development Only)
+# ==========================================
+
+# Disable debug toolbar
+DEBUG_TOOLBAR = False
+
+# Email backend (for password reset - configure for production)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# ==========================================
+# Additional Settings
+# ==========================================
+
+# Pagination
+API_RESULT_LIMIT = 1000
+API_RESULT_PAGE_SIZE = 20
+
+# Swift (Object Storage) - disabled for O3K
+SWIFT_FILE_TRANSFER_CHUNK_SIZE = 512 * 1024
+
+# Trove (Database) - disabled for O3K
+# Heat (Orchestration) - disabled for O3K
+# Sahara (Data Processing) - disabled for O3K
+
+# ==========================================
+# Custom O3K Settings
+# ==========================================
+
+# O3K-specific customizations
+CUSTOM_DASHBOARD_NAME = "O3K Horizon Dashboard"
+CUSTOM_PRODUCT_NAME = "O3K OpenStack Platform"
+CUSTOM_WELCOME_MESSAGE = "Welcome to O3K - Lightweight OpenStack"
+
+# Disable features not available in O3K stub mode
+SHOW_KEYSTONE_V2_RC = False
+
+# ==========================================
+# End of Configuration
+# ==========================================

@@ -40,7 +40,7 @@ Complete installation guide for O3K (OpenStack-compatible cloud platform).
 - Docker Compose V2 (included with Docker Desktop)
 
 **For Binary Installation:**
-- PostgreSQL 14+ ([install guide](https://www.postgresql.org/download/))
+- PostgreSQL 18+ ([install guide](https://www.postgresql.org/download/))
 - Go 1.26+ (for building from source)
 
 ---

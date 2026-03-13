@@ -78,7 +78,7 @@ cd lightstack
 ```yaml
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.3-alpine
     container_name: o3k-postgres
     environment:
       POSTGRES_DB: lightstack
@@ -148,7 +148,7 @@ docker compose ps
 ```
 NAME           IMAGE                COMMAND                  SERVICE    STATUS
 o3k            lightstack-o3k       "/bin/sh -c '/app/o3…"   o3k        Up (healthy)
-o3k-postgres   postgres:16-alpine   "docker-entrypoint.s…"   postgres   Up (healthy)
+o3k-postgres   postgres:18.3-alpine   "docker-entrypoint.s…"   postgres   Up (healthy)
 ```
 
 ```bash

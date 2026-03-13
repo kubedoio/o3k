@@ -33,7 +33,7 @@ This project follows a standard code of conduct:
 
 **Required:**
 - Go 1.26 or higher
-- PostgreSQL 14 or higher
+- PostgreSQL 18 or higher
 - Git
 
 **Optional (for real mode testing):**
@@ -72,7 +72,7 @@ docker run -d --name o3k-postgres \
   -e POSTGRES_DB=o3k \
   -e POSTGRES_USER=o3k \
   -e POSTGRES_PASSWORD=secret \
-  -p 5432:5432 postgres:16
+  -p 5432:5432 postgres:18.3
 
 # Or use your local PostgreSQL instance
 ```

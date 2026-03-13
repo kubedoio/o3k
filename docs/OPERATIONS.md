@@ -653,12 +653,12 @@ docker exec o3k-postgres psql -U lightstack -d lightstack -c "
 # Primary-Replica setup
 services:
   postgres-primary:
-    image: postgres:16-alpine
+    image: postgres:18.3-alpine
     environment:
       POSTGRES_REPLICATION_MODE: master
 
   postgres-replica:
-    image: postgres:16-alpine
+    image: postgres:18.3-alpine
     environment:
       POSTGRES_REPLICATION_MODE: slave
       POSTGRES_MASTER_HOST: postgres-primary

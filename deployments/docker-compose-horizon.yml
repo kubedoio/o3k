@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:18.3-alpine
+    container_name: o3k-postgres
+    hostname: postgres
+    environment:
+      POSTGRES_DB: o3k
+      POSTGRES_USER: o3k
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - o3k-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U o3k"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # O3K OpenStack Services
+  o3k:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+    image: o3k:latest
+    container_name: o3k
+    hostname: o3k
+    ports:
+      - "35357:35357"  # Keystone (Identity)
+      - "8774:8774"    # Nova (Compute)
+      - "9696:9696"    # Neutron (Network)
+      - "8776:8776"    # Cinder (Block Storage)
+      - "9292:9292"    # Glance (Image)
+      - "8775:8775"    # Metadata Service
+    environment:
+      - O3K_DATABASE_URL=postgres://o3k:secret@postgres:5432/o3k?sslmode=disable
+      - O3K_KEYSTONE_JWT_SECRET=change-this-secret-in-production-12345
+      - O3K_NOVA_LIBVIRT_MODE=stub
+      - O3K_NEUTRON_NETWORKING_MODE=stub
+      - O3K_CINDER_STORAGE_MODE=local
+      - O3K_GLANCE_STORAGE_MODE=local
+    volumes:
+      - o3k-data:/var/lib/o3k
+      - o3k-images:/var/lib/o3k/images
+      - o3k-volumes:/var/lib/o3k/volumes
+    networks:
+      - o3k-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:35357/v3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # OpenStack Horizon Dashboard (Flamingo 2025.2)
+  horizon:
+    image: quay.io/openstack.kolla/horizon:2025.2-ubuntu-noble
+    container_name: o3k-horizon
+    hostname: horizon
+    ports:
+      - "80:80"
+    environment:
+      - KOLLA_INSTALL_TYPE=source
+      - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+    volumes:
+      - ./horizon-config/config.json:/var/lib/kolla/config_files/config.json:ro
+      - ./horizon-config/local_settings:/var/lib/kolla/config_files/local_settings:ro
+      - horizon-static:/var/lib/kolla/venv/lib/python3.12/site-packages/static:rw
+      - horizon-logs:/var/log/kolla/horizon:rw
+    networks:
+      - o3k-network
+    depends_on:
+      o3k:
+        condition: service_healthy
+      novnc:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/dashboard/auth/login/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # noVNC Console Proxy
+  novnc:
+    image: dougw/novnc:latest
+    container_name: o3k-novnc
+    hostname: novnc
+    ports:
+      - "6080:6080"
+    environment:
+      - DISPLAY_WIDTH=1280
+      - DISPLAY_HEIGHT=720
+    networks:
+      - o3k-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "6080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  o3k-network:
+    driver: bridge
+    name: o3k-horizon-network
+
+volumes:
+  postgres-data:
+  o3k-data:
+  o3k-images:
+  o3k-volumes:
+  horizon-static:
+  horizon-logs:

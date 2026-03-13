@@ -48,7 +48,7 @@ Just as **K3s** is to Kubernetes, **O3K** is to OpenStack:
 
 ### Architecture
 - **Single Binary**: All services in one process (~35MB)
-- **PostgreSQL 16+**: Unified state management (47 migrations, 30+ tables)
+- **PostgreSQL 18+**: Unified state management (47 migrations, 30+ tables)
 - **Synchronous Architecture**: No RabbitMQ/message queues (10x faster)
 - **libvirt/KVM**: Real compute virtualization (stub mode for development)
 - **Storage Backends**: Ceph RBD, AWS S3, MinIO, local filesystem (hybrid failover support)
@@ -100,16 +100,44 @@ Just as K3s removed heavyweight components from Kubernetes:
 
 ## Quick Start
 
-### 🚀 5-Minute Setup (Docker)
+### 🚀 Complete Setup with Web UI (Recommended)
 
-The fastest way to get O3K running:
+**Deploy O3K + Horizon Dashboard in one command**:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/cobaltcore-dev/o3k.git
+cd o3k/deployments
+
+# 2. Start all services (O3K + Horizon + PostgreSQL + noVNC)
+docker compose -f docker-compose-horizon.yml up -d
+
+# 3. Access Horizon Dashboard
+open http://localhost/dashboard
+# Login: Domain=Default, User=admin, Password=secret
+```
+
+**What's included**:
+- PostgreSQL 18 database
+- O3K services (Keystone, Nova, Neutron, Cinder, Glance)
+- Horizon Dashboard (OpenStack Flamingo 2025.2)
+- noVNC console proxy
+- Complete web UI for cloud management
+
+**Full Documentation**: [docs/UNIFIED_DEPLOYMENT.md](docs/UNIFIED_DEPLOYMENT.md) | **Quick Reference**: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)
+
+---
+
+### ⚡ API-Only Setup (CLI/SDK Development)
+
+For headless deployment without web UI:
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/cobaltcore-dev/o3k.git
 cd o3k
 
-# 2. Start services
+# 2. Start O3K services only
 docker compose -f deployments/docker-compose.yml up -d
 
 # 3. Install OpenStack CLI
@@ -128,17 +156,17 @@ openstack token issue
 openstack server create --flavor m1.small --image cirros --network my-net test-vm
 ```
 
-**That's it!** You now have a fully functional OpenStack cloud running locally.
-
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the complete quick start guide.
 
-### 🖥️ Deploy Horizon Dashboard
+---
 
-O3K provides 100% API compatibility with OpenStack Horizon dashboard. All Horizon features work seamlessly with O3K as the backend.
+### 🖥️ Horizon Dashboard Features
 
-**Quick Start**: For complete deployment instructions, see [docs/HORIZON_DEPLOYMENT.md](docs/HORIZON_DEPLOYMENT.md).
+### 🖥️ Horizon Dashboard Features
 
-**What Works**:
+O3K provides 100% API compatibility with OpenStack Horizon dashboard (Flamingo 2025.2). All Horizon features work seamlessly with O3K as the backend.
+
+**Features**:
 - ✅ Instance lifecycle (launch, start, stop, delete, resize, rebuild)
 - ✅ VNC console access (integrated with noVNC proxy)
 - ✅ Network topology visualization
@@ -148,7 +176,12 @@ O3K provides 100% API compatibility with OpenStack Horizon dashboard. All Horizo
 - ✅ Floating IPs and port forwarding
 - ✅ Multi-project isolation and RBAC
 
-**Configuration Summary**:
+**Deployment Guides**:
+- **Unified Deployment** (Recommended): [docs/UNIFIED_DEPLOYMENT.md](docs/UNIFIED_DEPLOYMENT.md) - O3K + Horizon in one docker-compose file
+- **Separate Horizon**: [docs/HORIZON_DEPLOYMENT.md](docs/HORIZON_DEPLOYMENT.md) - Deploy Horizon separately to existing O3K
+- **Quick Reference**: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) - Command cheat sheet
+
+**Configuration**:
 
 Horizon connects to O3K services using standard OpenStack configuration:
 
@@ -169,8 +202,6 @@ CONSOLE_TYPE = 'novnc'
 ```
 
 **Login Credentials**: Domain=Default, User=admin, Password=secret
-
-For troubleshooting, production setup, and advanced configuration, see the [complete deployment guide](docs/HORIZON_DEPLOYMENT.md).
 
 ### 📖 Installation Options
 

@@ -13,7 +13,7 @@ Achieve 100% OpenStack Horizon dashboard compatibility with O3K by enhancing exi
 
 **Language/Version**: Go 1.26
 **Primary Dependencies**: Gin (HTTP framework), pgx (PostgreSQL driver), gophercloud (contract testing), go-libvirt (hypervisor), netlink (networking)
-**Storage**: PostgreSQL 16 (primary database)
+**Storage**: PostgreSQL 18 (primary database)
 **Testing**: Go test (unit/contract), bash scripts with OpenStack CLI (integration)
 **Target Platform**: Linux server (production with libvirt/KVM), macOS (development with stub mode)
 **Project Type**: Web service (OpenStack-compatible cloud platform)
