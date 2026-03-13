@@ -411,8 +411,8 @@ if requestedVersion == "" {
 **"Token validation failed"**: Ensure `jwt_secret` matches between Keystone and other services
 
 ## Active Technologies
-- Go 1.24 + Gin (HTTP framework), pgx (PostgreSQL driver), gophercloud (contract testing), go-libvirt (hypervisor), netlink (networking) (002-horizon-full-compatibility)
+- Go 1.26 + Gin (HTTP framework), pgx (PostgreSQL driver), gophercloud (contract testing), go-libvirt (hypervisor), netlink (networking) (002-horizon-full-compatibility)
 - PostgreSQL 16 (primary database) (002-horizon-full-compatibility)
 
 ## Recent Changes
-- 002-horizon-full-compatibility: Added Go 1.24 + Gin (HTTP framework), pgx (PostgreSQL driver), gophercloud (contract testing), go-libvirt (hypervisor), netlink (networking)
+- 002-horizon-full-compatibility: Added Go 1.26 + Gin (HTTP framework), pgx (PostgreSQL driver), gophercloud (contract testing), go-libvirt (hypervisor), netlink (networking)

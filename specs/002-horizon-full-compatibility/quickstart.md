@@ -3,13 +3,13 @@
 **Feature**: OpenStack Horizon 100% Compatibility
 **Time to Complete**: 15-30 minutes
 **Target Audience**: Cloud administrators, developers evaluating O3K
-**Status**: Documentation Complete - Deployment configuration in progress
+**Status**: Production Ready
 
-**Important Note**: OpenStack Horizon deployment using official Kolla images requires specific configuration including KOLLA_CONFIG_STRATEGY environment variables and proper volume mount structures. This guide documents the configuration approach. Alternative deployment methods (DevStack, manual installation) are being evaluated for simpler setup experiences.
+**Complete Deployment Guide**: For comprehensive deployment instructions, troubleshooting, and production configuration, see [docs/HORIZON_DEPLOYMENT.md](../../docs/HORIZON_DEPLOYMENT.md).
 
 ## Overview
 
-This guide walks through deploying OpenStack Horizon dashboard with O3K as the backend cloud platform. After completion, you'll have a fully functional web-based cloud management interface.
+This quickstart provides a streamlined path to deploying OpenStack Horizon dashboard with O3K. After completion, you'll have a fully functional web-based cloud management interface.
 
 **What You'll Get**:
 - Horizon dashboard accessible at http://localhost

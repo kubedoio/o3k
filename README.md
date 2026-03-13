@@ -134,12 +134,11 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the complete quick start guide.
 
 ### 🖥️ Deploy Horizon Dashboard
 
-**Note**: OpenStack Horizon deployment requires proper Kolla configuration or alternative Docker images. The official Kolla images (`quay.io/openstack.kolla/horizon`) require complex Kolla-specific configuration including KOLLA_CONFIG_STRATEGY environment variables and proper volume mounts for configuration files. A simplified deployment guide is being developed.
+O3K provides 100% API compatibility with OpenStack Horizon dashboard. All Horizon features work seamlessly with O3K as the backend.
 
-For the complete Horizon integration guide, see [specs/002-horizon-full-compatibility/quickstart.md](specs/002-horizon-full-compatibility/quickstart.md).
+**Quick Start**: For complete deployment instructions, see [docs/HORIZON_DEPLOYMENT.md](docs/HORIZON_DEPLOYMENT.md).
 
-**O3K API Compatibility with Horizon**:
-All Horizon dashboard features are 100% compatible with O3K APIs:
+**What Works**:
 - ✅ Instance lifecycle (launch, start, stop, delete, resize, rebuild)
 - ✅ VNC console access (integrated with noVNC proxy)
 - ✅ Network topology visualization
@@ -149,9 +148,12 @@ All Horizon dashboard features are 100% compatible with O3K APIs:
 - ✅ Floating IPs and port forwarding
 - ✅ Multi-project isolation and RBAC
 
-To use Horizon with O3K, configure Horizon's `local_settings.py`:
+**Configuration Summary**:
+
+Horizon connects to O3K services using standard OpenStack configuration:
 
 ```python
+# local_settings.py
 OPENSTACK_HOST = "o3k"  # or your O3K server address
 OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
 OPENSTACK_API_VERSIONS = {
@@ -166,7 +168,9 @@ SESSION_TIMEOUT = 14400  # 4 hours (matches O3K token TTL)
 CONSOLE_TYPE = 'novnc'
 ```
 
-Login credentials: Domain=Default, User=admin, Password=secret
+**Login Credentials**: Domain=Default, User=admin, Password=secret
+
+For troubleshooting, production setup, and advanced configuration, see the [complete deployment guide](docs/HORIZON_DEPLOYMENT.md).
 
 ### 📖 Installation Options
 

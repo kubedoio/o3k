@@ -32,7 +32,7 @@ This project follows a standard code of conduct:
 ### Prerequisites
 
 **Required:**
-- Go 1.21 or higher
+- Go 1.26 or higher
 - PostgreSQL 14 or higher
 - Git
 
