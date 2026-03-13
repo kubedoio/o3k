@@ -64,7 +64,7 @@ SESSION_TIMEOUT = 14400
 
 # Session engine (use file-based for reliability across processes)
 SESSION_ENGINE = 'django.contrib.sessions.backends.file'
-SESSION_FILE_PATH = '/tmp/horizon_sessions'
+SESSION_FILE_PATH = None  # Use Django default: /var/tmp
 
 # Security settings (enable in production with HTTPS)
 SESSION_COOKIE_SECURE = False  # Set True with HTTPS
