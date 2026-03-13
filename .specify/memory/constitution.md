@@ -63,9 +63,9 @@ O3K runs as one ~35MB binary with embedded services.
   - Identity (Keystone): v3
   - Compute (Nova): v2.1 (microversions 2.1-2.90)
   - Network (Neutron): v2.0
-  - Block Storage (Cinder): v3 (microversions 3.0-3.70)
+  - Block Storage (Cinder): v3 (microversions 3.0-3.71)
   - Image (Glance): v2
-  - Placement: v1.0 (microversions 1.0-1.39)
+  - Placement: v1.0 (microversions 1.0-1.40)
 
 ### Required Dependencies
 - **Database**: PostgreSQL 14+ (golang-migrate for migrations)

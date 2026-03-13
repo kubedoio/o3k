@@ -37,7 +37,7 @@ func (svc *Service) GetVersions(c *gin.Context) {
 				"id":      "v1.0",
 				"status":  "CURRENT",
 				"min_version": "1.0",
-				"max_version": "1.39",
+				"max_version": "1.40",
 				"links": []gin.H{
 					{
 						"rel":  "self",

@@ -1639,7 +1639,7 @@ func (svc *Service) GetVersionV3(c *gin.Context) {
 		"version": gin.H{
 			"id":      "v3.0",
 			"status":  "CURRENT",
-			"version": "3.70",
+			"version": "3.71",
 			"min_version": "3.0",
 			"updated": "2021-04-07T00:00:00Z",
 			"links": []gin.H{

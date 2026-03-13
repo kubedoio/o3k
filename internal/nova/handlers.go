@@ -180,13 +180,13 @@ func (svc *Service) ListVersions(c *gin.Context) {
 
 // GetVersion returns version details
 func (svc *Service) GetVersion(c *gin.Context) {
-	c.Header("OpenStack-API-Version", "compute 2.79")
+	c.Header("OpenStack-API-Version", "compute 2.90")
 	c.Header("OpenStack-API-Minimum-Version", "compute 2.1")
 	c.JSON(200, gin.H{
 		"version": gin.H{
 			"id":          "v2.1",
 			"status":      "CURRENT",
-			"version":     "2.79",
+			"version":     "2.90",
 			"min_version": "2.1",
 		},
 	})
