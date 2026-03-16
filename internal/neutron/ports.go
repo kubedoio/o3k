@@ -19,11 +19,12 @@ import (
 // CreatePortRequest represents a port creation request
 type CreatePortRequest struct {
 	Port struct {
-		Name         string `json:"name"`
-		NetworkID    string `json:"network_id" binding:"required"`
-		AdminStateUp *bool  `json:"admin_state_up"`
-		DeviceID     string `json:"device_id"`
-		DeviceOwner  string `json:"device_owner"`
+		Name           string   `json:"name"`
+		NetworkID      string   `json:"network_id" binding:"required"`
+		AdminStateUp   *bool    `json:"admin_state_up"`
+		DeviceID       string   `json:"device_id"`
+		DeviceOwner    string   `json:"device_owner"`
+		SecurityGroups []string `json:"security_groups"` // Security group IDs
 	} `json:"port"`
 }
 
@@ -105,6 +106,53 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		return
 	}
 
+	// Apply security groups (default to "default" security group if none specified)
+	securityGroups := req.Port.SecurityGroups
+	if len(securityGroups) == 0 {
+		// Get default security group for project
+		var defaultSGID string
+		err := database.DB.QueryRow(c.Request.Context(),
+			"SELECT id FROM security_groups WHERE project_id = $1 AND name = 'default'",
+			projectID,
+		).Scan(&defaultSGID)
+
+		if err == nil {
+			securityGroups = []string{defaultSGID}
+		}
+	}
+
+	// Insert port-security group associations
+	for _, sgID := range securityGroups {
+		// Verify security group exists and belongs to project
+		var exists bool
+		err := database.DB.QueryRow(c.Request.Context(),
+			"SELECT EXISTS(SELECT 1 FROM security_groups WHERE id = $1 AND project_id = $2)",
+			sgID, projectID,
+		).Scan(&exists)
+
+		if err != nil || !exists {
+			// Clean up port on failure
+			database.DB.Exec(c.Request.Context(), "DELETE FROM ports WHERE id = $1", portID)
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("security group %s not found", sgID)})
+			return
+		}
+
+		_, err = database.DB.Exec(c.Request.Context(),
+			"INSERT INTO port_security_groups (port_id, security_group_id) VALUES ($1, $2)",
+			portID, sgID,
+		)
+		if err != nil {
+			// Clean up port on failure
+			database.DB.Exec(c.Request.Context(), "DELETE FROM ports WHERE id = $1", portID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to associate security group: %v", err)})
+			return
+		}
+
+		// NOTE: Actual iptables rule enforcement for ports will be implemented
+		// when VM attaches to this port (device_id is set). For now, we just
+		// track the association in the database.
+	}
+
 	// Distribute FDB entry if VXLAN is enabled
 	if svc.vxlanCoordinator != nil {
 		if err := svc.vxlanCoordinator.DistributeFDBEntry(c.Request.Context(), req.Port.NetworkID, portID, macAddress); err != nil {
@@ -115,18 +163,19 @@ func (svc *Service) CreatePort(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"port": gin.H{
-			"id":             portID,
-			"name":           req.Port.Name,
-			"network_id":     req.Port.NetworkID,
-			"tenant_id":      projectID,
-			"device_id":      req.Port.DeviceID,
-			"device_owner":   req.Port.DeviceOwner,
-			"mac_address":    macAddress,
-			"admin_state_up": adminStateUp,
-			"status":         "ACTIVE",
-			"fixed_ips":      fixedIPs,
-			"created_at":     now.Format(time.RFC3339),
-			"updated_at":     now.Format(time.RFC3339),
+			"id":              portID,
+			"name":            req.Port.Name,
+			"network_id":      req.Port.NetworkID,
+			"tenant_id":       projectID,
+			"device_id":       req.Port.DeviceID,
+			"device_owner":    req.Port.DeviceOwner,
+			"mac_address":     macAddress,
+			"admin_state_up":  adminStateUp,
+			"status":          "ACTIVE",
+			"fixed_ips":       fixedIPs,
+			"security_groups": securityGroups,
+			"created_at":      now.Format(time.RFC3339),
+			"updated_at":      now.Format(time.RFC3339),
 		},
 	})
 }
@@ -165,19 +214,36 @@ func (svc *Service) ListPorts(c *gin.Context) {
 		var fixedIPs []map[string]interface{}
 		json.Unmarshal(fixedIPsJSON, &fixedIPs)
 
+		// Fetch associated security groups for this port
+		securityGroups := []string{}
+		sgRows, err := database.DB.Query(c.Request.Context(),
+			"SELECT security_group_id FROM port_security_groups WHERE port_id = $1",
+			id,
+		)
+		if err == nil {
+			for sgRows.Next() {
+				var sgID string
+				if err := sgRows.Scan(&sgID); err == nil {
+					securityGroups = append(securityGroups, sgID)
+				}
+			}
+			sgRows.Close()
+		}
+
 		ports = append(ports, gin.H{
-			"id":             id,
-			"name":           name,
-			"network_id":     networkID,
-			"tenant_id":      projectID,
-			"device_id":      deviceID.String,
-			"device_owner":   deviceOwner.String,
-			"mac_address":    macAddress,
-			"admin_state_up": adminStateUp,
-			"status":         status,
-			"fixed_ips":      fixedIPs,
-			"created_at":     createdAt.Format(time.RFC3339),
-			"updated_at":     updatedAt.Format(time.RFC3339),
+			"id":              id,
+			"name":            name,
+			"network_id":      networkID,
+			"tenant_id":       projectID,
+			"device_id":       deviceID.String,
+			"device_owner":    deviceOwner.String,
+			"mac_address":     macAddress,
+			"admin_state_up":  adminStateUp,
+			"status":          status,
+			"fixed_ips":       fixedIPs,
+			"security_groups": securityGroups,
+			"created_at":      createdAt.Format(time.RFC3339),
+			"updated_at":      updatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -219,20 +285,37 @@ func (svc *Service) GetPort(c *gin.Context) {
 	var fixedIPs []map[string]interface{}
 	json.Unmarshal(fixedIPsJSON, &fixedIPs)
 
+	// Fetch associated security groups
+	securityGroups := []string{}
+	sgRows, err := database.DB.Query(c.Request.Context(),
+		"SELECT security_group_id FROM port_security_groups WHERE port_id = $1",
+		portID,
+	)
+	if err == nil {
+		defer sgRows.Close()
+		for sgRows.Next() {
+			var sgID string
+			if err := sgRows.Scan(&sgID); err == nil {
+				securityGroups = append(securityGroups, sgID)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"port": gin.H{
-			"id":             id,
-			"name":           name,
-			"network_id":     networkID,
-			"tenant_id":      projectID,
-			"device_id":      deviceID.String,
-			"device_owner":   deviceOwner.String,
-			"mac_address":    macAddress,
-			"admin_state_up": adminStateUp,
-			"status":         status,
-			"fixed_ips":      fixedIPs,
-			"created_at":     createdAt.Format(time.RFC3339),
-			"updated_at":     updatedAt.Format(time.RFC3339),
+			"id":              id,
+			"name":            name,
+			"network_id":      networkID,
+			"tenant_id":       projectID,
+			"device_id":       deviceID.String,
+			"device_owner":    deviceOwner.String,
+			"mac_address":     macAddress,
+			"admin_state_up":  adminStateUp,
+			"status":          status,
+			"fixed_ips":       fixedIPs,
+			"security_groups": securityGroups,
+			"created_at":      createdAt.Format(time.RFC3339),
+			"updated_at":      updatedAt.Format(time.RFC3339),
 		},
 	})
 }
