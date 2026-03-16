@@ -1,6 +1,7 @@
 package neutron
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -830,4 +831,101 @@ func (svc *Service) DeleteSecurityGroupRule(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// PortInfo represents port allocation information for cross-service use
+type PortInfo struct {
+	ID        string
+	NetworkID string
+	MAC       string
+	IPAddress string
+	SubnetID  string
+}
+
+// AllocatePortForInstance creates a port for a VM instance (called from Nova)
+func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, projectID, instanceID string) (*PortInfo, error) {
+	portID := uuid.New().String()
+	tapName := "tap-" + portID[:8]
+	macAddress := generateMAC()
+
+	// Get network and subnet info to allocate IP
+	var netID string
+	err := database.DB.QueryRow(ctx,
+		"SELECT id FROM networks WHERE id = $1 AND (project_id = $2 OR shared = true)",
+		networkID, projectID,
+	).Scan(&netID)
+
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("network %s not found", networkID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query network: %w", err)
+	}
+
+	// Get subnet to allocate IP
+	var subnetID, cidr string
+	err = database.DB.QueryRow(ctx,
+		"SELECT id, cidr FROM subnets WHERE network_id = $1 LIMIT 1",
+		networkID,
+	).Scan(&subnetID, &cidr)
+
+	if err != nil {
+		return nil, fmt.Errorf("no subnet found for network %s: %w", networkID, err)
+	}
+
+	// Allocate IP from subnet
+	allocatedIP := allocateIP(cidr)
+	if allocatedIP == "" {
+		return nil, fmt.Errorf("failed to allocate IP from subnet %s", subnetID)
+	}
+
+	fixedIPs := []map[string]interface{}{
+		{
+			"subnet_id":  subnetID,
+			"ip_address": allocatedIP,
+		},
+	}
+	fixedIPsJSON, _ := json.Marshal(fixedIPs)
+
+	// Create TAP device in namespace (skip in stub mode)
+	if svc.mode != "stub" {
+		nsName := svc.nsManager.GetNamespaceName(projectID)
+		if err := svc.tapManager.CreateTAPDevice(tapName, true, nsName); err != nil {
+			return nil, fmt.Errorf("failed to create TAP device: %w", err)
+		}
+
+		// Attach TAP to bridge
+		bridgeName := "br-" + networkID[:8]
+		if err := svc.brManager.AttachToBridge(tapName, bridgeName, true, nsName); err != nil {
+			return nil, fmt.Errorf("failed to attach TAP to bridge: %w", err)
+		}
+	}
+
+	// Insert into database
+	now := time.Now()
+	_, err = database.DB.Exec(ctx, `
+		INSERT INTO ports (id, name, network_id, project_id, device_id, device_owner, mac_address, admin_state_up, status, fixed_ips, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, portID, fmt.Sprintf("port-for-%s", instanceID[:8]), networkID, projectID, instanceID,
+		"compute:nova", macAddress, true, "ACTIVE", fixedIPsJSON, now, now)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert port into database: %w", err)
+	}
+
+	// Distribute FDB entry if VXLAN is enabled
+	if svc.vxlanCoordinator != nil {
+		if err := svc.vxlanCoordinator.DistributeFDBEntry(ctx, networkID, portID, macAddress); err != nil {
+			// Log but don't fail - FDB will be synced on next poll
+			fmt.Printf("Warning: Failed to distribute FDB entry: %v\n", err)
+		}
+	}
+
+	return &PortInfo{
+		ID:        portID,
+		NetworkID: networkID,
+		MAC:       macAddress,
+		IPAddress: allocatedIP,
+		SubnetID:  subnetID,
+	}, nil
 }

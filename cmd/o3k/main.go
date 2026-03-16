@@ -132,6 +132,9 @@ func main() {
 	neutronService := neutron.NewService(networkingMode, cacheInstance)
 	log.Printf("Neutron initialized in %s mode", networkingMode)
 
+	// Wire up Nova-Neutron integration (so Nova can allocate ports)
+	novaService.SetNeutronService(neutronService)
+
 	// Initialize VXLAN if enabled
 	var vxlanCoordinator *neutron.VXLANCoordinator
 	var nodeRegistry *compute.NodeRegistry

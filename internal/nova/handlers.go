@@ -13,16 +13,23 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/middleware"
+	"github.com/cobaltcore-dev/o3k/internal/neutron"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/hypervisor"
 )
 
 // Service handles Nova API endpoints
 type Service struct {
-	libvirtURI  string
-	libvirtMode string
-	vmManager   *hypervisor.VMManager
-	cache       *cache.Cache
+	libvirtURI    string
+	libvirtMode   string
+	vmManager     *hypervisor.VMManager
+	cache         *cache.Cache
+	neutronSvc    NeutronService // For port allocation
+}
+
+// NeutronService defines the interface for Neutron operations Nova needs
+type NeutronService interface {
+	AllocatePortForInstance(ctx context.Context, networkID, projectID, instanceID string) (interface{}, error)
 }
 
 // NewService creates a new Nova service
@@ -31,7 +38,13 @@ func NewService(libvirtURI, libvirtMode string, cacheInstance *cache.Cache) *Ser
 		libvirtURI:  libvirtURI,
 		libvirtMode: libvirtMode,
 		cache:       cacheInstance,
+		neutronSvc:  nil, // Set via SetNeutronService after initialization
 	}
+}
+
+// SetNeutronService sets the Neutron service reference (called after both services are created)
+func (svc *Service) SetNeutronService(neutron NeutronService) {
+	svc.neutronSvc = neutron
 }
 
 // InitHypervisor initializes the hypervisor connection
@@ -343,6 +356,31 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 			libvirtStart := time.Now()
 
+			// Allocate ports from Neutron for requested networks
+			var networks []hypervisor.NetworkConfig
+			if svc.neutronSvc != nil && len(req.Server.Networks) > 0 {
+				for _, network := range req.Server.Networks {
+					portInfoRaw, err := svc.neutronSvc.AllocatePortForInstance(ctx, network.UUID, projectID, instanceID)
+					if err != nil {
+						logger.Error().Err(err).
+							Str("instance_id", instanceID).
+							Str("network_id", network.UUID).
+							Msg("Failed to allocate port from Neutron")
+						// Continue with empty networks rather than failing
+						continue
+					}
+
+					// Type assert to neutron.PortInfo
+					if portInfo, ok := portInfoRaw.(*neutron.PortInfo); ok {
+						networks = append(networks, hypervisor.NetworkConfig{
+							PortID:     portInfo.ID,
+							MACAddress: portInfo.MAC,
+							BridgeName: fmt.Sprintf("br-%s", portInfo.NetworkID[:8]),
+						})
+					}
+				}
+			}
+
 			// Generate VM XML
 			spec := hypervisor.VMSpec{
 				UUID:      instanceID,
@@ -351,7 +389,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				MemoryMB:  flavor.RAMMB,
 				DiskGB:    flavor.DiskGB,
 				ImagePath: fmt.Sprintf("/var/lib/o3k/images/%s.qcow2", req.Server.ImageRef),
-				Networks:  []hypervisor.NetworkConfig{}, // TODO: Populate from Neutron
+				Networks:  networks,
 			}
 
 			xml := hypervisor.GenerateVMXML(spec)

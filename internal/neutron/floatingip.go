@@ -3,6 +3,7 @@ package neutron
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -164,13 +165,29 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 		}
 
 		// Parse fixed IPs and get the first one
-		// Simplified: assume first IP
 		var fixedIPAddr string
 		if req.FloatingIP.FixedIPAddress != "" {
 			fixedIPAddr = req.FloatingIP.FixedIPAddress
 		} else {
-			// Extract from fixed_ips JSON (simplified)
-			fixedIPAddr = "192.168.1.10" // TODO: Parse from port's fixed_ips
+			// Extract from fixed_ips JSON
+			var fixedIPs []map[string]interface{}
+			if err := json.Unmarshal([]byte(fixedIPsJSON), &fixedIPs); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse port fixed_ips"})
+				return
+			}
+
+			if len(fixedIPs) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "port has no fixed IP addresses"})
+				return
+			}
+
+			// Use the first fixed IP
+			if ipAddr, ok := fixedIPs[0]["ip_address"].(string); ok {
+				fixedIPAddr = ipAddr
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid fixed_ips format"})
+				return
+			}
 		}
 		fixedIP = &fixedIPAddr
 
