@@ -3,15 +3,17 @@ version: '3.8'
 services:
   # O3K OpenStack services (already running from main docker-compose.yml)
 
-  # Horizon Dashboard
+  # Horizon Dashboard (Flamingo 2025.2)
   horizon:
-    image: quay.io/openstack.kolla/ubuntu-source-horizon:zed
+    image: quay.io/openstack.kolla/horizon:2025.2-ubuntu-noble
     container_name: o3k-horizon
     restart: unless-stopped
     ports:
       - "8080:80"
     environment:
       - KOLLA_SERVICE_NAME=horizon
+      - KOLLA_INSTALL_TYPE=source
+      - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       - OPENSTACK_HOST=o3k
       - OPENSTACK_KEYSTONE_URL=http://o3k:35357/v3
       - OPENSTACK_KEYSTONE_DEFAULT_ROLE=member
@@ -22,10 +24,11 @@ services:
     networks:
       - o3k-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
+      test: ["CMD", "curl", "-f", "http://localhost/dashboard/auth/login/"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
 networks:
   o3k-network:
