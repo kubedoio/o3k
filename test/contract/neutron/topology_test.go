@@ -213,11 +213,11 @@ func TestTopologySubnetDetails_Contract(t *testing.T) {
 	assert.Equal(t, network.ID, subnet.NetworkID, "Subnet should reference network")
 	assert.NotEmpty(t, subnet.CIDR, "Subnet should have CIDR")
 	assert.NotEmpty(t, subnet.GatewayIP, "Subnet should have gateway IP")
-	assert.True(t, *subnet.EnableDHCP, "DHCP should be enabled")
+	assert.True(t, subnet.EnableDHCP, "DHCP should be enabled")
 
 	// Verify allocation pools exist
 	assert.NotEmpty(t, subnet.AllocationPools, "Subnet should have allocation pools")
 
 	t.Logf("Subnet topology data: CIDR=%s, Gateway=%s, DHCP=%v, Pools=%d",
-		subnet.CIDR, subnet.GatewayIP, *subnet.EnableDHCP, len(subnet.AllocationPools))
+		subnet.CIDR, subnet.GatewayIP, subnet.EnableDHCP, len(subnet.AllocationPools))
 }
