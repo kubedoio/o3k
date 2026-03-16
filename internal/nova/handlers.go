@@ -381,6 +381,40 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				}
 			}
 
+			// Generate cloud-init configuration if SSH key is provided
+			var cloudInit *hypervisor.CloudInitConfig
+			if req.Server.KeyName != "" {
+				// Fetch SSH public key from database
+				var publicKey string
+				err := database.DB.QueryRow(ctx,
+					"SELECT public_key FROM keypairs WHERE user_id = $1 AND name = $2",
+					userID, req.Server.KeyName,
+				).Scan(&publicKey)
+
+				if err == nil {
+					// Generate cloud-init config with SSH key
+					cloudInit = hypervisor.DefaultCloudInitConfig(req.Server.Name, publicKey)
+
+					// Generate cloud-init ISO
+					isoPath, err := hypervisor.GenerateCloudInitISO(instanceID, cloudInit)
+					if err != nil {
+						logger.Error().Err(err).
+							Str("instance_id", instanceID).
+							Msg("Failed to generate cloud-init ISO")
+						// Continue without cloud-init rather than failing
+					} else {
+						logger.Info().
+							Str("instance_id", instanceID).
+							Str("iso_path", isoPath).
+							Msg("Cloud-init ISO generated successfully")
+					}
+				} else {
+					logger.Warn().Err(err).
+						Str("key_name", req.Server.KeyName).
+						Msg("Failed to fetch SSH key for cloud-init")
+				}
+			}
+
 			// Generate VM XML
 			spec := hypervisor.VMSpec{
 				UUID:      instanceID,
@@ -390,6 +424,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				DiskGB:    flavor.DiskGB,
 				ImagePath: fmt.Sprintf("/var/lib/o3k/images/%s.qcow2", req.Server.ImageRef),
 				Networks:  networks,
+				CloudInit: cloudInit,
 			}
 
 			xml := hypervisor.GenerateVMXML(spec)

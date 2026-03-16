@@ -1,3 +1,6 @@
+//go:build ebpf
+// +build ebpf
+
 // SPDX-License-Identifier: GPL-2.0
 // O3K eBPF Security Groups - XDP Packet Filter
 // Copyright 2026 O3K Project

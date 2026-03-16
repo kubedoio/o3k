@@ -2,6 +2,9 @@ package hypervisor
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -176,9 +179,66 @@ func GenerateVMXML(spec VMSpec) string {
 
 // GenerateCloudInitISO generates cloud-init ISO content
 func GenerateCloudInitISO(uuid string, config *CloudInitConfig) (string, error) {
-	// TODO: Generate actual ISO file using genisoimage or similar
-	// For now, return path where ISO should be created
-	return fmt.Sprintf("/var/lib/o3k/cloud-init/%s.iso", uuid), nil
+	if config == nil {
+		return "", nil // No cloud-init requested
+	}
+
+	isoDir := "/var/lib/o3k/cloud-init"
+	isoPath := fmt.Sprintf("%s/%s.iso", isoDir, uuid)
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(isoDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cloud-init directory: %w", err)
+	}
+
+	// Create temporary directory for cloud-init files
+	tmpDir, err := os.MkdirTemp("", "cloud-init-"+uuid)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write meta-data file
+	metaDataPath := filepath.Join(tmpDir, "meta-data")
+	if err := os.WriteFile(metaDataPath, []byte(config.MetaData), 0644); err != nil {
+		return "", fmt.Errorf("failed to write meta-data: %w", err)
+	}
+
+	// Write user-data file
+	userDataPath := filepath.Join(tmpDir, "user-data")
+	if err := os.WriteFile(userDataPath, []byte(config.UserData), 0644); err != nil {
+		return "", fmt.Errorf("failed to write user-data: %w", err)
+	}
+
+	// Generate ISO using genisoimage (or mkisofs as fallback)
+	// Try genisoimage first (Debian/Ubuntu)
+	cmd := exec.Command("genisoimage",
+		"-output", isoPath,
+		"-volid", "cidata",
+		"-joliet",
+		"-rock",
+		metaDataPath,
+		userDataPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Try mkisofs as fallback (older systems)
+		cmd = exec.Command("mkisofs",
+			"-output", isoPath,
+			"-volid", "cidata",
+			"-joliet",
+			"-rock",
+			metaDataPath,
+			userDataPath,
+		)
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("failed to create ISO (genisoimage/mkisofs not available): %w, output: %s", err, output)
+		}
+	}
+
+	return isoPath, nil
 }
 
 // DefaultCloudInitConfig returns default cloud-init configuration

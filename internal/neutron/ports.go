@@ -972,7 +972,7 @@ type PortInfo struct {
 }
 
 // AllocatePortForInstance creates a port for a VM instance (called from Nova)
-func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, projectID, instanceID string) (*PortInfo, error) {
+func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, projectID, instanceID string) (interface{}, error) {
 	portID := uuid.New().String()
 	tapName := "tap-" + portID[:8]
 	macAddress := generateMAC()
