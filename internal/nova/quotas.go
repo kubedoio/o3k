@@ -132,8 +132,24 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 		return
 	}
 
-	// TODO: Check if user is admin
-	// For now, allow any user to update quotas
+	// Admin-only operation - check roles
+	roles := c.GetStringSlice("roles")
+	isAdmin := false
+	for _, role := range roles {
+		if role == "admin" {
+			isAdmin = true
+			break
+		}
+	}
+	if !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"code":    403,
+				"message": "Policy doesn't allow quota updates to be performed. Admin role required.",
+			},
+		})
+		return
+	}
 
 	now := time.Now()
 
