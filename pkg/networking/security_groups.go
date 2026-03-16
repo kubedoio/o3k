@@ -2,8 +2,10 @@ package networking
 
 import (
 	"fmt"
+	"net"
 	"sync"
 
+	"github.com/cobaltcore-dev/o3k/pkg/networking/ebpf"
 	"github.com/coreos/go-iptables/iptables"
 )
 
@@ -11,19 +13,18 @@ import (
 type SecurityGroupManager struct {
 	mode       string // "stub", "iptables", or "ebpf"
 	ipt        *iptables.IPTables
+	ebpfMgr    *ebpf.SecurityGroupManager
 	mu         sync.Mutex
 	stubChains map[string]bool                // For stub mode
 	stubRules  map[string][]SecurityGroupRule // For stub mode
-	ebpfProgs  map[string]interface{}         // For eBPF mode (placeholder)
 }
 
 // NewSecurityGroupManager creates a new security group manager
-func NewSecurityGroupManager(mode string) (*SecurityGroupManager, error) {
+func NewSecurityGroupManager(mode string, ebpfObjectPath string) (*SecurityGroupManager, error) {
 	mgr := &SecurityGroupManager{
 		mode:       mode,
 		stubChains: make(map[string]bool),
 		stubRules:  make(map[string][]SecurityGroupRule),
-		ebpfProgs:  make(map[string]interface{}),
 	}
 
 	if mode == "iptables" {
@@ -33,8 +34,12 @@ func NewSecurityGroupManager(mode string) (*SecurityGroupManager, error) {
 		}
 		mgr.ipt = ipt
 	} else if mode == "ebpf" {
-		// eBPF initialization will be added here
-		// For now, we'll implement the interface structure
+		// Initialize eBPF manager
+		ebpfMgr, err := ebpf.NewSecurityGroupManager(ebpfObjectPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize eBPF manager: %w", err)
+		}
+		mgr.ebpfMgr = ebpfMgr
 	}
 
 	return mgr, nil
@@ -96,24 +101,8 @@ func (m *SecurityGroupManager) createSecurityGroupChainIPTables(securityGroupID 
 
 // createSecurityGroupChainEBPF creates an eBPF program for security group
 func (m *SecurityGroupManager) createSecurityGroupChainEBPF(securityGroupID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	progName := "O3K-SG-" + securityGroupID[:8]
-
-	// TODO: Implement eBPF program loading
-	// This will involve:
-	// 1. Loading eBPF bytecode
-	// 2. Attaching to TC (traffic control) or XDP hook
-	// 3. Managing BPF maps for rules
-	//
-	// For now, we'll create a placeholder that simulates the program
-	m.ebpfProgs[progName] = map[string]interface{}{
-		"type":   "xdp", // or "tc"
-		"action": "drop_by_default",
-		"rules":  []SecurityGroupRule{},
-	}
-
+	// eBPF uses port-based rule sets (attached to interfaces)
+	// No per-security-group chains needed
 	return nil
 }
 
@@ -154,10 +143,8 @@ func (m *SecurityGroupManager) deleteSecurityGroupChainIPTables(securityGroupID 
 
 // deleteSecurityGroupChainEBPF deletes an eBPF program
 func (m *SecurityGroupManager) deleteSecurityGroupChainEBPF(securityGroupID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	progName := "o3k_sg_" + securityGroupID[:8]
-	delete(m.ebpfProgs, progName)
+	// eBPF uses port-based rule sets
+	// Security groups are removed by clearing port rules
 	return nil
 }
 
@@ -201,15 +188,8 @@ func (m *SecurityGroupManager) addRuleIPTables(securityGroupID string, rule Secu
 
 // addRuleEBPF adds a rule to eBPF program
 func (m *SecurityGroupManager) addRuleEBPF(securityGroupID string, rule SecurityGroupRule) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	progName := "o3k_sg_" + securityGroupID[:8]
-	if prog, ok := m.ebpfProgs[progName]; ok {
-		if progMap, ok := prog.(map[string]interface{}); ok {
-			rules := progMap["rules"].([]SecurityGroupRule)
-			progMap["rules"] = append(rules, rule)
-		}
-	}
+	// eBPF rules are managed per-port, not per-security-group
+	// This is handled by ApplySecurityGroupToPort
 	return nil
 }
 
@@ -253,20 +233,8 @@ func (m *SecurityGroupManager) removeRuleIPTables(securityGroupID string, rule S
 
 // removeRuleEBPF removes a rule from eBPF program
 func (m *SecurityGroupManager) removeRuleEBPF(securityGroupID string, rule SecurityGroupRule) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	progName := "o3k_sg_" + securityGroupID[:8]
-	if prog, ok := m.ebpfProgs[progName]; ok {
-		if progMap, ok := prog.(map[string]interface{}); ok {
-			rules := progMap["rules"].([]SecurityGroupRule)
-			for i, r := range rules {
-				if r.ID == rule.ID {
-					progMap["rules"] = append(rules[:i], rules[i+1:]...)
-					break
-				}
-			}
-		}
-	}
+	// eBPF rules are managed per-port, not per-security-group
+	// This is handled by ApplySecurityGroupToPort
 	return nil
 }
 
@@ -316,7 +284,14 @@ func (m *SecurityGroupManager) applyToInterfaceIPTables(interfaceName, securityG
 
 // applyToInterfaceEBPF applies security group to interface using eBPF
 func (m *SecurityGroupManager) applyToInterfaceEBPF(interfaceName, securityGroupID string, direction string) error {
-	return nil // Placeholder for eBPF implementation
+	// Attach XDP program to interface if not already attached
+	if err := m.ebpfMgr.AttachToInterface(interfaceName); err != nil {
+		// Ignore "already attached" errors
+		if err.Error() != fmt.Sprintf("XDP program already attached to %s", interfaceName) {
+			return fmt.Errorf("failed to attach XDP to %s: %w", interfaceName, err)
+		}
+	}
+	return nil
 }
 
 // RemoveFromInterface removes security group from interface
@@ -360,7 +335,9 @@ func (m *SecurityGroupManager) removeFromInterfaceIPTables(interfaceName, securi
 
 // removeFromInterfaceEBPF removes security group from interface using eBPF
 func (m *SecurityGroupManager) removeFromInterfaceEBPF(interfaceName, securityGroupID string, direction string) error {
-	return nil // Placeholder for eBPF implementation
+	// eBPF programs remain attached to interface
+	// Rules are removed by updating port rule sets
+	return nil
 }
 
 // buildRuleSpec builds iptables rule specification

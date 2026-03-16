@@ -35,6 +35,10 @@ neutron:
   iptables_enabled: true
   networking_mode: stub  # "stub", "iptables", or "ebpf"
 
+  # Security group backend (eBPF requires networking_mode: "real" or "ebpf")
+  security_group_mode: stub  # "stub", "iptables", or "ebpf"
+  ebpf_object_path: "pkg/networking/ebpf/secgroup.o"  # Path to compiled eBPF object
+
   # VXLAN overlay networking for multi-node
   vxlan_enabled: false
   vni_range_start: 1000
