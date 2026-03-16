@@ -52,6 +52,14 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/v3/volumes", svc.ListVolumes)
 	r.GET("/v3/volumes/detail", svc.ListVolumesDetail)
 
+	// Snapshots list without project_id (extracts from token)
+	r.GET("/v3/snapshots", svc.ListSnapshots)
+	r.GET("/v3/snapshots/detail", svc.ListSnapshotsDetail)
+
+	// Volume types without project_id (extracts from token)
+	r.GET("/v3/types", svc.ListVolumeTypes)
+	r.GET("/v3/types/default", svc.GetDefaultVolumeType)
+
 	v3 := r.Group("/v3/:project_id")
 	{
 		// Volumes (create, get by ID, update, delete - need project_id in URL)
@@ -224,7 +232,11 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 
 // ListVolumes lists all volumes (brief)
 func (svc *Service) ListVolumes(c *gin.Context) {
+	// Try to get project_id from URL param first, then from token context
 	projectID := c.Param("project_id")
+	if projectID == "" {
+		projectID = c.GetString("project_id")
+	}
 
 	rows, err := database.DB.Query(c.Request.Context(), `
 		SELECT id, name, size_gb
@@ -264,7 +276,11 @@ func (svc *Service) ListVolumes(c *gin.Context) {
 
 // ListVolumesDetail lists all volumes (detailed)
 func (svc *Service) ListVolumesDetail(c *gin.Context) {
+	// Try to get project_id from URL param first, then from token context
 	projectID := c.Param("project_id")
+	if projectID == "" {
+		projectID = c.GetString("project_id")
+	}
 
 	rows, err := database.DB.Query(c.Request.Context(), `
 		SELECT v.id, v.name, v.size_gb, v.status, v.bootable, v.attached_to_instance_id, v.created_at, v.updated_at
@@ -812,9 +828,74 @@ func (svc *Service) CreateSnapshot(c *gin.Context) {
 	})
 }
 
+// ListSnapshotsDetail is an alias that works with both URL patterns
+func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
+	// Try to get project_id from URL param first, then from token context
+	projectID := c.Param("project_id")
+	if projectID == "" {
+		projectID = c.GetString("project_id")
+	}
+
+	rows, err := database.DB.Query(c.Request.Context(), `
+		SELECT id, name, volume_id, size_gb, status, created_at
+		FROM snapshots
+		WHERE project_id = $1
+		ORDER BY created_at DESC
+	`, projectID)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var snapshots []gin.H
+	for rows.Next() {
+		var id, name, volumeID, status string
+		var size int
+		var createdAt time.Time
+
+		if err := rows.Scan(&id, &name, &volumeID, &size, &status, &createdAt); err != nil {
+			continue
+		}
+
+		snapshots = append(snapshots, gin.H{
+			"id":         id,
+			"name":       name,
+			"volume_id":  volumeID,
+			"size":       size,
+			"status":     status,
+			"created_at": createdAt.Format(time.RFC3339),
+		})
+	}
+
+	if snapshots == nil {
+		snapshots = []gin.H{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"snapshots": snapshots})
+}
+
+// GetDefaultVolumeType returns the default volume type
+func (svc *Service) GetDefaultVolumeType(c *gin.Context) {
+	// Return a default volume type for Horizon compatibility
+	c.JSON(http.StatusOK, gin.H{
+		"volume_type": gin.H{
+			"id":          "default",
+			"name":        "default",
+			"description": "Default volume type",
+			"is_public":   true,
+		},
+	})
+}
+
 // ListSnapshots lists all snapshots
 func (svc *Service) ListSnapshots(c *gin.Context) {
+	// Try to get project_id from URL param first, then from token context
 	projectID := c.Param("project_id")
+	if projectID == "" {
+		projectID = c.GetString("project_id")
+	}
 
 	rows, err := database.DB.Query(c.Request.Context(), `
 		SELECT id, name, volume_id, size_gb, status, created_at
