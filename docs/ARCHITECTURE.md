@@ -1,5 +1,8 @@
 # O3K Architecture
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 ## Design Philosophy
 
 O3K is built on three core principles:

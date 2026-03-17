@@ -1,5 +1,8 @@
 # Configuration Guide
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 Complete reference for configuring O3K.
 
 ---

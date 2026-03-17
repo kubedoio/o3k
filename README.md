@@ -100,6 +100,26 @@ Just as K3s removed heavyweight components from Kubernetes:
 - iptables-based security groups (eBPF in future)
 - Project-scoped JWT tokens
 
+## 📚 Documentation
+
+**Complete Documentation Index**: **[docs/INDEX.md](docs/INDEX.md)** - Full table of contents with learning paths and categorized guides.
+
+**Quick Links**:
+- [Getting Started](docs/QUICKSTART.md) - 5-minute quick start
+- [Single-Node Deployment](docs/SINGLE_NODE_DEPLOYMENT.md) - Deploy with real KVM on one host
+- [Production Scaling](docs/SCALING.md) - Multi-node HA cluster (3-node to 10+)
+- [Horizon Integration](docs/HORIZON_INTEGRATION.md) - Web dashboard (100% compatible)
+- [API Coverage Report](docs/API_COVERAGE_REPORT.md) - Complete 104% coverage analysis
+
+**Learning Paths**:
+| Goal | Guide | Time |
+|------|-------|------|
+| Quick Evaluation | [QUICKSTART](docs/QUICKSTART.md) → [QUICK_REFERENCE](docs/QUICK_REFERENCE.md) | 30 min |
+| Demo/POC | [SINGLE_NODE_DEPLOYMENT](docs/SINGLE_NODE_DEPLOYMENT.md) → [HORIZON_INTEGRATION](docs/HORIZON_INTEGRATION.md) | 1 day |
+| Production | [ARCHITECTURE](docs/ARCHITECTURE.md) → [SCALING](docs/SCALING.md) → [OPERATIONS](docs/OPERATIONS.md) | 1-2 weeks |
+
+---
+
 ## Quick Start
 
 ### 🚀 Complete Setup with Web UI (Recommended)
@@ -436,19 +456,35 @@ Contributions welcome! See `docs/CONTRIBUTING.md` for guidelines.
 - eBPF security groups
 - High availability features
 
-## 📚 Documentation
+## 📚 Additional Documentation
+
+**📖 Complete Documentation Index**: **[docs/INDEX.md](docs/INDEX.md)** - Full table of contents with learning paths and categorized guides.
 
 ### Getting Started
 - **[Quick Start](docs/QUICKSTART.md)** - Get running in 5 minutes
 - **[Installation Guide](docs/INSTALLATION.md)** - Complete setup instructions
-- **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)** - Docker-specific guide
+- **[Quick Reference](docs/QUICK_REFERENCE.md)** - Command cheat sheet
+
+### Deployment Guides
+- **[Unified Deployment](docs/UNIFIED_DEPLOYMENT.md)** - O3K + Horizon in one command
+- **[Single-Node Deployment](docs/SINGLE_NODE_DEPLOYMENT.md)** ⭐ NEW - Real KVM on one host (demos/POC)
+- **[Production Scaling](docs/SCALING.md)** ⭐ NEW - Multi-node HA cluster (3-node to 10+)
+- **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)** - Container-specific guide
 - **[Multi-Architecture](docs/MULTIARCH.md)** - ARM64 and AMD64 support
+
+### Dashboard Integration
+- **[Horizon Integration](docs/HORIZON_INTEGRATION.md)** - Integration overview (100% compatible)
+- **[Horizon Deployment](docs/HORIZON_DEPLOYMENT.md)** - Deploy Horizon separately
+- **[Horizon Setup](docs/HORIZON_SETUP.md)** - Configuration and troubleshooting
+- **[Elektra Analysis](docs/ELEKTRA_INTEGRATION_ANALYSIS.md)** ⭐ NEW - SAP Elektra (not compatible)
 
 ### Configuration & Operations
 - **[Configuration Guide](docs/CONFIGURATION.md)** - All configuration options
 - **[Operations Guide](docs/OPERATIONS.md)** - Day-to-day management
-- **[Storage Modes](docs/STORAGE_MODES.md)** - Multi-backend configuration
-- **[Networking Modes](docs/NETWORKING_MODES.md)** - Network configuration
+- **[Storage Modes](docs/STORAGE_MODES.md)** - Local, Ceph RBD, S3, hybrid
+- **[Networking Modes](docs/NETWORKING_MODES.md)** - Stub, iptables, eBPF
+- **[S3 Configuration](docs/S3_CONFIGURATION.md)** - AWS S3 and MinIO setup
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ### Development & API
 - **[Architecture](docs/ARCHITECTURE.md)** - System design and components
@@ -457,13 +493,17 @@ Contributions welcome! See `docs/CONTRIBUTING.md` for guidelines.
 - **[API Reference](docs/API.md)** - OpenStack API compatibility details
 - **[Contributing](docs/CONTRIBUTING.md)** - Development guidelines
 
+### Advanced Topics
+- **[VXLAN Implementation](docs/VXLAN_IMPLEMENTATION.md)** - Multi-node overlay networking
+- **[L3 Router Implementation](docs/L3_ROUTER_IMPLEMENTATION.md)** - Routing and floating IPs
+- **[Real Libvirt Mode](docs/REAL_LIBVIRT_MODE.md)** - KVM integration details
+- **[eBPF Status](docs/EBPF_STATUS.md)** - eBPF security groups (experimental)
+
 ### Testing & Validation
 - **[Contract Tests](test/contract/README.md)** - 71 test file suite (TDD approach)
 - **[Integration Tests](test/)** - 20+ bash scripts for workflow validation
-- **[Test Results](docs/)** - Various test result documents
 
-### Additional Resources
-All documentation available in the [`docs/`](docs/) directory.
+**For complete documentation index with learning paths, see [docs/INDEX.md](docs/INDEX.md)**
 
 ## 📝 License
 

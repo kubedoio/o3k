@@ -1,5 +1,8 @@
 # Installation Guide
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 Complete installation guide for O3K (OpenStack-compatible cloud platform).
 
 ---

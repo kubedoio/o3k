@@ -1,5 +1,8 @@
 # Unified O3K + Horizon Deployment Guide
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 **O3K Version**: v0.5.0+
 **OpenStack Release**: Flamingo (2025.2)
 **Last Updated**: 2026-03-13

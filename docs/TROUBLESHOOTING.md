@@ -1,5 +1,8 @@
 # O3K Troubleshooting Guide
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 **Version**: v0.4.1
 **Last Updated**: March 13, 2026
 

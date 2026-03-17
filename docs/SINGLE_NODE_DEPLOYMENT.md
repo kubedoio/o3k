@@ -1,5 +1,8 @@
 # Single-Node O3K Deployment with KVM
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 **Purpose**: Deploy O3K on a single host with KVM hypervisor for demonstration and testing
 **Target Audience**: Developers, evaluators, demo environments
 **Production Ready**: No - for single-node demos only (see SCALING.md for production)

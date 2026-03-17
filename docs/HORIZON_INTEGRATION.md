@@ -1,5 +1,8 @@
 # Horizon Dashboard Integration with O3K
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 ## Overview
 
 This document describes how OpenStack Horizon dashboard integrates with O3K, covering authentication, API compatibility, and implementation patterns.

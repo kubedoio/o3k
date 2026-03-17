@@ -1,5 +1,7 @@
 # Quick Start Guide
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
 Get O3K running and create your first VM in **5 minutes**.
 
 ---

@@ -1,5 +1,8 @@
 # Operations Guide
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 Day-to-day operations, monitoring, and maintenance for O3K deployments.
 
 ---

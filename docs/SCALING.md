@@ -1,5 +1,8 @@
 # Scaling O3K: Production Multi-Node Deployment
 
+**📚 Complete Documentation**: See **[INDEX.md](INDEX.md)** for full documentation index with learning paths.
+
+
 **Purpose**: Scale O3K from single-node demo to production-ready multi-node cluster
 **Target Audience**: DevOps engineers, cloud operators, production deployments
 **Prerequisites**: Understanding of [SINGLE_NODE_DEPLOYMENT.md](SINGLE_NODE_DEPLOYMENT.md)
