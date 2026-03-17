@@ -352,17 +352,31 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	if svc.vmManager != nil {
 		logger.Info().Str("instance_id", instanceID).Msg("Starting VM creation via libvirt")
 		go func() {
+			// Recover from panics in goroutine
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("PANIC in VM creation goroutine for instance %s: %v", instanceID, r)
+					database.DB.Exec(context.Background(),
+						"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3",
+						"ERROR", time.Now(), instanceID)
+				}
+			}()
+
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
+			log.Printf("DEBUG: VM creation goroutine started for instance %s", instanceID)
 			libvirtStart := time.Now()
 
 			// Allocate ports from Neutron for requested networks
+			log.Printf("DEBUG: Allocating ports for instance %s (network count: %d)", instanceID, len(req.Server.Networks))
 			var networks []hypervisor.NetworkConfig
 			if svc.neutronSvc != nil && len(req.Server.Networks) > 0 {
 				for _, network := range req.Server.Networks {
+					log.Printf("DEBUG: Allocating port for network %s", network.UUID)
 					portInfoRaw, err := svc.neutronSvc.AllocatePortForInstance(ctx, network.UUID, projectID, instanceID)
 					if err != nil {
+						log.Printf("ERROR: Failed to allocate port from Neutron: %v", err)
 						logger.Error().Err(err).
 							Str("instance_id", instanceID).
 							Str("network_id", network.UUID).
@@ -417,6 +431,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			}
 
 			// Generate VM XML
+			log.Printf("DEBUG: Generating VM XML for instance %s", instanceID)
 			spec := hypervisor.VMSpec{
 				UUID:      instanceID,
 				Name:      fmt.Sprintf("instance-%s", instanceID[:8]),
@@ -428,12 +443,16 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				CloudInit: cloudInit,
 			}
 
+			log.Printf("DEBUG: VM spec - ImagePath: %s, Networks: %d", spec.ImagePath, len(spec.Networks))
 			xml := hypervisor.GenerateVMXML(spec)
+			log.Printf("DEBUG: Generated XML (first 200 chars): %s", xml[:min(200, len(xml))])
 
 			// Create VM
+			log.Printf("DEBUG: Calling CreateVM for instance %s", instanceID)
 			libvirtUUID, err := svc.vmManager.CreateVM(ctx, xml)
 
 			if err != nil {
+				log.Printf("ERROR: Failed to create VM via libvirt for instance %s: %v", instanceID, err)
 				logger.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create VM via libvirt")
 				// Update instance status to ERROR
 				database.DB.Exec(context.Background(),
@@ -441,6 +460,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 					"ERROR", time.Now(), instanceID)
 				return
 			}
+
+			log.Printf("DEBUG: VM created successfully, libvirt UUID: %s", libvirtUUID)
 
 			logger.Info().
 				Str("instance_id", instanceID).
