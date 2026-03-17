@@ -230,6 +230,299 @@ netplan apply
 
 ---
 
+## upgrade-o3k.sh
+
+**Purpose**: Safely upgrade O3K to the latest version with automatic backup and rollback capability
+
+**What it does**:
+- ✅ Creates automatic backup before upgrade
+- ✅ Checks current installation and version
+- ✅ Pulls latest code from Git repository
+- ✅ Builds new O3K binary
+- ✅ Runs database migrations
+- ✅ Performs service restart
+- ✅ Verifies upgrade success
+- ✅ Provides rollback on failure
+- ✅ Keeps last 5 backups automatically
+
+**Requirements**:
+- Existing O3K installation at /opt/o3k
+- Root/sudo access
+- Git repository intact
+- Go compiler installed
+
+**Usage**:
+
+```bash
+# Upgrade to latest version (main branch)
+sudo ./scripts/upgrade-o3k.sh
+
+# Upgrade to specific version/tag
+sudo ./scripts/upgrade-o3k.sh --version v0.6.0
+
+# Force upgrade even if same version
+sudo ./scripts/upgrade-o3k.sh --force
+
+# Skip backup (not recommended)
+sudo ./scripts/upgrade-o3k.sh --no-backup
+
+# Show help
+sudo ./scripts/upgrade-o3k.sh --help
+```
+
+**Command Line Options**:
+
+- `--version VERSION` - Upgrade to specific version (tag or branch name)
+- `--force` - Force upgrade even if already at target version
+- `--no-backup` - Skip backup creation (dangerous, not recommended)
+- `-h, --help` - Show help message
+
+**What Gets Backed Up**:
+
+Automatic backup before every upgrade:
+
+```
+/opt/o3k-backups/
+└── o3k-backup-YYYYMMDD-HHMMSS-<commit>/
+    ├── o3k-binary              # Current binary
+    ├── o3k.yaml                # Configuration
+    ├── commit-hash.txt         # Git commit
+    ├── version.txt             # Version tag
+    └── metadata.txt            # Backup info
+```
+
+**Upgrade Process**:
+
+1. **Pre-checks**:
+   - Verify O3K installation exists
+   - Get current version and commit
+   - Check if service is running
+
+2. **Backup**:
+   - Create timestamped backup
+   - Save binary, config, git state
+   - Keep last 5 backups
+
+3. **Stop Service**:
+   - Stop o3k.service gracefully
+   - Wait for clean shutdown
+
+4. **Update Code**:
+   - Stash local changes (if any)
+   - Fetch latest from Git
+   - Checkout target version
+
+5. **Build**:
+   - Compile new binary
+   - Verify build success
+
+6. **Migrate**:
+   - Run database migrations
+   - Handle migration failures
+
+7. **Start Service**:
+   - Start o3k.service
+   - Wait for services to be ready
+
+8. **Verify**:
+   - Test API endpoints
+   - Verify authentication
+   - Check service health
+
+**Example Session**:
+
+```bash
+$ sudo ./scripts/upgrade-o3k.sh
+
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║   O3K Upgrade Script                                     ║
+║   Safely upgrade to the latest version                   ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+
+[INFO] O3K installation found at /opt/o3k
+[INFO] Current version: v0.5.0 (commit: c75f9dd)
+[INFO] O3K service is running
+
+[INFO] Starting upgrade process...
+
+[INFO] Creating backup...
+[SUCCESS] Backup created: /opt/o3k-backups/o3k-backup-20260317-143022-c75f9dd
+[INFO] Kept last 5 backups, removed older ones
+
+[INFO] Stopping O3K service...
+[SUCCESS] Service stopped
+
+[INFO] Updating code from repository...
+[INFO] Fetching latest changes...
+[INFO] Upgrading to latest version (main branch)
+[INFO] Checking out origin/main...
+[SUCCESS] Code updated to origin/main (commit: a1b2c3d)
+
+[INFO] Building new O3K binary...
+[SUCCESS] Binary built successfully
+[INFO] Binary size: 36M
+
+[INFO] Running database migrations...
+[SUCCESS] Database migrations completed
+
+[INFO] Starting O3K service...
+[SUCCESS] Service started successfully
+
+[INFO] Verifying upgrade...
+[INFO] Waiting for services to be ready (10 seconds)...
+[SUCCESS] ✓ Keystone API responding
+[SUCCESS] ✓ Authentication working
+[SUCCESS] Upgrade verification completed
+
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║   O3K Upgrade Complete! 🎉                               ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+
+[INFO] Upgrade Summary:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Previous Version:  v0.5.0 (commit: c75f9dd)
+  New Version:       v0.6.0 (commit: a1b2c3d)
+
+  Backup Location:   /opt/o3k-backups/o3k-backup-20260317-143022-c75f9dd
+  Configuration:     /opt/o3k/config/o3k.yaml
+  Service Status:    active
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[INFO] Next Steps:
+  1. Verify services: systemctl status o3k.service
+  2. Check logs: journalctl -u o3k.service -f
+  3. Test API: openstack token issue
+```
+
+**Upgrade Scenarios**:
+
+1. **Regular Upgrade to Latest**:
+   ```bash
+   sudo ./scripts/upgrade-o3k.sh
+   ```
+
+2. **Upgrade to Specific Release**:
+   ```bash
+   sudo ./scripts/upgrade-o3k.sh --version v0.6.0
+   ```
+
+3. **Upgrade to Branch**:
+   ```bash
+   sudo ./scripts/upgrade-o3k.sh --version feature/new-api
+   ```
+
+4. **Force Rebuild**:
+   ```bash
+   sudo ./scripts/upgrade-o3k.sh --force
+   ```
+
+**Automatic Rollback on Failure**:
+
+If migration fails or service won't start:
+
+```
+[ERROR] Migration failed. See /tmp/o3k-migrate.log for details
+Rollback to previous version? [Y/n]: Y
+
+[WARNING] Starting rollback...
+[INFO] Rolling back to: o3k-backup-20260317-143022-c75f9dd
+[SUCCESS] Binary restored
+[SUCCESS] Service started successfully
+[SUCCESS] Rollback completed
+```
+
+**Manual Rollback**:
+
+If you need to rollback after upgrade:
+
+```bash
+# Find latest backup
+ls -t /opt/o3k-backups/ | head -n1
+
+# Restore from backup
+sudo systemctl stop o3k.service
+sudo cp /opt/o3k-backups/o3k-backup-TIMESTAMP/o3k-binary /opt/o3k/bin/o3k
+sudo chmod +x /opt/o3k/bin/o3k
+sudo systemctl start o3k.service
+
+# Verify
+systemctl status o3k.service
+openstack token issue
+```
+
+**Troubleshooting**:
+
+1. **Build fails**:
+   - Check Go installation: `go version`
+   - View build log: `cat /tmp/o3k-build.log`
+   - Ensure all dependencies available
+
+2. **Migration fails**:
+   - Check database connectivity
+   - View migration log: `cat /tmp/o3k-migrate.log`
+   - Verify PostgreSQL is running: `systemctl status postgresql`
+
+3. **Service won't start**:
+   - Check logs: `journalctl -u o3k.service -n 100`
+   - Verify configuration: `cat /opt/o3k/config/o3k.yaml`
+   - Check port availability: `netstat -tulpn | grep -E '35357|8774|9696|8776|9292'`
+
+4. **API not responding**:
+   - Wait longer (services may need 30+ seconds to start)
+   - Check service status: `systemctl status o3k.service`
+   - Test manually: `curl http://localhost:35357/v3`
+
+**Safety Features**:
+
+- ✅ **Automatic backup** before any changes
+- ✅ **Graceful service stop** with verification
+- ✅ **Build verification** before replacement
+- ✅ **Migration dry-run** check
+- ✅ **Service start verification**
+- ✅ **API health checks** post-upgrade
+- ✅ **Automatic rollback** on critical failures
+- ✅ **Backup retention** (keeps last 5)
+
+**Best Practices**:
+
+1. **Test in non-production first**: Always test upgrades on staging/dev before production
+2. **Backup database separately**: Script backs up binary/config, not database
+3. **Read release notes**: Check for breaking changes before upgrading
+4. **Schedule maintenance window**: Expect 2-5 minutes downtime
+5. **Monitor after upgrade**: Watch logs for at least 10 minutes post-upgrade
+
+**Integration with CI/CD**:
+
+```bash
+#!/bin/bash
+# Automated upgrade in CI/CD pipeline
+
+# Run upgrade
+if sudo /opt/o3k/scripts/upgrade-o3k.sh --version "$NEW_VERSION"; then
+  echo "Upgrade successful"
+
+  # Run smoke tests
+  /opt/o3k/test/smoke_test.sh
+
+else
+  echo "Upgrade failed, rollback performed"
+  exit 1
+fi
+```
+
+**Related Documentation**:
+- [OPERATIONS.md](../docs/OPERATIONS.md) - Day-to-day management
+- [TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md) - Common issues
+- [SINGLE_NODE_DEPLOYMENT.md](../docs/SINGLE_NODE_DEPLOYMENT.md) - Initial deployment
+
+---
+
 ## Future Scripts
 
 Planned deployment scripts:
@@ -237,8 +530,8 @@ Planned deployment scripts:
 - `deploy-multi-node.sh` - Multi-node cluster deployment
 - `deploy-ha-cluster.sh` - High availability cluster setup
 - `add-compute-node.sh` - Add compute node to existing cluster
-- `upgrade-o3k.sh` - Upgrade O3K to newer version
 - `backup-o3k.sh` - Backup configuration and database
+- `restore-o3k.sh` - Restore from backup
 
 ---
 
