@@ -1056,6 +1056,12 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 	// Create TAP device in namespace (skip in stub mode)
 	if svc.mode != "stub" {
 		nsName := svc.nsManager.GetNamespaceName(projectID)
+
+		// Ensure namespace exists (it may have been lost on restart)
+		if err := svc.nsManager.EnsureNamespaceExists(projectID); err != nil {
+			return nil, fmt.Errorf("failed to ensure namespace exists: %w", err)
+		}
+
 		if err := svc.tapManager.CreateTAPDevice(tapName, true, nsName); err != nil {
 			return nil, fmt.Errorf("failed to create TAP device: %w", err)
 		}

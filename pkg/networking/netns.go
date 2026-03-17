@@ -136,6 +136,26 @@ func (m *NetworkNamespaceManager) GetNamespaceName(projectID string) string {
 	return m.nsPrefix + projectID
 }
 
+// EnsureNamespaceExists checks if namespace exists and creates it if not
+func (m *NetworkNamespaceManager) EnsureNamespaceExists(projectID string) error {
+	nsName := m.GetNamespaceName(projectID)
+
+	if m.mode == "stub" {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.stubNS[nsName] = true
+		return nil
+	}
+
+	// Check if namespace exists
+	if m.NamespaceExists(nsName) {
+		return nil
+	}
+
+	// Create namespace if it doesn't exist
+	return m.CreateNamespace(projectID)
+}
+
 // ExecInNamespace executes a command in a namespace
 func (m *NetworkNamespaceManager) ExecInNamespace(projectID string, args ...string) error {
 	if m.mode == "stub" {
