@@ -475,18 +475,38 @@ build_o3k() {
     # Install Go if not present
     if ! command -v go &> /dev/null; then
         log_info "Installing Go 1.22..."
-        wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz -O /tmp/go.tar.gz
+        log_info "Downloading Go (this may take a few minutes)..."
+        wget --progress=bar:force https://go.dev/dl/go1.22.0.linux-amd64.tar.gz -O /tmp/go.tar.gz 2>&1 | \
+            grep --line-buffered "%" | sed -u 's/.*\([0-9]\+%\).*$/\1/' | \
+            while read line; do echo -ne "\r  Progress: $line"; done
+        echo ""
+
+        log_info "Extracting Go..."
         rm -rf /usr/local/go
         tar -C /usr/local -xzf /tmp/go.tar.gz
         rm /tmp/go.tar.gz
         export PATH=$PATH:/usr/local/go/bin
         echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+        log_success "Go 1.22 installed"
     fi
 
+    log_info "Building O3K binary (this may take 2-3 minutes)..."
     cd /opt/o3k
-    make build > /dev/null 2>&1
 
-    log_success "O3K binary built: /opt/o3k/bin/o3k"
+    # Show build progress
+    if make build 2>&1 | grep -E "(Building|Compiling|go build)" | head -10; then
+        log_success "O3K binary built: /opt/o3k/bin/o3k"
+    else
+        # If grep filters everything, just run silently
+        make build > /tmp/o3k-build.log 2>&1
+        if [ -f /opt/o3k/bin/o3k ]; then
+            log_success "O3K binary built: /opt/o3k/bin/o3k"
+        else
+            log_error "Build failed. Check /tmp/o3k-build.log"
+            cat /tmp/o3k-build.log
+            exit 1
+        fi
+    fi
 }
 
 # Create O3K configuration
