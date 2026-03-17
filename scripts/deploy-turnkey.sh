@@ -350,6 +350,9 @@ EOF
     # Also fix OPENSTACK_HOST to use localhost instead of docker service name
     sed -i 's/OPENSTACK_HOST = "o3k"/OPENSTACK_HOST = "localhost"/g' "$CONFIG_DIR/horizon-config/local_settings"
 
+    # Fix noVNC URL to use localhost
+    sed -i 's/novnc:6080/localhost:6080/g' "$CONFIG_DIR/horizon-config/local_settings"
+
     log_success "Configuration generated at $CONFIG_DIR"
 }
 
@@ -415,13 +418,12 @@ services:
     image: quay.io/openstack.kolla/horizon:2025.2-ubuntu-noble
     container_name: o3k-horizon
     hostname: horizon
+    network_mode: host
     depends_on:
       o3k:
         condition: service_healthy
       novnc:
         condition: service_started
-    ports:
-      - "8080:80"
     environment:
       - KOLLA_INSTALL_TYPE=source
       - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
@@ -434,7 +436,7 @@ services:
       - horizon-logs:/var/log/kolla/horizon:rw
     restart: unless-stopped
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost/dashboard/auth/login/"]
+      test: [CMD, curl, -f, "http://localhost:80/dashboard/auth/login/"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -524,7 +526,7 @@ show_completion() {
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
     echo "🌐 Horizon Dashboard:"
-    echo "   URL: http://$HOST_IP:8080/dashboard"
+    echo "   URL: http://$HOST_IP/dashboard"
     echo "   Username: admin"
     echo "   Password: secret"
     echo "   Domain: Default"
