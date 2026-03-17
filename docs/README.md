@@ -1,215 +1,154 @@
 # O3K Documentation
 
-Complete documentation for O3K - OpenStack Lightweight Cloud Platform.
+**📚 Complete Documentation Index: [INDEX.md](INDEX.md)** ⭐
+
+Welcome to O3K (OpenStack 3 Kubernetes-style) documentation. For a comprehensive table of contents with learning paths and categorized guides, see **[INDEX.md](INDEX.md)**.
 
 ---
 
-## 📚 Getting Started
+## 🚀 Quick Navigation
 
-Start here if you're new to O3K:
+### Just Starting?
+- **[QUICKSTART](QUICKSTART.md)** - Get running in 5 minutes
+- **[INDEX](INDEX.md)** - Complete documentation index with learning paths
 
-### [Quick Start Guide](QUICKSTART.md)
-**5-minute guide to get O3K running**
-- Docker Compose deployment
-- Create your first VM
-- Basic operations
-- Essential commands
+### Need to Deploy?
+| Use Case | Guide | Description |
+|----------|-------|-------------|
+| Quick eval | [QUICKSTART](QUICKSTART.md) | Docker Compose, any OS |
+| Demo/POC | [SINGLE_NODE_DEPLOYMENT](SINGLE_NODE_DEPLOYMENT.md) | Single host with real KVM |
+| Production | [SCALING](SCALING.md) | Multi-node HA cluster |
 
-### [Installation Guide](INSTALLATION.md)
-**Complete installation instructions**
-- Docker Compose installation (recommended)
-- Binary installation
-- Prerequisites and system requirements
-- First run configuration
-- Verification steps
-- Troubleshooting
+### Want Horizon Dashboard?
+- **[UNIFIED_DEPLOYMENT](UNIFIED_DEPLOYMENT.md)** - O3K + Horizon in one command
+- **[HORIZON_INTEGRATION](HORIZON_INTEGRATION.md)** - Integration overview
 
 ---
 
-## 🔧 Configuration & Deployment
+## 📖 Core Documentation
 
-### [Configuration Guide](CONFIGURATION.md)
-**All configuration options**
-- Configuration file reference
-- Environment variables
-- Database configuration
-- Service configuration (Keystone, Nova, Neutron, Cinder, Glance)
-- Security configuration
-- Storage backends
-- Networking modes
-- Logging configuration
+### Getting Started
+- **[QUICKSTART](QUICKSTART.md)** - 5-minute quick start
+- **[INSTALLATION](INSTALLATION.md)** - Complete installation guide
+- **[QUICK_REFERENCE](QUICK_REFERENCE.md)** - Command cheat sheet
 
-### [Docker Deployment Guide](DOCKER_DEPLOYMENT.md)
-**Docker-specific deployment**
-- Docker Compose setup
-- Container architecture
-- Port mapping
-- Volume management
-- Health checks
-- Troubleshooting Docker issues
+### Deployment Guides
+- **[UNIFIED_DEPLOYMENT](UNIFIED_DEPLOYMENT.md)** - O3K + Horizon together
+- **[SINGLE_NODE_DEPLOYMENT](SINGLE_NODE_DEPLOYMENT.md)** ⭐ NEW - Single host with KVM
+- **[SCALING](SCALING.md)** ⭐ NEW - Production multi-node deployment
+- **[DOCKER_DEPLOYMENT](DOCKER_DEPLOYMENT.md)** - Docker-specific guide
+- **[MULTIARCH](MULTIARCH.md)** - ARM64/AMD64 support
 
-### [Multi-Architecture Support](MULTIARCH.md)
-**ARM64 and AMD64 builds**
-- Platform support (ARM64, AMD64)
-- Building multi-arch images
-- Cross-compilation
-- Docker buildx usage
-- CI/CD integration
-- Performance comparisons
+### Dashboard Integration
+- **[HORIZON_INTEGRATION](HORIZON_INTEGRATION.md)** - Integration overview
+- **[HORIZON_DEPLOYMENT](HORIZON_DEPLOYMENT.md)** - Deploy Horizon separately
+- **[HORIZON_SETUP](HORIZON_SETUP.md)** - Configuration and troubleshooting
+- **[ELEKTRA_INTEGRATION_ANALYSIS](ELEKTRA_INTEGRATION_ANALYSIS.md)** ⭐ NEW - SAP Elektra analysis
 
----
+### Configuration
+- **[CONFIGURATION](CONFIGURATION.md)** - Complete configuration reference
+- **[STORAGE_MODES](STORAGE_MODES.md)** - Local, Ceph RBD, S3, hybrid
+- **[NETWORKING_MODES](NETWORKING_MODES.md)** - Stub, iptables, eBPF
+- **[S3_CONFIGURATION](S3_CONFIGURATION.md)** - AWS S3 and MinIO setup
 
-## 🛠️ Operations
+### Operations & Architecture
+- **[OPERATIONS](OPERATIONS.md)** - Day-to-day management
+- **[ARCHITECTURE](ARCHITECTURE.md)** - System design
+- **[API_COVERAGE_REPORT](API_COVERAGE_REPORT.md)** - 104% API coverage (342/330 endpoints)
+- **[API](API.md)** - OpenStack API compatibility
+- **[TROUBLESHOOTING](TROUBLESHOOTING.md)** - Common issues and solutions
 
-### [Operations Guide](OPERATIONS.md)
-**Day-to-day management**
-- Daily operations and health checks
-- Monitoring and alerting
-- Backup and recovery
-- Maintenance procedures
-- Performance tuning
-- Troubleshooting
-- Security best practices
-- High availability setup
+### Advanced Topics
+- **[VXLAN_IMPLEMENTATION](VXLAN_IMPLEMENTATION.md)** - Multi-node networking
+- **[L3_ROUTER_IMPLEMENTATION](L3_ROUTER_IMPLEMENTATION.md)** - Routing and floating IPs
+- **[REAL_LIBVIRT_MODE](REAL_LIBVIRT_MODE.md)** - KVM integration
+- **[EBPF_STATUS](EBPF_STATUS.md)** - eBPF security groups (experimental)
+
+### Contributing
+- **[CONTRIBUTING](CONTRIBUTING.md)** - Development guidelines
 
 ---
 
-## 🏗️ Architecture & Development
+## 🗺️ Recommended Learning Paths
 
-### [Architecture](ARCHITECTURE.md)
-**System design and components**
-- Overall architecture
-- Service design (Keystone, Nova, Neutron, Cinder, Glance)
-- Database schema
-- Storage backends
-- Networking implementation
-- Technology stack
-- Design decisions
+### Path 1: Quick Evaluation (30 min)
+1. [QUICKSTART](QUICKSTART.md)
+2. [QUICK_REFERENCE](QUICK_REFERENCE.md)
+3. [API_COVERAGE_REPORT](API_COVERAGE_REPORT.md)
 
-### [API Reference](API.md)
-**OpenStack API compatibility**
-- Keystone v3 API
-- Nova v2.1 API
-- Neutron v2.0 API
-- Cinder v3 API
-- Glance v2 API
-- Microversion support
-- Authentication flow
-- Error responses
+### Path 2: Demo/POC (1 day)
+1. [SINGLE_NODE_DEPLOYMENT](SINGLE_NODE_DEPLOYMENT.md)
+2. [UNIFIED_DEPLOYMENT](UNIFIED_DEPLOYMENT.md)
+3. [HORIZON_INTEGRATION](HORIZON_INTEGRATION.md)
 
-### [Contributing Guide](CONTRIBUTING.md)
-**Development guidelines**
-- Code style and conventions
-- Project structure
-- Development workflow
-- Testing requirements
-- Pull request process
-- Areas needing help
+### Path 3: Production (1-2 weeks)
+1. [ARCHITECTURE](ARCHITECTURE.md)
+2. [SINGLE_NODE_DEPLOYMENT](SINGLE_NODE_DEPLOYMENT.md)
+3. [SCALING](SCALING.md)
+4. [OPERATIONS](OPERATIONS.md)
+
+**See [INDEX.md](INDEX.md) for complete learning paths.**
 
 ---
 
-## 📖 Additional Resources
+## 🆕 Recently Added (March 2026)
 
-### Implementation Details
-
-- **[Storage Modes](STORAGE_MODES.md)** - All 7 storage backend configurations (local, RBD, S3, hybrid)
-- **[S3 Configuration](S3_CONFIGURATION.md)** - AWS S3, MinIO, Ceph RGW setup
-- **[Real Libvirt Mode](REAL_LIBVIRT_MODE.md)** - KVM setup and VM lifecycle management
-- **[Networking Modes](NETWORKING_MODES.md)** - Single-node, multi-node, VXLAN overlay
-- **[L3 Router Implementation](L3_ROUTER_IMPLEMENTATION.md)** - Router and floating IPs
-- **[VXLAN Implementation](VXLAN_IMPLEMENTATION.md)** - Multi-node overlay networking
-
-### Testing & Results
-
-- **[Horizon Testing Results](HORIZON_TESTING_RESULTS.md)** - Dashboard compatibility testing (19/19 tests passed)
-- **[Phase 6 Test Results](PHASE6_TEST_RESULTS.md)** - Full integration test suite
-- **[Real Mode Testing](REAL_MODE_TESTING.md)** - Real libvirt/KVM testing results
-- **[MVP v1 Complete](MVP_V1_COMPLETE.md)** - Project completion summary
+- **[SINGLE_NODE_DEPLOYMENT](SINGLE_NODE_DEPLOYMENT.md)** - Complete single-host KVM deployment guide with Horizon
+- **[SCALING](SCALING.md)** - Production multi-node scaling (3-node to 10+ nodes with HA)
+- **[ELEKTRA_INTEGRATION_ANALYSIS](ELEKTRA_INTEGRATION_ANALYSIS.md)** - SAP Elektra compatibility analysis (not recommended)
+- **[INDEX](INDEX.md)** - Comprehensive documentation index with categorization
 
 ---
 
-## 🗂️ Documentation Structure
+## 📊 Documentation Statistics
 
-```
-docs/
-├── README.md                        # This file (documentation index)
-│
-├── Getting Started
-│   ├── QUICKSTART.md               # 5-minute quick start
-│   └── INSTALLATION.md             # Complete installation guide
-│
-├── Configuration & Deployment
-│   ├── CONFIGURATION.md            # All configuration options
-│   ├── DOCKER_DEPLOYMENT.md        # Docker-specific guide
-│   └── MULTIARCH.md                # Multi-architecture support
-│
-├── Operations
-│   └── OPERATIONS.md               # Day-to-day management
-│
-├── Architecture & Development
-│   ├── ARCHITECTURE.md             # System design
-│   ├── API.md                      # API reference
-│   └── CONTRIBUTING.md             # Development guidelines
-│
-└── Additional Resources
-    ├── STORAGE_MODES.md            # Storage backends
-    ├── S3_CONFIGURATION.md         # S3 setup
-    ├── REAL_LIBVIRT_MODE.md        # KVM integration
-    ├── NETWORKING_MODES.md         # Networking options
-    ├── L3_ROUTER_IMPLEMENTATION.md # Router features
-    ├── VXLAN_IMPLEMENTATION.md     # Overlay networking
-    ├── HORIZON_TESTING_RESULTS.md  # Dashboard testing
-    ├── PHASE6_TEST_RESULTS.md      # Integration tests
-    ├── REAL_MODE_TESTING.md        # Real mode testing
-    └── MVP_V1_COMPLETE.md          # MVP summary
-```
+- **Total Documents**: 31
+- **Getting Started**: 4 guides
+- **Deployment**: 6 guides
+- **Configuration**: 8 guides
+- **Operations**: 3 guides
+- **Architecture**: 7 guides
+- **Coverage**: Quick start to production deployment
 
 ---
 
-## 🚀 Quick Links
+## 🔗 Quick Links by Topic
 
-**New to O3K?**
-1. Read [QUICKSTART.md](QUICKSTART.md) - 5 minutes
-2. Read [INSTALLATION.md](INSTALLATION.md) - Complete setup
-3. Read [CONFIGURATION.md](CONFIGURATION.md) - Customize your deployment
+**Deployment**:
+[QUICKSTART](QUICKSTART.md) | [SINGLE_NODE_DEPLOYMENT](SINGLE_NODE_DEPLOYMENT.md) | [SCALING](SCALING.md) | [UNIFIED_DEPLOYMENT](UNIFIED_DEPLOYMENT.md)
 
-**Deploying to production?**
-1. Read [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md) - Production deployment
-2. Read [OPERATIONS.md](OPERATIONS.md) - Management and monitoring
-3. Read [MULTIARCH.md](MULTIARCH.md) - Platform-specific builds
+**Dashboard**:
+[HORIZON_INTEGRATION](HORIZON_INTEGRATION.md) | [HORIZON_DEPLOYMENT](HORIZON_DEPLOYMENT.md) | [ELEKTRA_INTEGRATION_ANALYSIS](ELEKTRA_INTEGRATION_ANALYSIS.md)
 
-**Contributing to O3K?**
-1. Read [ARCHITECTURE.md](ARCHITECTURE.md) - System design
-2. Read [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
-3. Read [API.md](API.md) - API implementation details
+**Configuration**:
+[CONFIGURATION](CONFIGURATION.md) | [STORAGE_MODES](STORAGE_MODES.md) | [NETWORKING_MODES](NETWORKING_MODES.md)
 
----
+**API & Architecture**:
+[API_COVERAGE_REPORT](API_COVERAGE_REPORT.md) | [API](API.md) | [ARCHITECTURE](ARCHITECTURE.md) | [WHATS_LEFT](WHATS_LEFT.md)
 
-## 📝 Document Status
-
-| Document | Status | Last Updated |
-|----------|--------|--------------|
-| QUICKSTART.md | ✅ Complete | 2026-03-07 |
-| INSTALLATION.md | ✅ Complete | 2026-03-07 |
-| DOCKER_DEPLOYMENT.md | ✅ Complete | 2026-03-07 |
-| MULTIARCH.md | ✅ Complete | 2026-03-07 |
-| CONFIGURATION.md | ✅ Complete | 2026-03-07 |
-| OPERATIONS.md | ✅ Complete | 2026-03-07 |
-| ARCHITECTURE.md | ✅ Complete | 2026-03-06 |
-| API.md | ✅ Complete | 2026-03-06 |
-| CONTRIBUTING.md | ✅ Complete | 2026-03-06 |
+**Operations**:
+[OPERATIONS](OPERATIONS.md) | [TROUBLESHOOTING](TROUBLESHOOTING.md) | [QUICK_REFERENCE](QUICK_REFERENCE.md)
 
 ---
 
-## 🤝 Need Help?
+## 🤝 Getting Help
 
-- **Issues**: GitHub Issues
-- **Discussions**: GitHub Discussions
-- **Documentation**: This directory
-- **Examples**: See [QUICKSTART.md](QUICKSTART.md) for usage examples
+**For complete navigation and categorized guides**: See **[INDEX.md](INDEX.md)**
+
+**For specific issues**:
+- Check [TROUBLESHOOTING](TROUBLESHOOTING.md)
+- GitHub Issues: https://github.com/cobaltcore-dev/o3k/issues
+- GitHub Discussions: https://github.com/cobaltcore-dev/o3k/discussions
+
+**For contributing**:
+- Read [CONTRIBUTING](CONTRIBUTING.md)
+- Submit pull requests with documentation improvements
 
 ---
 
-**Documentation Version**: v1.0
-**Last Updated**: 2026-03-07
-**O3K Version**: v1.0 (MVP Complete)
+**Documentation Version**: v1.1
+**Last Updated**: March 17, 2026
+**O3K Version**: v0.5.0 (Production Ready)
+**API Coverage**: 104% (342/330 endpoints)
+
+**For complete documentation index with learning paths, see [INDEX.md](INDEX.md)** 📚
