@@ -2,6 +2,8 @@ package networking
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -19,6 +21,13 @@ type NetworkNamespaceManager struct {
 
 // NewNetworkNamespaceManager creates a new namespace manager
 func NewNetworkNamespaceManager(mode string) *NetworkNamespaceManager {
+	// Ensure /var/run/netns directory exists for real mode
+	if mode != "stub" {
+		if err := os.MkdirAll("/var/run/netns", 0755); err != nil {
+			log.Printf("Warning: Failed to create /var/run/netns directory: %v", err)
+		}
+	}
+
 	return &NetworkNamespaceManager{
 		nsPrefix: "light-ns-",
 		mode:     mode,
