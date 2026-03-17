@@ -474,9 +474,9 @@ build_o3k() {
 
     # Install Go if not present
     if ! command -v go &> /dev/null; then
-        log_info "Installing Go 1.22..."
+        log_info "Installing Go 1.26.1..."
         log_info "Downloading Go (this may take a few minutes)..."
-        wget --progress=bar:force https://go.dev/dl/go1.22.0.linux-amd64.tar.gz -O /tmp/go.tar.gz 2>&1 | \
+        wget --progress=bar:force https://go.dev/dl/go1.26.1.linux-amd64.tar.gz -O /tmp/go.tar.gz 2>&1 | \
             grep --line-buffered "%" | sed -u 's/.*\([0-9]\+%\).*$/\1/' | \
             while read line; do echo -ne "\r  Progress: $line"; done
         echo ""
@@ -487,7 +487,7 @@ build_o3k() {
         rm /tmp/go.tar.gz
         export PATH=$PATH:/usr/local/go/bin
         echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
-        log_success "Go 1.22 installed"
+        log_success "Go 1.26.1 installed"
     fi
 
     log_info "Building O3K binary (this may take 2-3 minutes)..."
