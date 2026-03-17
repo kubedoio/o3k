@@ -130,14 +130,25 @@ get_configuration() {
     read -p "Enter hostname for this node [o3k-demo]: " HOSTNAME
     HOSTNAME=${HOSTNAME:-o3k-demo}
 
+    # Show available network interfaces
+    echo ""
+    log_info "Available network interfaces:"
+    ip -brief link show | grep -v "lo" | awk '{printf "  - %s (%s)\n", $1, $3}'
+    echo ""
+
     # Host IP address
-    DEFAULT_IP=$(ip route get 8.8.8.8 | awk '{print $7; exit}')
+    DEFAULT_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}')
     read -p "Enter host IP address [$DEFAULT_IP]: " HOST_IP
     HOST_IP=${HOST_IP:-$DEFAULT_IP}
 
-    # Network interface
+    # Network interface for bridge
     DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}')
-    read -p "Enter primary network interface [$DEFAULT_IFACE]: " NETWORK_IFACE
+    echo ""
+    log_info "The selected interface will be added to bridge 'br-ext'"
+    log_info "The bridge will get IP $HOST_IP for host management access"
+    log_info "VMs will be connected to this bridge for external network access"
+    echo ""
+    read -p "Enter network interface to bridge (for VM traffic) [$DEFAULT_IFACE]: " NETWORK_IFACE
     NETWORK_IFACE=${NETWORK_IFACE:-$DEFAULT_IFACE}
 
     # Gateway
@@ -180,8 +191,8 @@ get_configuration() {
     log_info "Configuration Summary:"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  Hostname:           $HOSTNAME"
-    echo "  Host IP:            $HOST_IP"
-    echo "  Network Interface:  $NETWORK_IFACE"
+    echo "  Host IP:            $HOST_IP (assigned to bridge br-ext)"
+    echo "  Bridge Interface:   $NETWORK_IFACE (member of br-ext for VM traffic)"
     echo "  Gateway:            $GATEWAY"
     echo "  DNS Servers:        $DNS_SERVERS"
     echo "  Volume Path:        $VOLUME_PATH"
