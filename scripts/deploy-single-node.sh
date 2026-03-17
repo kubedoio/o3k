@@ -289,19 +289,37 @@ DNS_SERVERS_PLACEHOLDER
         forward-delay: 0
 NETPLAN_EOF
 
-    # Replace placeholders with actual values
-    sed -i "s/NETWORK_IFACE_PLACEHOLDER/$NETWORK_IFACE/g" /etc/netplan/01-o3k-bridge.yaml
-    sed -i "s|HOST_IP_PLACEHOLDER|$HOST_IP|g" /etc/netplan/01-o3k-bridge.yaml
-    sed -i "s/GATEWAY_PLACEHOLDER/$GATEWAY/g" /etc/netplan/01-o3k-bridge.yaml
+    # Replace placeholders with actual values (using temp file for portability)
+    sed "s/NETWORK_IFACE_PLACEHOLDER/$NETWORK_IFACE/g" /etc/netplan/01-o3k-bridge.yaml > /etc/netplan/01-o3k-bridge.yaml.tmp
+    mv /etc/netplan/01-o3k-bridge.yaml.tmp /etc/netplan/01-o3k-bridge.yaml
+
+    sed "s|HOST_IP_PLACEHOLDER|$HOST_IP|g" /etc/netplan/01-o3k-bridge.yaml > /etc/netplan/01-o3k-bridge.yaml.tmp
+    mv /etc/netplan/01-o3k-bridge.yaml.tmp /etc/netplan/01-o3k-bridge.yaml
+
+    sed "s/GATEWAY_PLACEHOLDER/$GATEWAY/g" /etc/netplan/01-o3k-bridge.yaml > /etc/netplan/01-o3k-bridge.yaml.tmp
+    mv /etc/netplan/01-o3k-bridge.yaml.tmp /etc/netplan/01-o3k-bridge.yaml
 
     # Insert DNS servers with proper indentation
-    DNS_LINES=""
+    # Build the DNS lines in a temporary file to avoid sed escaping issues
+    DNS_TEMP=$(mktemp)
     for dns in "${DNS_LIST[@]}"; do
-        DNS_LINES="${DNS_LINES}          - ${dns}\n"
+        echo "          - ${dns}" >> "$DNS_TEMP"
     done
-    # Remove trailing newline and insert
-    DNS_LINES=$(echo -e "$DNS_LINES" | sed '$ s/\\n$//')
-    sed -i "/DNS_SERVERS_PLACEHOLDER/c\\${DNS_LINES}" /etc/netplan/01-o3k-bridge.yaml
+
+    # Replace DNS_SERVERS_PLACEHOLDER with actual DNS entries
+    # Use awk to avoid sed escaping issues with hyphens
+    awk -v dns_file="$DNS_TEMP" '
+        /DNS_SERVERS_PLACEHOLDER/ {
+            while ((getline line < dns_file) > 0) {
+                print line
+            }
+            close(dns_file)
+            next
+        }
+        {print}
+    ' /etc/netplan/01-o3k-bridge.yaml > /etc/netplan/01-o3k-bridge.yaml.tmp
+    mv /etc/netplan/01-o3k-bridge.yaml.tmp /etc/netplan/01-o3k-bridge.yaml
+    rm -f "$DNS_TEMP"
 
     # Set proper permissions
     chmod 600 /etc/netplan/01-o3k-bridge.yaml

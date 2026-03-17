@@ -84,18 +84,35 @@ DNS_SERVERS_PLACEHOLDER
         forward-delay: 0
 NETPLAN_EOF
 
-    # Replace placeholders
-    sed -i "s/NETWORK_IFACE_PLACEHOLDER/$NETWORK_IFACE/g" "$TEST_DIR/test-netplan.yaml"
-    sed -i "s|HOST_IP_PLACEHOLDER|$HOST_IP|g" "$TEST_DIR/test-netplan.yaml"
-    sed -i "s/GATEWAY_PLACEHOLDER/$GATEWAY/g" "$TEST_DIR/test-netplan.yaml"
+    # Replace placeholders (using temp file for portability)
+    sed "s/NETWORK_IFACE_PLACEHOLDER/$NETWORK_IFACE/g" "$TEST_DIR/test-netplan.yaml" > "$TEST_DIR/test-netplan.yaml.tmp"
+    mv "$TEST_DIR/test-netplan.yaml.tmp" "$TEST_DIR/test-netplan.yaml"
 
-    # Insert DNS servers
-    DNS_LINES=""
+    sed "s|HOST_IP_PLACEHOLDER|$HOST_IP|g" "$TEST_DIR/test-netplan.yaml" > "$TEST_DIR/test-netplan.yaml.tmp"
+    mv "$TEST_DIR/test-netplan.yaml.tmp" "$TEST_DIR/test-netplan.yaml"
+
+    sed "s/GATEWAY_PLACEHOLDER/$GATEWAY/g" "$TEST_DIR/test-netplan.yaml" > "$TEST_DIR/test-netplan.yaml.tmp"
+    mv "$TEST_DIR/test-netplan.yaml.tmp" "$TEST_DIR/test-netplan.yaml"
+
+    # Insert DNS servers using awk to avoid sed escaping issues
+    DNS_TEMP=$(mktemp)
     for dns in "${DNS_LIST[@]}"; do
-        DNS_LINES="${DNS_LINES}          - ${dns}\n"
+        echo "          - ${dns}" >> "$DNS_TEMP"
     done
-    DNS_LINES=$(echo -e "$DNS_LINES" | sed '$ s/\\n$//')
-    sed -i "/DNS_SERVERS_PLACEHOLDER/c\\${DNS_LINES}" "$TEST_DIR/test-netplan.yaml"
+
+    # Replace DNS_SERVERS_PLACEHOLDER with actual DNS entries
+    awk -v dns_file="$DNS_TEMP" '
+        /DNS_SERVERS_PLACEHOLDER/ {
+            while ((getline line < dns_file) > 0) {
+                print line
+            }
+            close(dns_file)
+            next
+        }
+        {print}
+    ' "$TEST_DIR/test-netplan.yaml" > "$TEST_DIR/test-netplan.yaml.tmp"
+    mv "$TEST_DIR/test-netplan.yaml.tmp" "$TEST_DIR/test-netplan.yaml"
+    rm -f "$DNS_TEMP"
 
     # Validate YAML syntax with Python
     if command -v python3 &> /dev/null; then
@@ -123,8 +140,8 @@ NETPLAN_EOF
         return 1
     fi
 
-    # Check DNS formatting (each on separate line)
-    DNS_COUNT=$(grep -c "^ *- [0-9]" "$TEST_DIR/test-netplan.yaml" || true)
+    # Check DNS formatting (each on separate line under nameservers/addresses)
+    DNS_COUNT=$(grep -A 10 "nameservers:" "$TEST_DIR/test-netplan.yaml" | grep -c "^ *- [0-9]" || true)
     if [ "$DNS_COUNT" -eq 2 ]; then
         log_pass "DNS servers formatted correctly (2 entries)"
     else
