@@ -108,7 +108,8 @@ Just as K3s removed heavyweight components from Kubernetes:
 - [Getting Started](docs/QUICKSTART.md) - 5-minute quick start
 - [Single-Node Deployment](docs/SINGLE_NODE_DEPLOYMENT.md) - Deploy with real KVM on one host
 - [Production Scaling](docs/SCALING.md) - Multi-node HA cluster (3-node to 10+)
-- [Horizon Integration](docs/HORIZON_INTEGRATION.md) - Web dashboard (100% compatible)
+- [Horizon Full Compatibility Report](docs/HORIZON_FULL_COMPATIBILITY_REPORT.md) ⭐ **NEW** - Complete 100% Horizon compatibility verification
+- [Horizon Integration](docs/HORIZON_INTEGRATION.md) - Web dashboard integration architecture
 - [API Coverage Report](docs/API_COVERAGE_REPORT.md) - Complete 104% coverage analysis
 
 **Learning Paths**:

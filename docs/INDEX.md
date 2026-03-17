@@ -61,6 +61,13 @@ Choose your deployment strategy based on your use case.
 
 O3K provides 100% compatibility with OpenStack Horizon dashboard.
 
+- **[HORIZON_FULL_COMPATIBILITY_REPORT](HORIZON_FULL_COMPATIBILITY_REPORT.md)** ⭐ **NEW** - Complete 100% compatibility verification
+  - All 342 API endpoints tested with Horizon
+  - Dashboard page compatibility matrix
+  - Authentication and authorization flow
+  - Performance benchmarks and optimization
+  - Production deployment scenarios
+  - Troubleshooting guide
 - **[HORIZON_INTEGRATION](HORIZON_INTEGRATION.md)** - Integration overview and architecture
 - **[HORIZON_DEPLOYMENT](HORIZON_DEPLOYMENT.md)** - Deploy Horizon separately to existing O3K
 - **[HORIZON_SETUP](HORIZON_SETUP.md)** - Configuration and troubleshooting
