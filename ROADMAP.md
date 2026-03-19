@@ -1,32 +1,34 @@
 # O3K Development Roadmap
 
-**Version**: 1.0
-**Last Updated**: 2026-03-09
+**Version**: 1.1
+**Last Updated**: 2026-03-19
 **Status**: Active
 
 ## Executive Summary
 
-O3K is transforming from a working proof-of-concept into a production-ready modular OpenStack alternative. This roadmap defines the path from the current monolithic implementation to a fully modular, enterprise-grade cloud infrastructure platform.
+O3K is transforming from a working proof-of-concept into a production-ready modular OpenStack alternative. This roadmap defines the path from the current monolithic implementation to a fully modular, enterprise-grade cloud infrastructure platform with **100% Terraform compatibility** as the primary success metric.
 
 **Current State**: 5 core services in single binary (Keystone, Nova, Neutron, Cinder, Glance)
-**Target State**: 8+ independent services, enhanced authentication, Horizon 2025.2 integration
+**Target State**: 8+ independent services, enhanced authentication, full Terraform/Horizon/CLI compatibility
 
 ## Vision
 
-> **O3K: The Lightweight OpenStack Alternative**
+> **O3K: The Drop-in OpenStack Replacement**
 >
-> Modular, observable, fail-early cloud infrastructure that shows operators exactly what's happening—no hidden queues, no state mysteries.
+> Zero-modification migration from OpenStack - users deploy existing Terraform scripts, use Horizon UI, and run OpenStack CLI commands unchanged. Modular, observable, fail-early cloud infrastructure that shows operators exactly what's happening—no hidden queues, no state mysteries.
 
 ### Core Principles
 
-**PRIORITY ZERO**: [SPEC-000: 100% OpenStack API Compliance](./specs/000-api-compliance/README.md) - Non-negotiable requirement that supersedes all other work.
+**PRIORITY ZERO**: [SPEC-000: 100% Terraform Compatibility](./specs/000-terraform-compatibility/README.md) - Non-negotiable requirement that supersedes all other work.
 
-1. **100% API Compatibility**: Indistinguishable from OpenStack (Terraform, CLI, SDKs, Horizon)
-2. **Modular Development**: Each service independently deployable
-3. **Fail-Early Architecture**: Dependencies fail fast (< 1s), no queuing
-4. **Observable Operations**: Real-time state visibility
-5. **Library-First**: Everything starts as a library (Constitution Article I)
-6. **Test-First**: TDD mandatory (Constitution Article III)
+1. **100% Terraform Compatibility**: Existing `openstack_*` Terraform resources work unchanged
+2. **100% UI/CLI Compatibility**: Horizon dashboard and OpenStack CLI indistinguishable from OpenStack
+3. **Zero-Modification Migration**: Users switch endpoints, nothing else
+4. **Modular Development**: Each service independently deployable
+5. **Fail-Early Architecture**: Dependencies fail fast (< 1s), no queuing
+6. **Observable Operations**: Real-time state visibility
+7. **Library-First**: Everything starts as a library (Constitution Article I)
+8. **Test-First**: TDD mandatory (Constitution Article III)
 
 ## Project Phases
 
@@ -70,6 +72,7 @@ Total Timeline: ~56 weeks (~13 months)
 - Each service runs as standalone binary
 - Unit tests pass for all services
 - Contract tests pass with OpenStack CLI
+- **Terraform provider compatibility: 100%** (all `openstack_*` resources tested)
 - Documentation updated
 
 **Risks**:
@@ -92,6 +95,7 @@ Total Timeline: ~56 weeks (~13 months)
 - Services communicate via HTTP only
 - No direct function calls between services
 - Integration tests pass with separate service processes
+- **Terraform end-to-end test suite passes** (infrastructure lifecycle)
 - < 5% performance overhead vs monolithic
 
 **Risks**:
@@ -139,6 +143,7 @@ Total Timeline: ~56 weeks (~13 months)
 - `docker compose up` starts all services
 - Horizon dashboard works with modular services
 - Full integration test suite passes
+- **Terraform provider can provision complete infrastructure** (network, compute, storage)
 - Documentation for deployment options
 - Migration guide from monolithic
 
@@ -153,6 +158,7 @@ Total Timeline: ~56 weeks (~13 months)
 - [x] Services communicate via OpenStack APIs
 - [x] Horizon 2025.2 dashboard fully functional
 - [x] `openstack` CLI works with all services
+- [x] **Terraform provider 100% compatible** (all resources: compute, network, storage, identity)
 - [x] Docker Compose reference deployment
 - [x] Migration guide published
 - [x] Performance regression < 5%
@@ -335,6 +341,7 @@ Total Timeline: ~56 weeks (~13 months)
 - [x] 3 new services operational
 - [x] OpenStack CLI integration complete
 - [x] Horizon dashboard shows new services
+- [x] **Terraform resources added**: `openstack_keymanager_secret_v1`, `openstack_dns_zone_v2`, `openstack_lb_loadbalancer_v2`
 - [x] Volume encryption works (Barbican)
 - [x] Floating IP DNS works (Designate)
 - [x] Basic load balancing works (Octavia)
@@ -523,7 +530,10 @@ services:
 | Metric | Current | Phase 1 | Phase 3 | Phase 5 |
 |--------|---------|---------|---------|---------|
 | Services | 5 | 5 | 8 | 8+ |
-| API Compatibility | 90% | 95% | 98% | 99% |
+| **Terraform Compatibility** | **100%** | **100%** | **100%** | **100%** |
+| Horizon UI Compatibility | 100% | 100% | 100% | 100% |
+| OpenStack CLI Compatibility | 100% | 100% | 100% | 100% |
+| API Coverage | 104% | 104% | 110%+ | 115%+ |
 | Test Coverage | 70% | 85% | 90% | 95% |
 | Response Time (p95) | 200ms | 250ms | 300ms | 250ms |
 | Fail-Early Timeout | 1s | 1s | 1s | 1s |
@@ -555,6 +565,7 @@ services:
 
 | Risk | Impact | Mitigation | Status |
 |------|--------|------------|--------|
+| **Terraform provider regression** | **Critical** | **Automated Terraform test suite, version pinning** | **Active** |
 | Performance regression | High | Benchmark each phase, < 5% threshold | Active |
 | Breaking API changes | Critical | Contract tests, versioning | Active |
 | Security vulnerabilities | Critical | Weekly security scans, audits | Planned |
@@ -639,7 +650,7 @@ Phase 1 ──┐
 
 ### Specifications
 
-- [SPEC-000: OpenStack API Compliance Framework](./specs/000-api-compliance/README.md) - **PRIORITY ZERO**
+- [SPEC-000: Terraform Compatibility Framework](./specs/000-terraform-compatibility/README.md) - **PRIORITY ZERO**
 - [SPEC-001: Modular Architecture](./specs/001-modular-architecture/README.md)
 - [SPEC-002: Authentication Enhancement](./specs/002-authentication-enhancement/README.md)
 - [SPEC-003: Barbican](./specs/003-barbican/README.md)
