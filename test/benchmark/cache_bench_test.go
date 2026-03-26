@@ -29,13 +29,13 @@ func BenchmarkCacheGet(b *testing.B) {
 		"ram":    "2048",
 		"disk":   "20",
 	}
-	c.Set(ctx, "flavor:test-flavor-123", testData, 1*time.Hour)
+	_ = c.Set(ctx, "flavor:test-flavor-123", testData, 1*time.Hour)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			var result map[string]string
-			c.Get(ctx, "flavor:test-flavor-123", &result)
+			_ = c.Get(ctx, "flavor:test-flavor-123", &result)
 		}
 	})
 }
@@ -65,7 +65,7 @@ func BenchmarkCacheSet(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			c.Set(ctx, "flavor:bench-"+string(rune(i)), testData, 1*time.Hour)
+			_ = c.Set(ctx, "flavor:bench-"+string(rune(i)), testData, 1*time.Hour)
 			i++
 		}
 	})
@@ -112,7 +112,7 @@ func BenchmarkCacheHitVsMiss(b *testing.B) {
 
 	// Populate 1000 items
 	for i := 0; i < 1000; i++ {
-		c.Set(ctx, "item:"+string(rune(i)), map[string]int{"value": i}, 1*time.Hour)
+		_ = c.Set(ctx, "item:"+string(rune(i)), map[string]int{"value": i}, 1*time.Hour)
 	}
 
 	b.Run("CacheHit", func(b *testing.B) {

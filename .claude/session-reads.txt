@@ -45,3 +45,7 @@
 /Users/I761222/git/o3k/pkg/hypervisor/xml_template.go
 /Users/I761222/git/o3k/pkg/storage/ceph.go
 /Users/I761222/git/o3k/pkg/storage/image_store.go
+/Users/I761222/git/o3k/pkg/networking/router.go
+/Users/I761222/git/o3k/pkg/networking/security_groups.go
+/Users/I761222/git/o3k/pkg/networking/vxlan.go
+/Users/I761222/git/o3k/test/benchmark/cache_bench_test.go

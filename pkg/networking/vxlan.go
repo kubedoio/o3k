@@ -236,7 +236,7 @@ func (m *VXLANManager) removeFDBEntryReal(networkID, macAddress string) error {
 	}
 
 	// Best effort deletion - ignore errors
-	netlink.NeighDel(neigh)
+	_ = netlink.NeighDel(neigh)
 	return nil
 }
 

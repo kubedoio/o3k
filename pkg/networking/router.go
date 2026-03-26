@@ -177,7 +177,7 @@ func (rm *RouterManager) SetDefaultGateway(routerID, gatewayIP string) error {
 
 	// Delete existing default route if any
 	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "route", "del", "default")
-	cmd.Run() // Ignore error - route might not exist
+	_ = cmd.Run() // Ignore error - route might not exist
 
 	// Add new default route
 	cmd = exec.Command("ip", "netns", "exec", nsName, "ip", "route", "add", "default", "via", gatewayIP)
@@ -281,7 +281,7 @@ func (rm *RouterManager) RemoveFloatingIP(routerID, floatingIP, fixedIP, externa
 		"-d", floatingIP,
 		"-i", externalInterface,
 		"-j", "DNAT", "--to-destination", fixedIP)
-	cmd.Run() // Ignore error
+	_ = cmd.Run() // Ignore error
 
 	// Remove SNAT rule
 	cmd = exec.Command("ip", "netns", "exec", nsName,
@@ -289,7 +289,7 @@ func (rm *RouterManager) RemoveFloatingIP(routerID, floatingIP, fixedIP, externa
 		"-s", fixedIP,
 		"-o", externalInterface,
 		"-j", "SNAT", "--to-source", floatingIP)
-	cmd.Run() // Ignore error
+	_ = cmd.Run() // Ignore error
 
 	return nil
 }
@@ -342,7 +342,7 @@ func (rm *RouterManager) RemovePortForwarding(routerID, floatingIP string, exter
 		"-j", "DNAT",
 		"--to-destination", fmt.Sprintf("%s:%d", fixedIP, internalPort))
 
-	cmd.Run() // Ignore error (rule may not exist)
+	_ = cmd.Run() // Ignore error (rule may not exist)
 
 	return nil
 }

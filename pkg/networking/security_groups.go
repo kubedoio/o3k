@@ -134,7 +134,7 @@ func (m *SecurityGroupManager) deleteSecurityGroupChainIPTables(securityGroupID 
 	chainName := "O3K-SG-" + securityGroupID[:8]
 
 	// Flush chain first
-	m.ipt.ClearChain("filter", chainName)
+	_ = m.ipt.ClearChain("filter", chainName)
 
 	// Delete chain
 	return m.ipt.DeleteChain("filter", chainName)
