@@ -134,9 +134,22 @@ jobs:
 
       - name: Start O3K services
         run: |
-          docker compose -f deployments/docker-compose.yml up -d
-          sleep 15
-          docker compose -f deployments/docker-compose.yml ps
+          # Build O3K binary
+          make build
+
+          # Run migrations
+          ./bin/o3k migrate up
+
+          # Start O3K in background
+          ./bin/o3k serve &
+          O3K_PID=$!
+          echo $O3K_PID > /tmp/o3k.pid
+
+          sleep 10
+        env:
+          O3K_DB_URL: "postgres://postgres:postgres@localhost:5432/o3k?sslmode=disable"
+          O3K_JWT_SECRET: "test-secret-key-for-ci"
+          O3K_LOG_LEVEL: "info"
 
       - name: Wait for O3K to be ready
         run: |
@@ -145,7 +158,14 @@ jobs:
 
       - name: Run contract tests
         run: |
-          docker compose -f deployments/docker-compose.test.yml run --rm test-runner || true
+          cd test/contract && go test -v ./... -count=1 -timeout=10m
+        env:
+          OS_AUTH_URL: "http://localhost:35357/v3"
+          OS_USERNAME: "admin"
+          OS_PASSWORD: "secret"
+          OS_PROJECT_NAME: "default"
+          OS_USER_DOMAIN_NAME: "Default"
+          OS_PROJECT_DOMAIN_NAME: "Default"
 
       - name: Check contract test results
         run: |
@@ -158,20 +178,23 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
-          docker compose -f deployments/docker-compose.yml logs > ci-logs.txt
-          cat ci-logs.txt
+          echo "O3K logs:"
+          ps aux | grep o3k || true
 
       - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: contract-test-logs
-          path: ci-logs.txt
+          path: /tmp/o3k.log
           retention-days: 7
 
       - name: Cleanup
         if: always()
-        run: docker compose -f deployments/docker-compose.yml down -v
+        run: |
+          if [ -f /tmp/o3k.pid ]; then
+            kill $(cat /tmp/o3k.pid) || true
+          fi
 
   integration-tests:
     name: Integration Tests
@@ -185,8 +208,9 @@ jobs:
 
       - name: Start O3K services
         run: |
-          docker compose up -d
+          docker compose -f deployments/docker-compose.yml up -d
           sleep 15
+          docker compose -f deployments/docker-compose.yml ps
 
       - name: Wait for O3K to be ready
         run: |
@@ -229,8 +253,9 @@ jobs:
 
       - name: Start O3K services
         run: |
-          docker compose up -d
+          docker compose -f deployments/docker-compose.yml up -d
           sleep 15
+          docker compose -f deployments/docker-compose.yml ps
 
       - name: Wait for O3K to be ready
         run: |
@@ -259,8 +284,9 @@ jobs:
 
       - name: Start O3K services
         run: |
-          docker compose up -d
+          docker compose -f deployments/docker-compose.yml up -d
           sleep 15
+          docker compose -f deployments/docker-compose.yml ps
 
       - name: Wait for O3K to be ready
         run: |

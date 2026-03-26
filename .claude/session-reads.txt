@@ -52,3 +52,4 @@
 /Users/I761222/git/o3k/.golangci.yml
 /Users/I761222/git/o3k/.github/workflows/ci.yml
 /Users/I761222/git/o3k/internal/common/errors_test.go
+/Users/I761222/git/o3k/deployments/docker-compose.test.yml

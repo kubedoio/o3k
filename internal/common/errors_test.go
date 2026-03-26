@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestNewResourceNotFoundError(t *testing.T) {
