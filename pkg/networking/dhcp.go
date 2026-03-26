@@ -31,10 +31,10 @@ func NewDHCPManager(mode string) *DHCPManager {
 	if mode != "stub" {
 		// Both iptables and eBPF use real DHCP
 		baseDir := "/var/lib/o3k/dhcp"
-		os.MkdirAll(baseDir, 0755)
-		os.MkdirAll(filepath.Join(baseDir, "leases"), 0755)
-		os.MkdirAll(filepath.Join(baseDir, "configs"), 0755)
-		os.MkdirAll(filepath.Join(baseDir, "pids"), 0755)
+		_ = os.MkdirAll(baseDir, 0755)
+		_ = os.MkdirAll(filepath.Join(baseDir, "leases"), 0755)
+		_ = os.MkdirAll(filepath.Join(baseDir, "configs"), 0755)
+		_ = os.MkdirAll(filepath.Join(baseDir, "pids"), 0755)
 
 		mgr.leasePath = filepath.Join(baseDir, "leases")
 		mgr.configPath = filepath.Join(baseDir, "configs")
@@ -129,20 +129,20 @@ func (m *DHCPManager) StopDHCP(networkID string) error {
 	}
 
 	var pid int
-	fmt.Sscanf(string(pidData), "%d", &pid)
+	_, _ = fmt.Sscanf(string(pidData), "%d", &pid)
 
 	// Kill process
 	if pid > 0 {
 		proc, err := os.FindProcess(pid)
 		if err == nil {
-			proc.Kill()
+			_ = proc.Kill()
 		}
 	}
 
 	// Clean up files
-	os.Remove(pidFile)
-	os.Remove(filepath.Join(m.leasePath, networkID+".leases"))
-	os.Remove(filepath.Join(m.configPath, networkID+".conf"))
+	_ = os.Remove(pidFile)
+	_ = os.Remove(filepath.Join(m.leasePath, networkID+".leases"))
+	_ = os.Remove(filepath.Join(m.configPath, networkID+".conf"))
 
 	delete(m.runningPIDs, networkID)
 	return nil

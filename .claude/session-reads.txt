@@ -41,3 +41,7 @@
 /Users/I761222/git/o3k/internal/database/migrate.go
 /Users/I761222/git/o3k/pkg/hypervisor/libvirt.go
 /Users/I761222/git/o3k/pkg/hypervisor/libvirt_test.go
+/Users/I761222/git/o3k/pkg/networking/dhcp.go
+/Users/I761222/git/o3k/pkg/hypervisor/xml_template.go
+/Users/I761222/git/o3k/pkg/storage/ceph.go
+/Users/I761222/git/o3k/pkg/storage/image_store.go

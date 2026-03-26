@@ -61,7 +61,7 @@ func NewImageStore(mode, cephPool, cephConf, s3Bucket, s3Region, s3Endpoint stri
 
 	// Create local storage directory if needed
 	if mode == "local" || containsMode(mode, "local") {
-		os.MkdirAll(store.localPath, 0755)
+		_ = os.MkdirAll(store.localPath, 0755)
 	}
 
 	// Initialize S3 client if needed
@@ -190,7 +190,7 @@ func (s *ImageStore) uploadImageLocal(ctx context.Context, imageID string, reade
 	// Copy data from reader to file
 	size, err := io.Copy(file, reader)
 	if err != nil {
-		os.Remove(imagePath) // Cleanup on error
+		_ = os.Remove(imagePath) // Cleanup on error
 		return 0, fmt.Errorf("failed to write image data: %w", err)
 	}
 

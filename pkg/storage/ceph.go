@@ -46,7 +46,7 @@ func NewCephClient(mode, pool, confFile string) *CephClient {
 
 	// Create local storage directory if needed
 	if mode == "local" || mode == "local,rbd" {
-		os.MkdirAll(client.localPath, 0755)
+		_ = os.MkdirAll(client.localPath, 0755)
 	}
 
 	// Initialize Ceph connection if RBD mode

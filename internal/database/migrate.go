@@ -169,7 +169,11 @@ func MigrateReset(dbURL, migrationsPath string) error {
 	if err != nil {
 		return err
 	}
-	defer m2.Close()
+	defer func() {
+		if sourceErr, dbErr := m2.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	// Run all migrations
 	if err := m2.Up(); err != nil {

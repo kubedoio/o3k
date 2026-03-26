@@ -196,7 +196,7 @@ func GenerateCloudInitISO(uuid string, config *CloudInitConfig) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Write meta-data file
 	metaDataPath := filepath.Join(tmpDir, "meta-data")

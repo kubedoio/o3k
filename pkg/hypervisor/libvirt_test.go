@@ -172,14 +172,14 @@ func TestVMLifecycleStub(t *testing.T) {
 	}
 
 	// Start
-	manager.StartVM(ctx, vmUUID)
+	_ = manager.StartVM(ctx, vmUUID)
 	state, _, _ = manager.GetVMState(ctx, vmUUID)
 	if state != "RUNNING" {
 		t.Errorf("Expected RUNNING state after start, got %s", state)
 	}
 
 	// Reboot
-	manager.RebootVM(ctx, vmUUID)
+	_ = manager.RebootVM(ctx, vmUUID)
 	state, _, _ = manager.GetVMState(ctx, vmUUID)
 	if state != "RUNNING" {
 		t.Errorf("Expected RUNNING state after reboot, got %s", state)
