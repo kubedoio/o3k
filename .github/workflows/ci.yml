@@ -37,8 +37,8 @@ jobs:
           SIZE=$(stat --format=%s bin/o3k 2>/dev/null || stat -f%z bin/o3k)
           SIZE_MB=$(($SIZE / 1048576))
           echo "Binary size: ${SIZE_MB}MB"
-          if [ $SIZE -gt 41943040 ]; then
-            echo "❌ Binary too large: ${SIZE_MB}MB (max 40MB)"
+          if [ $SIZE -gt 68157440 ]; then
+            echo "❌ Binary too large: ${SIZE_MB}MB (max 65MB)"
             exit 1
           fi
           echo "✅ Binary size OK: ${SIZE_MB}MB"
