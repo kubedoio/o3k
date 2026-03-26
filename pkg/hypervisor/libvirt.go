@@ -74,7 +74,7 @@ func (m *VMManager) connectLibvirt() error {
 
 	l := libvirt.New(conn)
 	if err := l.Connect(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("failed to connect to libvirt: %w", err)
 	}
 
@@ -122,7 +122,7 @@ func (m *VMManager) createVMReal(ctx context.Context, xml string) (string, error
 	// Start the domain
 	if err := m.conn.DomainCreate(domain); err != nil {
 		// Try to undefine on failure
-		m.conn.DomainUndefine(domain)
+		_ = m.conn.DomainUndefine(domain)
 		return "", fmt.Errorf("failed to start domain: %w", err)
 	}
 
@@ -568,7 +568,7 @@ func (m *VMManager) resumeVMReal(ctx context.Context, vmUUID string) error {
 // Close closes the VM manager
 func (m *VMManager) Close() {
 	if m.conn != nil {
-		m.conn.Disconnect()
+		_ = m.conn.Disconnect()
 	}
 }
 

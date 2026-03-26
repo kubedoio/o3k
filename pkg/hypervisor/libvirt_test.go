@@ -111,7 +111,7 @@ func TestStartVMStub(t *testing.T) {
 	vmUUID, _ := manager.CreateVM(ctx, "<domain></domain>")
 
 	// Stop it
-	manager.StopVM(ctx, vmUUID)
+	_ = manager.StopVM(ctx, vmUUID)
 
 	// Start should succeed
 	err := manager.StartVM(ctx, vmUUID)
@@ -165,7 +165,7 @@ func TestVMLifecycleStub(t *testing.T) {
 	}
 
 	// Stop
-	manager.StopVM(ctx, vmUUID)
+	_ = manager.StopVM(ctx, vmUUID)
 	state, _, _ = manager.GetVMState(ctx, vmUUID)
 	if state != "SHUTOFF" {
 		t.Errorf("Expected SHUTOFF state after stop, got %s", state)

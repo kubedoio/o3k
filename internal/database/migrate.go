@@ -34,7 +34,11 @@ func GetMigrationStatus(dbURL, migrationsPath string) (*MigrationInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer m.Close()
+	defer func() {
+		if sourceErr, dbErr := m.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	version, dirty, err := m.Version()
 	if err != nil && err != migrate.ErrNilVersion {
@@ -53,7 +57,11 @@ func MigrateUp(dbURL, migrationsPath string) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() {
+		if sourceErr, dbErr := m.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	log.Info().Msg("Running database migrations...")
 
@@ -76,7 +84,11 @@ func MigrateDown(dbURL, migrationsPath string) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() {
+		if sourceErr, dbErr := m.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	currentVersion, _, err := m.Version()
 	if err != nil {
@@ -103,7 +115,11 @@ func MigrateToVersion(dbURL, migrationsPath string, targetVersion uint) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() {
+		if sourceErr, dbErr := m.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	currentVersion, _, err := m.Version()
 	if err != nil && err != migrate.ErrNilVersion {
@@ -133,7 +149,11 @@ func MigrateReset(dbURL, migrationsPath string) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() {
+		if sourceErr, dbErr := m.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	log.Warn().Msg("Resetting database - this will DROP ALL TABLES")
 
@@ -168,7 +188,11 @@ func ForceMigrationVersion(dbURL, migrationsPath string, version int) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() {
+		if sourceErr, dbErr := m.Close(); sourceErr != nil || dbErr != nil {
+			log.Printf("Error closing migrator: source=%v, db=%v", sourceErr, dbErr)
+		}
+	}()
 
 	log.Warn().Int("version", version).Msg("Forcing migration version (use with caution)")
 

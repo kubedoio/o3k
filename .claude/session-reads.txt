@@ -36,3 +36,8 @@
 /Users/I761222/git/o3k/internal/database/query_optimizer_test.go
 /Users/I761222/git/o3k/internal/database/query_logger.go
 /Users/I761222/git/o3k/internal/keystone/auth_test.go
+/Users/I761222/git/o3k/cmd/migrate-l3/main.go
+/Users/I761222/git/o3k/internal/database/db.go
+/Users/I761222/git/o3k/internal/database/migrate.go
+/Users/I761222/git/o3k/pkg/hypervisor/libvirt.go
+/Users/I761222/git/o3k/pkg/hypervisor/libvirt_test.go

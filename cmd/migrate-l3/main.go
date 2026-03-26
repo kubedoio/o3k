@@ -16,7 +16,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close(context.Background())
+	defer func() {
+		if err := conn.Close(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing connection: %v\n", err)
+		}
+	}()
 
 	migration := `
 -- Neutron L3 Router tables
