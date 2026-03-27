@@ -44,6 +44,20 @@ The CI pipeline now runs but still has linter issues in test files. The errcheck
 - OR disable linter step in CI until test files are cleaned up
 - OR fix remaining test file errors
 
+**Update (2026-03-27) - Session 2**:
+- **Fixed `set -e` issue**: Integration test script causing premature exit on first failure ✅
+- **Root cause identified**: Shell waiting for O3K process to complete, not properly backgrounded
+- **Key finding**: O3K starts successfully (all 7 services running), but shell script blocks
+- **Attempted fixes**:
+  1. Simple `&` - failed (shell waited)
+  2. `nohup` + `&` - failed (shell waited)
+  3. `nohup` + `< /dev/null` + `disown` - failed (shell waited)
+  4. Subshell `(cmd &)` + `pgrep` - failed (shell waited)
+  5. Simplified with immediate `$!` capture + `disown` - **testing now**
+- **Current hypothesis**: GitHub Actions waits for file descriptors to close, even when process is backgrounded
+- **Current approach**: Use `disown` immediately after capturing `$!`, allow up to 3 seconds for startup
+- Integration tests: 17/19 passing (Cinder volume tests failing - expected in docker-compose)
+
 ## Conclusion
 Successfully created and tested GitHub Actions CI pipeline. Pipeline structure is correct with proper stages (Build, Lint, Unit Tests, Contract Tests, Integration Tests, E2E Tests). However, linter configuration needs refinement to handle test file errors appropriately.
 

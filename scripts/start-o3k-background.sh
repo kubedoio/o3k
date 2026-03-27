@@ -1,20 +1,27 @@
 #!/bin/bash
 # Start O3K in background for CI testing
-# This script fully detaches O3K from the calling shell
+# Use proper job control to fully detach from shell
 
-set -e
+set +e  # Don't exit on error during detachment
 
-# Start O3K with all I/O redirected and fully detached
-(./bin/o3k serve > /tmp/o3k.log 2>&1 < /dev/null &)
+# Start O3K, capture PID immediately, then disown
+./bin/o3k serve </dev/null >/tmp/o3k.log 2>&1 &
+O3K_PID=$!
+disown
 
-# Get the PID
-sleep 1
-O3K_PID=$(pgrep -f "o3k serve" | head -1)
+# Store PID
+echo "$O3K_PID" > /tmp/o3k.pid
 
-if [ -z "$O3K_PID" ]; then
-    echo "❌ Failed to find O3K process"
+# Wait for process to initialize
+sleep 3
+
+# Verify process is running
+if ! kill -0 "$O3K_PID" 2>/dev/null; then
+    echo "❌ O3K process died (PID: $O3K_PID)"
+    echo "Last 20 lines of log:"
+    tail -20 /tmp/o3k.log 2>/dev/null || echo "No log file"
     exit 1
 fi
 
-echo "$O3K_PID" > /tmp/o3k.pid
-echo "O3K started (PID: $O3K_PID)"
+echo "✅ O3K started successfully (PID: $O3K_PID)"
+exit 0
