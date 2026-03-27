@@ -691,7 +691,7 @@ func buildHardcodedCatalog(projectID string) []CatalogEntry {
 			Type: "network",
 			Name: "neutron",
 			Endpoints: []Endpoint{
-				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:9696/v2.0", baseURL)},
+				{Interface: "public", Region: "RegionOne", URL: fmt.Sprintf("%s:9696", baseURL)},
 			},
 		},
 		{
