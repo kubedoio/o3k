@@ -2,7 +2,8 @@
 # Simple O3K Integration Test
 # Quick validation of all services
 
-set -e
+# Note: NOT using set -e because we explicitly track pass/fail counts
+# and don't want the script to exit on first failure
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
