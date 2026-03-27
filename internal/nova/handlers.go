@@ -1072,9 +1072,35 @@ func (svc *Service) ListFlavors(c *gin.Context) {
 
 // ListFlavorsDetail lists all flavors (detailed)
 func (svc *Service) ListFlavorsDetail(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(),
-		"SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE is_public = true ORDER BY ram_mb",
-	)
+	ctx := c.Request.Context()
+
+	// Parse pagination parameters
+	marker := c.Query("marker")
+	limitStr := c.Query("limit")
+
+	// Build query with pagination support
+	query := "SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE is_public = true"
+	var args []interface{}
+	argIndex := 1
+
+	// Add marker filter (cursor-based pagination)
+	if marker != "" {
+		query += fmt.Sprintf(" AND id > $%d", argIndex)
+		args = append(args, marker)
+		argIndex++
+	}
+
+	query += " ORDER BY id"
+
+	// Add limit
+	if limitStr != "" {
+		query += fmt.Sprintf(" LIMIT $%d", argIndex)
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			args = append(args, limit)
+		}
+	}
+
+	rows, err := database.DB.Query(ctx, query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

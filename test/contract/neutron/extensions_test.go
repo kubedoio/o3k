@@ -31,13 +31,8 @@ func setupNeutronClient(t *testing.T) *gophercloud.ServiceClient {
 	provider, err := openstack.AuthenticatedClient(opts)
 	require.NoError(t, err, "Failed to create authenticated client")
 
-	// Use explicit endpoint to avoid gophercloud adding /v2.0 suffix
 	client, err := openstack.NewNetworkV2(provider, gophercloud.EndpointOpts{})
 	require.NoError(t, err, "Failed to create Neutron client")
-
-	// Override ResourceBase to remove duplicate /v2.0
-	// Gophercloud adds /v2.0 but our catalog already has it
-	client.ResourceBase = client.Endpoint
 
 	return client
 }
