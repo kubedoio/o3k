@@ -125,32 +125,19 @@ jobs:
 
       - name: Wait for O3K to be ready
         run: |
-          echo "Checking if O3K services are available on their ports..."
+          echo "Waiting for all O3K services to be ready..."
 
-          PORTS="35357 8774 9696 8776 9292"
-          ALL_UP=true
-
-          for port in $PORTS; do
-            if curl -sf "http://localhost:$port" > /dev/null 2>&1; then
-              echo "✅ Port $port is responding"
-            else
-              echo "⏳ Port $port not ready yet, waiting..."
-              ALL_UP=false
-            fi
-          done
-
-          if [ "$ALL_UP" = false ]; then
-            echo "Waiting for all services to be ready (max 60s)..."
-            timeout 60 bash -c '
-              until curl -sf http://localhost:35357/v3 > /dev/null 2>&1 && \
-                    curl -sf http://localhost:8774 > /dev/null 2>&1 && \
-                    curl -sf http://localhost:9696 > /dev/null 2>&1 && \
-                    curl -sf http://localhost:8776 > /dev/null 2>&1 && \
-                    curl -sf http://localhost:9292 > /dev/null 2>&1; do
-                sleep 2
-              done
-            '
-          fi
+          # Give services 2 minutes to start
+          timeout 120 bash -c '
+            until curl -sf http://localhost:35357/v3 > /dev/null 2>&1 && \
+                  curl -sf http://localhost:8774 > /dev/null 2>&1 && \
+                  curl -sf http://localhost:9696 > /dev/null 2>&1 && \
+                  curl -sf http://localhost:8776 > /dev/null 2>&1 && \
+                  curl -sf http://localhost:9292 > /dev/null 2>&1; do
+              echo "⏳ Services not ready, retrying... ($(date +%H:%M:%S))"
+              sleep 3
+            done
+          '
 
           echo "✅ All O3K services are ready"
 
