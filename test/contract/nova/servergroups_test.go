@@ -26,14 +26,6 @@ func TestNovaServerGroupsCRUD_Contract(t *testing.T) {
 	assert.Equal(t, "test-group", group.Name)
 	assert.Contains(t, group.Policies, "anti-affinity")
 
-	// Cleanup
-	defer func() {
-		err := servergroups.Delete(client, group.ID).ExtractErr()
-		if err != nil {
-			t.Logf("Cleanup failed: %v", err)
-		}
-	}()
-
 	// Get server group
 	fetchedGroup, err := servergroups.Get(client, group.ID).Extract()
 	require.NoError(t, err)
