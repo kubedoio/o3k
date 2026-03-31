@@ -165,10 +165,9 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 	).Scan(&subnetCIDR)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "external network subnet not found"})
-		return
-	}
-	if err != nil {
+		// No subnet exists - use default external IP pool (RFC 5737 TEST-NET-1)
+		subnetCIDR = "192.0.2.0/24"
+	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

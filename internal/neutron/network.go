@@ -714,7 +714,7 @@ func (svc *Service) UpdateNetwork(c *gin.Context) {
 // CreateSubnetRequest represents a subnet creation request
 type CreateSubnetRequest struct {
 	Subnet struct {
-		Name           string   `json:"name" binding:"required"`
+		Name           string   `json:"name"`
 		NetworkID      string   `json:"network_id" binding:"required"`
 		CIDR           string   `json:"cidr" binding:"required"`
 		GatewayIP      string   `json:"gateway_ip"`
@@ -789,19 +789,28 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 		go svc.dhcpManager.StartDHCP(dhcpConfig, nsName)
 	}
 
+	// Calculate allocation pools (entire subnet minus gateway)
+	allocationPools := []gin.H{
+		{
+			"start": incrementIP(ipNet.IP, 2).String(), // Skip network address and gateway
+			"end":   decrementIP(broadcast(ipNet), 1).String(), // Skip broadcast
+		},
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"subnet": gin.H{
-			"id":              subnetID,
-			"name":            req.Subnet.Name,
-			"network_id":      req.Subnet.NetworkID,
-			"tenant_id":       projectID,
-			"cidr":            req.Subnet.CIDR,
-			"gateway_ip":      gatewayIP,
-			"ip_version":      ipVersion,
-			"enable_dhcp":     enableDHCP,
-			"dns_nameservers": req.Subnet.DNSNameservers,
-			"created_at":      now.Format(time.RFC3339),
-			"updated_at":      now.Format(time.RFC3339),
+			"id":               subnetID,
+			"name":             req.Subnet.Name,
+			"network_id":       req.Subnet.NetworkID,
+			"tenant_id":        projectID,
+			"cidr":             req.Subnet.CIDR,
+			"gateway_ip":       gatewayIP,
+			"ip_version":       ipVersion,
+			"enable_dhcp":      enableDHCP,
+			"dns_nameservers":  req.Subnet.DNSNameservers,
+			"allocation_pools": allocationPools,
+			"created_at":       now.Format(time.RFC3339),
+			"updated_at":       now.Format(time.RFC3339),
 		},
 	})
 }
@@ -1075,6 +1084,32 @@ func incrementIP(ip net.IP, inc uint) net.IP {
 		inc = sum / 256
 	}
 	return result
+}
+
+func decrementIP(ip net.IP, dec uint) net.IP {
+	result := make(net.IP, len(ip))
+	copy(result, ip)
+	for i := len(result) - 1; i >= 0 && dec > 0; i-- {
+		if uint(result[i]) >= dec {
+			result[i] -= byte(dec)
+			dec = 0
+		} else {
+			dec -= uint(result[i])
+			result[i] = byte(256 - (dec % 256))
+			dec = 1 // Borrow from next byte
+		}
+	}
+	return result
+}
+
+func broadcast(ipNet *net.IPNet) net.IP {
+	ip := ipNet.IP.To4()
+	mask := ipNet.Mask
+	broadcast := make(net.IP, len(ip))
+	for i := range ip {
+		broadcast[i] = ip[i] | ^mask[i]
+	}
+	return broadcast
 }
 
 func updateString(updates []string) string {

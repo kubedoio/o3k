@@ -100,3 +100,6 @@
 /private/tmp/claude-501/-Users-I761222-git-o3k/44c189f6-0ad5-4ab8-8019-1177eb956913/tasks/baanv2kvb.output
 /private/tmp/claude-501/-Users-I761222-git-o3k/44c189f6-0ad5-4ab8-8019-1177eb956913/tasks/bls3kgh3x.output
 /private/tmp/claude-501/-Users-I761222-git-o3k/44c189f6-0ad5-4ab8-8019-1177eb956913/tasks/bqatdbiwj.output
+/Users/I761222/git/o3k/internal/neutron/floatingip.go
+/Users/I761222/git/o3k/test/contract/neutron/topology_test.go
+/Users/I761222/git/o3k/internal/neutron/network.go
