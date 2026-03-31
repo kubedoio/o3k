@@ -19,6 +19,7 @@ func TestCinderListQosSpecs_Contract(t *testing.T) {
 	client := setupCinderClient(t)
 
 	url := client.ServiceURL("qos-specs")
+	t.Logf("Testing URL: %s", url)
 	req, err := http.NewRequest("GET", url, nil)
 	require.NoError(t, err)
 
