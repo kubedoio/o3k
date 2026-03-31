@@ -85,6 +85,17 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 	r.PUT("/v3/qos-specs/:id", svc.UpdateQosSpec)
 	r.DELETE("/v3/qos-specs/:id", svc.DeleteQosSpec)
 
+	// Backups without project_id (extracts from token)
+	r.GET("/v3/backups", svc.ListBackups)
+	r.GET("/v3/backups/detail", svc.ListBackupsDetail)
+	r.POST("/v3/backups", svc.CreateBackup)
+	r.GET("/v3/backups/:id", svc.GetBackup)
+	r.DELETE("/v3/backups/:id", svc.DeleteBackup)
+	r.POST("/v3/backups/:id/action", svc.BackupAction)
+
+	// Availability zones without project_id (extracts from token)
+	r.GET("/v3/os-availability-zone", svc.ListAvailabilityZones)
+
 	v3 := r.Group("/v3/:project_id")
 	{
 		// Volumes (create, get by ID, update, delete - need project_id in URL)
@@ -136,14 +147,6 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		// Services
 		v3.GET("/os-services", svc.ListServices)
 
-		// Backups
-		v3.GET("/backups", svc.ListBackups)
-		v3.GET("/backups/detail", svc.ListBackupsDetail)
-		v3.POST("/backups", svc.CreateBackup)
-		v3.GET("/backups/:id", svc.GetBackup)
-		v3.DELETE("/backups/:id", svc.DeleteBackup)
-		v3.POST("/backups/:id/action", svc.BackupAction)
-
 		// Volume transfers
 		v3.POST("/os-volume-transfer", svc.CreateVolumeTransfer)
 		v3.GET("/os-volume-transfer/:id", svc.GetVolumeTransfer)
@@ -159,9 +162,6 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v3.GET("/quota-sets/:id", svc.GetQuotaSet)
 		v3.PUT("/quota-sets/:id", svc.UpdateQuotaSet)
 		v3.DELETE("/quota-sets/:id", svc.DeleteQuotaSet)
-
-		// Availability Zones
-		v3.GET("/os-availability-zone", svc.ListAvailabilityZones)
 	}
 }
 
