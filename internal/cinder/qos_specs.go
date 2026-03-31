@@ -12,11 +12,14 @@ import (
 
 // ListQosSpecs lists all QoS specifications
 func (svc *Service) ListQosSpecs(c *gin.Context) {
+	projectID := c.GetString("project_id")
+
 	rows, err := database.DB.Query(c.Request.Context(), `
 		SELECT id, name, consumer, specs, created_at
 		FROM qos_specs
+		WHERE project_id = $1
 		ORDER BY created_at DESC
-	`)
+	`, projectID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -75,12 +78,13 @@ func (svc *Service) CreateQosSpec(c *gin.Context) {
 	}
 
 	qosID := uuid.New().String()
+	projectID := c.GetString("project_id")
 	now := time.Now()
 
 	_, err := database.DB.Exec(c.Request.Context(), `
-		INSERT INTO qos_specs (id, name, consumer, specs, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, qosID, req.QosSpecs.Name, req.QosSpecs.Consumer, req.QosSpecs.Specs, now)
+		INSERT INTO qos_specs (id, name, consumer, specs, project_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, qosID, req.QosSpecs.Name, req.QosSpecs.Consumer, req.QosSpecs.Specs, projectID, now, now)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -100,6 +104,7 @@ func (svc *Service) CreateQosSpec(c *gin.Context) {
 // GetQosSpec retrieves a specific QoS specification
 func (svc *Service) GetQosSpec(c *gin.Context) {
 	qosID := c.Param("id")
+	projectID := c.GetString("project_id")
 
 	var (
 		name      string
@@ -111,8 +116,8 @@ func (svc *Service) GetQosSpec(c *gin.Context) {
 	err := database.DB.QueryRow(c.Request.Context(), `
 		SELECT name, consumer, specs, created_at
 		FROM qos_specs
-		WHERE id = $1
-	`, qosID).Scan(&name, &consumer, &specs, &createdAt)
+		WHERE id = $1 AND project_id = $2
+	`, qosID, projectID).Scan(&name, &consumer, &specs, &createdAt)
 
 	if err == pgx.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "QoS spec not found"})
@@ -136,6 +141,7 @@ func (svc *Service) GetQosSpec(c *gin.Context) {
 // UpdateQosSpec updates a QoS specification
 func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	qosID := c.Param("id")
+	projectID := c.GetString("project_id")
 
 	var req struct {
 		QosSpecs map[string]string `json:"qos_specs" binding:"required"`
@@ -149,8 +155,8 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	// Check if QoS spec exists and get current specs
 	var currentSpecs map[string]string
 	err := database.DB.QueryRow(c.Request.Context(),
-		"SELECT specs FROM qos_specs WHERE id = $1",
-		qosID,
+		"SELECT specs FROM qos_specs WHERE id = $1 AND project_id = $2",
+		qosID, projectID,
 	).Scan(&currentSpecs)
 
 	if err == pgx.ErrNoRows {
@@ -173,9 +179,9 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	// Update database
 	_, err = database.DB.Exec(c.Request.Context(), `
 		UPDATE qos_specs
-		SET specs = $1
-		WHERE id = $2
-	`, currentSpecs, qosID)
+		SET specs = $1, updated_at = $2
+		WHERE id = $3 AND project_id = $4
+	`, currentSpecs, time.Now(), qosID, projectID)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -213,10 +219,11 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 // DeleteQosSpec deletes a QoS specification
 func (svc *Service) DeleteQosSpec(c *gin.Context) {
 	qosID := c.Param("id")
+	projectID := c.GetString("project_id")
 
 	result, err := database.DB.Exec(c.Request.Context(),
-		"DELETE FROM qos_specs WHERE id = $1",
-		qosID,
+		"DELETE FROM qos_specs WHERE id = $1 AND project_id = $2",
+		qosID, projectID,
 	)
 
 	if err != nil {

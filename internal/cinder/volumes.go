@@ -78,6 +78,13 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 	r.PUT("/v3/groups/:id", svc.UpdateGroup)
 	r.DELETE("/v3/groups/:id", svc.DeleteGroup)
 
+	// QoS Specs without project_id (extracts from token)
+	r.GET("/v3/qos-specs", svc.ListQosSpecs)
+	r.POST("/v3/qos-specs", svc.CreateQosSpec)
+	r.GET("/v3/qos-specs/:id", svc.GetQosSpec)
+	r.PUT("/v3/qos-specs/:id", svc.UpdateQosSpec)
+	r.DELETE("/v3/qos-specs/:id", svc.DeleteQosSpec)
+
 	v3 := r.Group("/v3/:project_id")
 	{
 		// Volumes (create, get by ID, update, delete - need project_id in URL)
@@ -151,13 +158,6 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		// Quotas
 		v3.GET("/quota-sets/:id", svc.GetQuotaSet)
 		v3.PUT("/quota-sets/:id", svc.UpdateQuotaSet)
-
-		// QoS Specs
-		v3.GET("/qos-specs", svc.ListQosSpecs)
-		v3.POST("/qos-specs", svc.CreateQosSpec)
-		v3.GET("/qos-specs/:id", svc.GetQosSpec)
-		v3.PUT("/qos-specs/:id", svc.UpdateQosSpec)
-		v3.DELETE("/qos-specs/:id", svc.DeleteQosSpec)
 		v3.DELETE("/quota-sets/:id", svc.DeleteQuotaSet)
 
 		// Availability Zones
