@@ -9,6 +9,11 @@ import (
 // Service handles Placement API endpoints (stub implementation)
 type Service struct{}
 
+const (
+	placementMinVersion = "1.0"
+	placementMaxVersion = "1.40"
+)
+
 // NewService creates a new Placement service
 func NewService() *Service {
 	return &Service{}
@@ -36,8 +41,8 @@ func (svc *Service) GetVersions(c *gin.Context) {
 			{
 				"id":      "v1.0",
 				"status":  "CURRENT",
-				"min_version": "1.0",
-				"max_version": "1.40",
+				"min_version": placementMinVersion,
+				"max_version": placementMaxVersion,
 				"links": []gin.H{
 					{
 						"rel":  "self",
@@ -55,8 +60,8 @@ func (svc *Service) GetVersion(c *gin.Context) {
 		"version": gin.H{
 			"id":      "v1.0",
 			"status":  "CURRENT",
-			"min_version": "1.0",
-			"max_version": "1.39",
+			"min_version": placementMinVersion,
+			"max_version": placementMaxVersion,
 			"links": []gin.H{
 				{
 					"rel":  "self",
