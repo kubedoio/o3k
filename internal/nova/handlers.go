@@ -1089,14 +1089,20 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 	var args []interface{}
 	argIndex := 1
 
-	// Add marker filter (cursor-based pagination)
+	// Add marker filter using created_at cursor (avoids broken UUID lexicographic ordering)
 	if marker != "" {
-		query += fmt.Sprintf(" AND id > $%d", argIndex)
-		args = append(args, marker)
-		argIndex++
+		var markerTime interface{}
+		lookupErr := database.DB.QueryRow(ctx,
+			"SELECT created_at FROM flavors WHERE id = $1", marker).Scan(&markerTime)
+		if lookupErr == nil {
+			query += fmt.Sprintf(" AND created_at > $%d", argIndex)
+			args = append(args, markerTime)
+			argIndex++
+		}
+		// If the marker flavor is not found, ignore the marker and return from the start.
 	}
 
-	query += " ORDER BY id"
+	query += " ORDER BY created_at, id"
 
 	// Add limit
 	if limitStr != "" {
