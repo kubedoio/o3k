@@ -9,7 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -27,13 +29,13 @@ func (svc *Service) SuspendInstance(c *gin.Context) {
 	).Scan(&libvirtDomainID, &status, &powerState)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Can only suspend an active instance
 	if status != "ACTIVE" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot suspend instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot suspend instance in %s state", status)))
 		return
 	}
 
@@ -45,7 +47,8 @@ func (svc *Service) SuspendInstance(c *gin.Context) {
 	`, "SUSPENDED", 4, "", time.Now(), instanceID) // power_state 4 = SUSPENDED
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "suspend_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to suspend instance"))
 		return
 	}
 
@@ -80,13 +83,13 @@ func (svc *Service) ResumeInstance(c *gin.Context) {
 	).Scan(&libvirtDomainID, &status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Can only resume a suspended instance
 	if status != "SUSPENDED" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot resume instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot resume instance in %s state", status)))
 		return
 	}
 
@@ -98,7 +101,8 @@ func (svc *Service) ResumeInstance(c *gin.Context) {
 	`, "ACTIVE", 1, "", time.Now(), instanceID) // power_state 1 = RUNNING
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "resume_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to resume instance"))
 		return
 	}
 
@@ -133,13 +137,13 @@ func (svc *Service) ShelveInstance(c *gin.Context) {
 	).Scan(&libvirtDomainID, &status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Can only shelve an active or stopped instance
 	if status != "ACTIVE" && status != "SHUTOFF" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot shelve instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot shelve instance in %s state", status)))
 		return
 	}
 
@@ -153,7 +157,8 @@ func (svc *Service) ShelveInstance(c *gin.Context) {
 	`, instanceID, snapshotName, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create snapshot: %v", err)})
+		log.Error().Err(err).Str("operation", "create_shelve_snapshot").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create snapshot"))
 		return
 	}
 
@@ -165,7 +170,8 @@ func (svc *Service) ShelveInstance(c *gin.Context) {
 	`, "SHELVED", 0, "", time.Now(), instanceID) // power_state 0 = NO STATE
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "shelve_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to shelve instance"))
 		return
 	}
 
@@ -197,13 +203,13 @@ func (svc *Service) UnshelveInstance(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Can only unshelve a shelved instance
 	if status != "SHELVED" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot unshelve instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot unshelve instance in %s state", status)))
 		return
 	}
 
@@ -215,7 +221,8 @@ func (svc *Service) UnshelveInstance(c *gin.Context) {
 	`, "ACTIVE", 1, "", time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "unshelve_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to unshelve instance"))
 		return
 	}
 
@@ -225,7 +232,7 @@ func (svc *Service) UnshelveInstance(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 
-// Resize changes the flavor of an instance
+// ResizeInstance changes the flavor of an instance
 func (svc *Service) ResizeInstance(c *gin.Context) {
 	instanceID := c.Param("id")
 	projectID := c.GetString("project_id")
@@ -237,7 +244,7 @@ func (svc *Service) ResizeInstance(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -252,13 +259,13 @@ func (svc *Service) ResizeInstanceAction(c *gin.Context, resizeData interface{})
 	// Parse the already-parsed action body
 	resizeMap, ok := resizeData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resize request"})
+		common.SendError(c, common.NewBadRequestError("invalid resize request"))
 		return
 	}
 
 	flavorRef, ok := resizeMap["flavorRef"].(string)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "flavorRef is required"})
+		common.SendError(c, common.NewBadRequestError("flavorRef is required"))
 		return
 	}
 
@@ -276,13 +283,13 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 	).Scan(&status, &currentFlavorID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Can only resize a stopped instance (for simplicity)
 	if status != "SHUTOFF" && status != "ACTIVE" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot resize instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot resize instance in %s state", status)))
 		return
 	}
 
@@ -294,13 +301,13 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 	).Scan(&newFlavorID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "flavor not found"})
+		common.SendError(c, common.NewNotFoundError("flavor"))
 		return
 	}
 
 	// Don't allow resizing to same flavor
 	if newFlavorID == currentFlavorID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "new flavor is same as current flavor"})
+		common.SendError(c, common.NewBadRequestError("new flavor is same as current flavor"))
 		return
 	}
 
@@ -312,7 +319,8 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 	`, newFlavorID, "VERIFY_RESIZE", "resize_prep", time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "resize_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to resize instance"))
 		return
 	}
 
@@ -341,13 +349,14 @@ func (svc *Service) ConfirmResizeInstance(c *gin.Context) {
 	`, "ACTIVE", "", time.Now(), instanceID, projectID, "VERIFY_RESIZE")
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "confirm_resize").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to confirm resize"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "instance not in resize-verify state"})
+		common.SendError(c, common.NewInvalidStateError("instance not in resize-verify state"))
 		return
 	}
 
@@ -367,12 +376,12 @@ func (svc *Service) RevertResizeInstance(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	if status != "VERIFY_RESIZE" {
-		c.JSON(http.StatusConflict, gin.H{"error": "instance not in resize-verify state"})
+		common.SendError(c, common.NewInvalidStateError("instance not in resize-verify state"))
 		return
 	}
 
@@ -385,7 +394,8 @@ func (svc *Service) RevertResizeInstance(c *gin.Context) {
 	`, "ACTIVE", "", time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "revert_resize").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to revert resize"))
 		return
 	}
 
@@ -407,12 +417,7 @@ func (svc *Service) EvacuateInstance(c *gin.Context) {
 		}
 	}
 	if !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": gin.H{
-				"code":    403,
-				"message": "Policy doesn't allow evacuate to be performed",
-			},
-		})
+		common.SendError(c, common.NewForbiddenError("Policy doesn't allow evacuate to be performed"))
 		return
 	}
 
@@ -423,7 +428,7 @@ func (svc *Service) EvacuateInstance(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -433,7 +438,8 @@ func (svc *Service) EvacuateInstance(c *gin.Context) {
 	`, "ACTIVE", "evacuating", time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "evacuate_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to evacuate instance"))
 		return
 	}
 
@@ -452,12 +458,12 @@ func (svc *Service) MigrateInstance(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	if status != "ACTIVE" && status != "SHUTOFF" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot migrate instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot migrate instance in %s state", status)))
 		return
 	}
 
@@ -474,7 +480,8 @@ func (svc *Service) MigrateInstance(c *gin.Context) {
 	`, migrationID, instanceID, currentHost, destHost, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create migration: %v", err)})
+		log.Error().Err(err).Str("operation", "create_migration_record").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create migration"))
 		return
 	}
 
@@ -485,7 +492,8 @@ func (svc *Service) MigrateInstance(c *gin.Context) {
 	`, time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "migrate_instance_update").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to start migration"))
 		return
 	}
 
@@ -519,7 +527,7 @@ func (svc *Service) LiveMigrateInstance(c *gin.Context) {
 	// Get action data from context (already parsed by ServerAction)
 	actionData, exists := c.Get("action_data")
 	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing os-migrateLive data"})
+		common.SendError(c, common.NewBadRequestError("missing os-migrateLive data"))
 		return
 	}
 
@@ -549,12 +557,12 @@ func (svc *Service) LiveMigrateInstance(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	if status != "ACTIVE" {
-		c.JSON(http.StatusConflict, gin.H{"error": "instance must be active"})
+		common.SendError(c, common.NewInvalidStateError("instance must be active"))
 		return
 	}
 
@@ -564,7 +572,8 @@ func (svc *Service) LiveMigrateInstance(c *gin.Context) {
 	`, "migrating", time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "live_migrate_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to start live migration"))
 		return
 	}
 
@@ -579,31 +588,31 @@ func (svc *Service) AddSecurityGroup(c *gin.Context) {
 	// Get action data from context (already parsed by ServerAction)
 	actionData, exists := c.Get("action_data")
 	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing addSecurityGroup data"})
+		common.SendError(c, common.NewBadRequestError("missing addSecurityGroup data"))
 		return
 	}
 
 	addSGMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid addSecurityGroup data"})
+		common.SendError(c, common.NewBadRequestError("invalid addSecurityGroup data"))
 		return
 	}
 
 	sgName, ok := addSGMap["name"].(string)
 	if !ok || sgName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing security group name"})
+		common.SendError(c, common.NewBadRequestError("missing security group name"))
 		return
 	}
 
 	// Verify instance exists
-	var exists_check bool
+	var existsCheck bool
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
-	).Scan(&exists_check)
+	).Scan(&existsCheck)
 
-	if err != nil || !exists_check {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+	if err != nil || !existsCheck {
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -615,7 +624,7 @@ func (svc *Service) AddSecurityGroup(c *gin.Context) {
 	).Scan(&sgID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "security group not found"})
+		common.SendError(c, common.NewNotFoundError("security group"))
 		return
 	}
 
@@ -627,12 +636,13 @@ func (svc *Service) AddSecurityGroup(c *gin.Context) {
 	).Scan(&alreadyAssociated)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "check_sg_association").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to check security group association"))
 		return
 	}
 
 	if alreadyAssociated {
-		c.JSON(http.StatusConflict, gin.H{"error": "security group already associated with instance"})
+		common.SendError(c, common.NewConflictError("security group already associated with instance"))
 		return
 	}
 
@@ -643,7 +653,8 @@ func (svc *Service) AddSecurityGroup(c *gin.Context) {
 	`, instanceID, sgID, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_sg_to_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to add security group"))
 		return
 	}
 
@@ -660,31 +671,31 @@ func (svc *Service) RemoveSecurityGroup(c *gin.Context) {
 	// Get action data from context
 	actionData, exists := c.Get("action_data")
 	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing removeSecurityGroup data"})
+		common.SendError(c, common.NewBadRequestError("missing removeSecurityGroup data"))
 		return
 	}
 
 	removeSGMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid removeSecurityGroup data"})
+		common.SendError(c, common.NewBadRequestError("invalid removeSecurityGroup data"))
 		return
 	}
 
 	sgName, ok := removeSGMap["name"].(string)
 	if !ok || sgName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing security group name"})
+		common.SendError(c, common.NewBadRequestError("missing security group name"))
 		return
 	}
 
 	// Verify instance exists
-	var exists_check bool
+	var existsCheck bool
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
-	).Scan(&exists_check)
+	).Scan(&existsCheck)
 
-	if err != nil || !exists_check {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+	if err != nil || !existsCheck {
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -696,7 +707,7 @@ func (svc *Service) RemoveSecurityGroup(c *gin.Context) {
 	).Scan(&sgID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "security group not found"})
+		common.SendError(c, common.NewNotFoundError("security group"))
 		return
 	}
 
@@ -708,12 +719,13 @@ func (svc *Service) RemoveSecurityGroup(c *gin.Context) {
 	).Scan(&isAssociated)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "check_sg_association_remove").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to check security group association"))
 		return
 	}
 
 	if !isAssociated {
-		c.JSON(http.StatusNotFound, gin.H{"error": "security group not associated with instance"})
+		common.SendError(c, common.NewNotFoundError("security group association"))
 		return
 	}
 
@@ -725,12 +737,13 @@ func (svc *Service) RemoveSecurityGroup(c *gin.Context) {
 	).Scan(&sgCount)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "count_sg_associations").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to count security groups"))
 		return
 	}
 
 	if sgCount <= 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove last security group from instance"})
+		common.SendError(c, common.NewBadRequestError("cannot remove last security group from instance"))
 		return
 	}
 
@@ -741,7 +754,8 @@ func (svc *Service) RemoveSecurityGroup(c *gin.Context) {
 	`, instanceID, sgID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "remove_sg_from_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to remove security group"))
 		return
 	}
 
@@ -758,19 +772,19 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	// Get action data from context
 	actionData, exists := c.Get("action_data")
 	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing changePassword data"})
+		common.SendError(c, common.NewBadRequestError("missing changePassword data"))
 		return
 	}
 
 	changePassMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid changePassword data"})
+		common.SendError(c, common.NewBadRequestError("invalid changePassword data"))
 		return
 	}
 
 	adminPass, ok := changePassMap["adminPass"].(string)
 	if !ok || adminPass == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing adminPass"})
+		common.SendError(c, common.NewBadRequestError("missing adminPass"))
 		return
 	}
 
@@ -782,26 +796,27 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Can only change password on ACTIVE instances
 	if status != "ACTIVE" {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot change password for instance in %s state", status)})
+		common.SendError(c, common.NewInvalidStateError(fmt.Sprintf("cannot change password for instance in %s state", status)))
 		return
 	}
 
 	// Validate password strength (minimum 8 characters)
 	if len(adminPass) < 8 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
+		common.SendError(c, common.NewBadRequestError("password must be at least 8 characters"))
 		return
 	}
 
 	// Hash password using bcrypt
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		log.Error().Err(err).Str("operation", "hash_password").Msg("bcrypt error")
+		common.SendError(c, common.NewInternalServerError("failed to hash password"))
 		return
 	}
 
@@ -813,7 +828,8 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	`, string(hashedPassword), time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_password").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update password"))
 		return
 	}
 
@@ -835,12 +851,12 @@ func (svc *Service) RestoreInstance(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	if status != "SOFT_DELETED" {
-		c.JSON(http.StatusConflict, gin.H{"error": "instance is not soft-deleted"})
+		common.SendError(c, common.NewInvalidStateError("instance is not soft-deleted"))
 		return
 	}
 
@@ -852,7 +868,8 @@ func (svc *Service) RestoreInstance(c *gin.Context) {
 	`, "SHUTOFF", 4, time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "restore_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to restore instance"))
 		return
 	}
 
@@ -867,19 +884,19 @@ func (svc *Service) CreateBackupAction(c *gin.Context) {
 	// Get action data from context
 	actionData, exists := c.Get("action_data")
 	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing createBackup data"})
+		common.SendError(c, common.NewBadRequestError("missing createBackup data"))
 		return
 	}
 
 	backupMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid createBackup data"})
+		common.SendError(c, common.NewBadRequestError("invalid createBackup data"))
 		return
 	}
 
 	backupName, ok := backupMap["name"].(string)
 	if !ok || backupName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup name"})
+		common.SendError(c, common.NewBadRequestError("missing backup name"))
 		return
 	}
 
@@ -901,7 +918,7 @@ func (svc *Service) CreateBackupAction(c *gin.Context) {
 	).Scan(&sourceImageID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -919,7 +936,8 @@ func (svc *Service) CreateBackupAction(c *gin.Context) {
 	`, backupImageID, fullImageName, projectID, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create backup image: %v", err)})
+		log.Error().Err(err).Str("operation", "create_backup_image").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create backup image"))
 		return
 	}
 
@@ -984,43 +1002,38 @@ func (svc *Service) ResetStateAction(c *gin.Context) {
 		}
 	}
 	if !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
-			"forbidden": gin.H{
-				"message": "Policy doesn't allow os-resetState to be performed",
-				"code":    403,
-			},
-		})
+		common.SendError(c, common.NewForbiddenError("Policy doesn't allow os-resetState to be performed"))
 		return
 	}
 
 	// Get action data from context
 	actionData, exists := c.Get("action_data")
 	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing os-resetState data"})
+		common.SendError(c, common.NewBadRequestError("missing os-resetState data"))
 		return
 	}
 
 	resetMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid os-resetState data"})
+		common.SendError(c, common.NewBadRequestError("invalid os-resetState data"))
 		return
 	}
 
 	state, ok := resetMap["state"].(string)
 	if !ok || state == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing state"})
+		common.SendError(c, common.NewBadRequestError("missing state"))
 		return
 	}
 
 	// Verify instance exists
-	var exists_check bool
+	var existsCheck bool
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
-	).Scan(&exists_check)
+	).Scan(&existsCheck)
 
-	if err != nil || !exists_check {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+	if err != nil || !existsCheck {
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -1039,7 +1052,8 @@ func (svc *Service) ResetStateAction(c *gin.Context) {
 	`, statusUpper, time.Now(), instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "reset_state").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to reset instance state"))
 		return
 	}
 
@@ -1052,14 +1066,14 @@ func (svc *Service) ResetNetworkAction(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Verify instance exists
-	var exists_check bool
+	var existsCheck bool
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
-	).Scan(&exists_check)
+	).Scan(&existsCheck)
 
-	if err != nil || !exists_check {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+	if err != nil || !existsCheck {
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 

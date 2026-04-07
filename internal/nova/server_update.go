@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // UpdateServer handles PATCH /v2.1/servers/:id
@@ -22,11 +24,7 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -50,19 +48,12 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 	)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "Instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "get_server_for_update").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get server"))
 		return
 	}
 
@@ -97,26 +88,23 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 
 		_, err = database.DB.Exec(c.Request.Context(), query, params...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "update_server").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to update server"))
 			return
 		}
 	}
 
 	// Build response with full server details
 	server := gin.H{
-		"id":         instanceID,
-		"name":       currentName,
-		"status":     currentStatus,
-		"tenant_id":  projectID,
-		"user_id":    projectID, // Simplified
-		"created":    createdAt.Format(time.RFC3339),
-		"updated":    time.Now().Format(time.RFC3339),
-		"hostId":     "",
-		"addresses":  gin.H{},
+		"id":        instanceID,
+		"name":      currentName,
+		"status":    currentStatus,
+		"tenant_id": projectID,
+		"user_id":   projectID, // Simplified
+		"created":   createdAt.Format(time.RFC3339),
+		"updated":   time.Now().Format(time.RFC3339),
+		"hostId":    "",
+		"addresses": gin.H{},
 		"links": []gin.H{
 			{
 				"href": c.Request.Host + "/v2.1/servers/" + instanceID,

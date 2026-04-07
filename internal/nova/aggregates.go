@@ -7,10 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListAggregates lists all host aggregates
@@ -21,7 +23,8 @@ func (svc *Service) ListAggregates(c *gin.Context) {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_aggregates").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list aggregates"))
 		return
 	}
 	defer rows.Close()
@@ -40,7 +43,8 @@ func (svc *Service) ListAggregates(c *gin.Context) {
 
 		err := rows.Scan(&id, &name, &availabilityZone, &metadata, &hosts, &createdAt, &updatedAt)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "scan_aggregate").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to read aggregates"))
 			return
 		}
 
@@ -77,7 +81,7 @@ func (svc *Service) CreateAggregate(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -95,7 +99,8 @@ func (svc *Service) CreateAggregate(c *gin.Context) {
 	`, aggregateUUID, req.Aggregate.Name, availabilityZone, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_aggregate").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create aggregate"))
 		return
 	}
 
@@ -132,11 +137,12 @@ func (svc *Service) GetAggregate(c *gin.Context) {
 	`, aggregateID).Scan(&name, &availabilityZone, &metadata, &hosts, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "aggregate not found"})
+		common.SendError(c, common.NewNotFoundError("aggregate"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_aggregate").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get aggregate"))
 		return
 	}
 
@@ -173,7 +179,7 @@ func (svc *Service) UpdateAggregate(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -185,7 +191,7 @@ func (svc *Service) UpdateAggregate(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "aggregate not found"})
+		common.SendError(c, common.NewNotFoundError("aggregate"))
 		return
 	}
 
@@ -207,7 +213,7 @@ func (svc *Service) UpdateAggregate(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -218,7 +224,8 @@ func (svc *Service) UpdateAggregate(c *gin.Context) {
 	_, err = database.DB.Exec(c.Request.Context(), query, args...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_aggregate").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update aggregate"))
 		return
 	}
 
@@ -236,12 +243,13 @@ func (svc *Service) DeleteAggregate(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_aggregate").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete aggregate"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "aggregate not found"})
+		common.SendError(c, common.NewNotFoundError("aggregate"))
 		return
 	}
 
@@ -254,7 +262,7 @@ func (svc *Service) AggregateAction(c *gin.Context) {
 
 	var req map[string]interface{}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -273,20 +281,20 @@ func (svc *Service) AggregateAction(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+	common.SendError(c, common.NewBadRequestError("unknown action"))
 }
 
 // AddHostToAggregate adds a host to an aggregate
 func (svc *Service) AddHostToAggregate(c *gin.Context, aggregateID string, actionData interface{}) {
 	actionMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid add_host data"})
+		common.SendError(c, common.NewBadRequestError("invalid add_host data"))
 		return
 	}
 
 	hostName, ok := actionMap["host"].(string)
 	if !ok || hostName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "host name required"})
+		common.SendError(c, common.NewBadRequestError("host name required"))
 		return
 	}
 
@@ -298,18 +306,19 @@ func (svc *Service) AddHostToAggregate(c *gin.Context, aggregateID string, actio
 	).Scan(&hosts)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "aggregate not found"})
+		common.SendError(c, common.NewNotFoundError("aggregate"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_aggregate_hosts").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get aggregate"))
 		return
 	}
 
 	// Add host if not already present
 	for _, h := range hosts {
 		if h == hostName {
-			c.JSON(http.StatusConflict, gin.H{"error": "host already in aggregate"})
+			common.SendError(c, common.NewConflictError("host already in aggregate"))
 			return
 		}
 	}
@@ -323,7 +332,8 @@ func (svc *Service) AddHostToAggregate(c *gin.Context, aggregateID string, actio
 	`, hosts, time.Now(), aggregateID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_host_to_aggregate").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to add host to aggregate"))
 		return
 	}
 
@@ -334,13 +344,13 @@ func (svc *Service) AddHostToAggregate(c *gin.Context, aggregateID string, actio
 func (svc *Service) RemoveHostFromAggregate(c *gin.Context, aggregateID string, actionData interface{}) {
 	actionMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remove_host data"})
+		common.SendError(c, common.NewBadRequestError("invalid remove_host data"))
 		return
 	}
 
 	hostName, ok := actionMap["host"].(string)
 	if !ok || hostName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "host name required"})
+		common.SendError(c, common.NewBadRequestError("host name required"))
 		return
 	}
 
@@ -352,11 +362,12 @@ func (svc *Service) RemoveHostFromAggregate(c *gin.Context, aggregateID string, 
 	).Scan(&hosts)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "aggregate not found"})
+		common.SendError(c, common.NewNotFoundError("aggregate"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_aggregate_hosts_remove").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get aggregate"))
 		return
 	}
 
@@ -372,7 +383,7 @@ func (svc *Service) RemoveHostFromAggregate(c *gin.Context, aggregateID string, 
 	}
 
 	if !found {
-		c.JSON(http.StatusNotFound, gin.H{"error": "host not in aggregate"})
+		common.SendError(c, common.NewNotFoundError("host in aggregate"))
 		return
 	}
 
@@ -383,7 +394,8 @@ func (svc *Service) RemoveHostFromAggregate(c *gin.Context, aggregateID string, 
 	`, newHosts, time.Now(), aggregateID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "remove_host_from_aggregate").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to remove host from aggregate"))
 		return
 	}
 
@@ -394,13 +406,13 @@ func (svc *Service) RemoveHostFromAggregate(c *gin.Context, aggregateID string, 
 func (svc *Service) SetAggregateMetadata(c *gin.Context, aggregateID string, actionData interface{}) {
 	actionMap, ok := actionData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid set_metadata data"})
+		common.SendError(c, common.NewBadRequestError("invalid set_metadata data"))
 		return
 	}
 
 	metadata, ok := actionMap["metadata"].(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "metadata required"})
+		common.SendError(c, common.NewBadRequestError("metadata required"))
 		return
 	}
 
@@ -412,7 +424,7 @@ func (svc *Service) SetAggregateMetadata(c *gin.Context, aggregateID string, act
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "aggregate not found"})
+		common.SendError(c, common.NewNotFoundError("aggregate"))
 		return
 	}
 
@@ -424,7 +436,8 @@ func (svc *Service) SetAggregateMetadata(c *gin.Context, aggregateID string, act
 	`, metadata, time.Now(), aggregateID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "set_aggregate_metadata").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to set aggregate metadata"))
 		return
 	}
 

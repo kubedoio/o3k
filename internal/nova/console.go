@@ -10,6 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -28,11 +30,7 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 
 	var req GetConsoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -46,11 +44,7 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -58,7 +52,8 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 	if vncPort == 0 || vncPassword == "" {
 		vncPort, vncPassword, err = svc.setupVNCConsole(c.Request.Context(), instanceID, libvirtDomainID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to setup console: %v", err)})
+			log.Error().Err(err).Str("operation", "setup_vnc_console").Msg("console setup error")
+			common.SendError(c, common.NewInternalServerError("failed to setup console"))
 			return
 		}
 	}
@@ -78,11 +73,7 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 		// Serial console
 		consoleURL = fmt.Sprintf("ws://localhost:6083/?token=%s", generateConsoleToken(instanceID))
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": fmt.Sprintf("unsupported console type: %s", req.RemoteConsole.Type),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError(fmt.Sprintf("unsupported console type: %s", req.RemoteConsole.Type)))
 		return
 	}
 
@@ -107,7 +98,7 @@ func (svc *Service) GetVNCConsole(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -122,7 +113,7 @@ func (svc *Service) GetVNCConsoleAction(c *gin.Context, vncConsole interface{}) 
 	// Parse the already-parsed action body
 	consoleMap, ok := vncConsole.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid console request"})
+		common.SendError(c, common.NewBadRequestError("invalid console request"))
 		return
 	}
 
@@ -147,7 +138,7 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -155,7 +146,8 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 	if vncPort == 0 || vncPassword == "" {
 		vncPort, vncPassword, err = svc.setupVNCConsole(c.Request.Context(), instanceID, libvirtDomainID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to setup console: %v", err)})
+			log.Error().Err(err).Str("operation", "setup_vnc_console_action").Msg("console setup error")
+			common.SendError(c, common.NewInternalServerError("failed to setup console"))
 			return
 		}
 	}
@@ -237,7 +229,7 @@ func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interfa
 	).Scan(&id)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -279,7 +271,7 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 	).Scan(&id)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -316,7 +308,7 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 	).Scan(&id)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -353,7 +345,7 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 	).Scan(&id)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -376,4 +368,3 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 		},
 	})
 }
-

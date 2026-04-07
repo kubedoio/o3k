@@ -3,10 +3,12 @@ package nova
 import (
 	"net/http"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/rs/zerolog/log"
 )
 
 // CreateFlavor handles POST /v2.1/flavors
@@ -23,33 +25,21 @@ func (svc *Service) CreateFlavor(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": err.Error(),
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
 	// Validate input ranges
 	if req.Flavor.RAM < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": "RAM must be non-negative",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("RAM must be non-negative"))
 		return
 	}
 	if req.Flavor.VCPUs < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": "VCPUs must be non-negative",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("VCPUs must be non-negative"))
 		return
 	}
 	if req.Flavor.Disk < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": "Disk must be non-negative",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("Disk must be non-negative"))
 		return
 	}
 
@@ -70,13 +60,11 @@ func (svc *Service) CreateFlavor(c *gin.Context) {
 	if err != nil {
 		// Check for unique constraint violation (duplicate name)
 		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
-			c.JSON(http.StatusConflict, gin.H{"conflictingRequest": gin.H{
-				"message": "Flavor with name '" + req.Flavor.Name + "' already exists",
-				"code":    409,
-			}})
+			common.SendError(c, common.NewConflictError("Flavor with name '"+req.Flavor.Name+"' already exists"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_flavor").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create flavor"))
 		return
 	}
 
@@ -111,16 +99,14 @@ func (svc *Service) DeleteFlavor(c *gin.Context) {
 		flavorID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_flavor").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete flavor"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"itemNotFound": gin.H{
-			"message": "Flavor not found",
-			"code":    404,
-		}})
+		common.SendError(c, common.NewNotFoundError("flavor"))
 		return
 	}
 
@@ -142,7 +128,8 @@ func (svc *Service) GetFlavorExtraSpecs(c *gin.Context) {
 		flavorID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_flavor_extra_specs").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get extra specs"))
 		return
 	}
 	defer rows.Close()
@@ -168,10 +155,7 @@ func (svc *Service) CreateFlavorExtraSpecs(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": err.Error(),
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -184,7 +168,8 @@ func (svc *Service) CreateFlavorExtraSpecs(c *gin.Context) {
 			flavorID, key, value,
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "create_flavor_extra_specs").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to create extra spec"))
 			return
 		}
 	}
@@ -204,10 +189,7 @@ func (svc *Service) GetFlavorExtraSpecKey(c *gin.Context) {
 	).Scan(&value)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"itemNotFound": gin.H{
-			"message": "Extra spec key not found",
-			"code":    404,
-		}})
+		common.SendError(c, common.NewNotFoundError("extra spec key"))
 		return
 	}
 
@@ -221,20 +203,14 @@ func (svc *Service) UpdateFlavorExtraSpecKey(c *gin.Context) {
 
 	var req map[string]string
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": err.Error(),
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
 	// Extract value for the specific key
 	value, ok := req[key]
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": "Key in URL must match key in request body",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("Key in URL must match key in request body"))
 		return
 	}
 
@@ -246,7 +222,8 @@ func (svc *Service) UpdateFlavorExtraSpecKey(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_flavor_extra_spec_key").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update extra spec"))
 		return
 	}
 
@@ -264,15 +241,13 @@ func (svc *Service) DeleteFlavorExtraSpecKey(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_flavor_extra_spec_key").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete extra spec"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"itemNotFound": gin.H{
-			"message": "Extra spec key not found",
-			"code":    404,
-		}})
+		common.SendError(c, common.NewNotFoundError("extra spec key"))
 		return
 	}
 
@@ -285,10 +260,7 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 
 	var req map[string]interface{}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": err.Error(),
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -296,10 +268,7 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 	if addAccess, ok := req["addTenantAccess"].(map[string]interface{}); ok {
 		tenantID, ok := addAccess["tenant"].(string)
 		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-				"message": "tenant is required",
-				"code":    400,
-			}})
+			common.SendError(c, common.NewBadRequestError("tenant is required"))
 			return
 		}
 
@@ -311,7 +280,8 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 		)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "add_tenant_access").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to add tenant access"))
 			return
 		}
 
@@ -328,10 +298,7 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 	if removeAccess, ok := req["removeTenantAccess"].(map[string]interface{}); ok {
 		tenantID, ok := removeAccess["tenant"].(string)
 		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-				"message": "tenant is required",
-				"code":    400,
-			}})
+			common.SendError(c, common.NewBadRequestError("tenant is required"))
 			return
 		}
 
@@ -341,7 +308,8 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 		)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "remove_tenant_access").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to remove tenant access"))
 			return
 		}
 
@@ -349,10 +317,7 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-		"message": "Unknown action",
-		"code":    400,
-	}})
+	common.SendError(c, common.NewBadRequestError("Unknown action"))
 }
 
 // GetFlavorAccess handles GET /v2.1/flavors/:id/os-flavor-access
@@ -364,7 +329,8 @@ func (svc *Service) GetFlavorAccess(c *gin.Context) {
 		flavorID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_flavor_access").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get flavor access"))
 		return
 	}
 	defer rows.Close()

@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ListMigrations handles GET /v2.1/:project_id/os-migrations
@@ -20,7 +22,8 @@ func (svc *Service) ListMigrations(c *gin.Context) {
 	`)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_migrations").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list migrations"))
 		return
 	}
 	defer rows.Close()
@@ -39,14 +42,14 @@ func (svc *Service) ListMigrations(c *gin.Context) {
 		}
 
 		migration := map[string]interface{}{
-			"id":              id.String(),
-			"server_uuid":     serverUUID.String(),
-			"source_node":     sourceNode,
-			"dest_node":       destNode,
-			"status":          status,
-			"migration_type":  migrationType,
-			"created_at":      createdAt.Format(time.RFC3339),
-			"updated_at":      updatedAt.Format(time.RFC3339),
+			"id":             id.String(),
+			"server_uuid":    serverUUID.String(),
+			"source_node":    sourceNode,
+			"dest_node":      destNode,
+			"status":         status,
+			"migration_type": migrationType,
+			"created_at":     createdAt.Format(time.RFC3339),
+			"updated_at":     updatedAt.Format(time.RFC3339),
 		}
 
 		if oldFlavorID != nil {
@@ -75,7 +78,8 @@ func (svc *Service) ListServerMigrations(c *gin.Context) {
 	`, serverID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_server_migrations").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list server migrations"))
 		return
 	}
 	defer rows.Close()
@@ -94,14 +98,14 @@ func (svc *Service) ListServerMigrations(c *gin.Context) {
 		}
 
 		migration := map[string]interface{}{
-			"id":              id.String(),
-			"server_uuid":     serverUUID.String(),
-			"source_node":     sourceNode,
-			"dest_node":       destNode,
-			"status":          status,
-			"migration_type":  migrationType,
-			"created_at":      createdAt.Format(time.RFC3339),
-			"updated_at":      updatedAt.Format(time.RFC3339),
+			"id":             id.String(),
+			"server_uuid":    serverUUID.String(),
+			"source_node":    sourceNode,
+			"dest_node":      destNode,
+			"status":         status,
+			"migration_type": migrationType,
+			"created_at":     createdAt.Format(time.RFC3339),
+			"updated_at":     updatedAt.Format(time.RFC3339),
 		}
 
 		if oldFlavorID != nil {
@@ -136,19 +140,19 @@ func (svc *Service) GetServerMigration(c *gin.Context) {
 		&status, &migrationType, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Migration not found"})
+		common.SendError(c, common.NewNotFoundError("migration"))
 		return
 	}
 
 	migration := map[string]interface{}{
-		"id":              id.String(),
-		"server_uuid":     serverUUID.String(),
-		"source_node":     sourceNode,
-		"dest_node":       destNode,
-		"status":          status,
-		"migration_type":  migrationType,
-		"created_at":      createdAt.Format(time.RFC3339),
-		"updated_at":      updatedAt.Format(time.RFC3339),
+		"id":             id.String(),
+		"server_uuid":    serverUUID.String(),
+		"source_node":    sourceNode,
+		"dest_node":      destNode,
+		"status":         status,
+		"migration_type": migrationType,
+		"created_at":     createdAt.Format(time.RFC3339),
+		"updated_at":     updatedAt.Format(time.RFC3339),
 	}
 
 	if oldFlavorID != nil {
@@ -173,12 +177,13 @@ func (svc *Service) DeleteServerMigration(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_server_migration").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete migration"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Migration not found"})
+		common.SendError(c, common.NewNotFoundError("migration"))
 		return
 	}
 
@@ -192,7 +197,7 @@ func (svc *Service) ServerMigrationAction(c *gin.Context) {
 
 	var req map[string]interface{}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -206,12 +211,13 @@ func (svc *Service) ServerMigrationAction(c *gin.Context) {
 		`, "completed", time.Now(), migrationID, serverID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "force_complete_migration").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to complete migration"))
 			return
 		}
 
 		if result.RowsAffected() == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Migration not found"})
+			common.SendError(c, common.NewNotFoundError("migration"))
 			return
 		}
 
@@ -219,5 +225,5 @@ func (svc *Service) ServerMigrationAction(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown action"})
+	common.SendError(c, common.NewBadRequestError("Unknown action"))
 }

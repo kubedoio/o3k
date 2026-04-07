@@ -2,7 +2,6 @@ package nova
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"time"
@@ -10,6 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/hypervisor"
 )
@@ -38,11 +39,7 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 
 	var req AttachVolumeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -54,46 +51,30 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	).Scan(&libvirtDomainID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
 	// Verify volume exists and is available
 	var volumeStatus string
-	var attachedToInstance sql.NullString
+	var attachedToInstance interface{}
 	err = database.DB.QueryRow(c.Request.Context(),
 		"SELECT status, attached_to_instance_id FROM volumes WHERE id = $1 AND project_id = $2",
 		req.VolumeAttachment.VolumeID, projectID,
 	).Scan(&volumeStatus, &attachedToInstance)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "volume not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
 	if volumeStatus != "available" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": fmt.Sprintf("volume status is %s, must be available", volumeStatus),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError(fmt.Sprintf("volume status is %s, must be available", volumeStatus)))
 		return
 	}
 
-	if attachedToInstance.Valid {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "volume is already attached to an instance",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+	if attachedToInstance != nil {
+		common.SendError(c, common.NewBadRequestError("volume is already attached to an instance"))
 		return
 	}
 
@@ -102,7 +83,8 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	if device == "" {
 		device, err = svc.getNextAvailableDevice(c.Request.Context(), instanceID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "get_next_device").Msg("device assignment error")
+			common.SendError(c, common.NewInternalServerError("failed to assign device"))
 			return
 		}
 	}
@@ -117,7 +99,8 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	`, attachmentID, req.VolumeAttachment.VolumeID, instanceID, device, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_volume_attachment").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create volume attachment"))
 		return
 	}
 
@@ -131,7 +114,8 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	if err != nil {
 		// Rollback attachment
 		database.DB.Exec(c.Request.Context(), "DELETE FROM volume_attachments WHERE id = $1", attachmentID)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_volume_status").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update volume status"))
 		return
 	}
 
@@ -195,11 +179,7 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 	).Scan(&libvirtDomainID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -211,11 +191,7 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 	).Scan(&attachmentID, &device)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "volume attachment not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("volume attachment"))
 		return
 	}
 
@@ -240,7 +216,8 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 			})
 
 			if err := svc.vmManager.DetachDevice(ctx, libvirtDomainID, diskXML); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to detach disk: %v", err)})
+				log.Error().Err(err).Str("operation", "detach_disk_libvirt").Msg("libvirt error")
+				common.SendError(c, common.NewInternalServerError("failed to detach disk"))
 				return
 			}
 		}
@@ -253,7 +230,8 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_volume_attachment").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete volume attachment"))
 		return
 	}
 
@@ -266,7 +244,8 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 	`, "available", now, volumeID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_volume_status_detach").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update volume status"))
 		return
 	}
 
@@ -286,11 +265,7 @@ func (svc *Service) ListVolumeAttachments(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -303,7 +278,8 @@ func (svc *Service) ListVolumeAttachments(c *gin.Context) {
 	`, instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_volume_attachments").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list volume attachments"))
 		return
 	}
 	defer rows.Close()

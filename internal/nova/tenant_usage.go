@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // ListTenantUsage handles GET /v2.1/os-simple-tenant-usage
@@ -24,7 +26,8 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 		 GROUP BY i.project_id`,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_tenant_usage").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list tenant usage"))
 		return
 	}
 	defer rows.Close()

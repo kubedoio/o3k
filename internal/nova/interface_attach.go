@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/rs/zerolog/log"
 )
 
 // AttachInterfaceRequest represents a network interface attachment request
@@ -29,11 +31,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 	var req AttachInterfaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -45,11 +43,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 	).Scan(&libvirtDomainID, &status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -71,12 +65,12 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		).Scan(&networkID, &fixedIPsJSON, &macAddress, &deviceID)
 
 		if err == pgx.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "port not found"})
+			common.SendError(c, common.NewNotFoundError("port"))
 			return
 		}
 
 		if deviceID != "" {
-			c.JSON(http.StatusConflict, gin.H{"error": "port already attached to another device"})
+			common.SendError(c, common.NewConflictError("port already attached to another device"))
 			return
 		}
 
@@ -95,7 +89,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		).Scan(&networkExists)
 
 		if err != nil || !networkExists {
-			c.JSON(http.StatusNotFound, gin.H{"error": "network not found"})
+			common.SendError(c, common.NewNotFoundError("network"))
 			return
 		}
 
@@ -111,7 +105,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		).Scan(&cidr)
 
 		if err == pgx.ErrNoRows {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "network has no subnet"})
+			common.SendError(c, common.NewBadRequestError("network has no subnet"))
 			return
 		}
 
@@ -122,7 +116,8 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 			// Allocate next available IP from subnet
 			fixedIP, err = allocateNextIP(c.Request.Context(), networkID, cidr)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to allocate IP: %v", err)})
+				log.Error().Err(err).Str("operation", "allocate_ip").Msg("IP allocation error")
+				common.SendError(c, common.NewInternalServerError("failed to allocate IP"))
 				return
 			}
 		}
@@ -135,11 +130,12 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		`, portID, networkID, projectID, fmt.Sprintf("port-%s", portID[:8]), macAddress, fixedIPsJSON, instanceID, "compute:nova", "ACTIVE", time.Now(), time.Now())
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "create_port").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to create port"))
 			return
 		}
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "either net_id or port_id must be provided"})
+		common.SendError(c, common.NewBadRequestError("either net_id or port_id must be provided"))
 		return
 	}
 
@@ -151,7 +147,8 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 	`, instanceID, "compute:nova", "ACTIVE", time.Now(), portID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_port_attach").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to attach port"))
 		return
 	}
 
@@ -163,7 +160,8 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 	`, attachmentID, instanceID, portID, macAddress, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_interface_attachment").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create interface attachment"))
 		return
 	}
 
@@ -172,12 +170,12 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"interfaceAttachment": gin.H{
-			"id":          attachmentID,
-			"port_id":     portID,
-			"net_id":      networkID,
-			"fixed_ips":   []gin.H{{"ip_address": fixedIP}},
-			"mac_addr":    macAddress,
-			"port_state":  "ACTIVE",
+			"id":         attachmentID,
+			"port_id":    portID,
+			"net_id":     networkID,
+			"fixed_ips":  []gin.H{{"ip_address": fixedIP}},
+			"mac_addr":   macAddress,
+			"port_state": "ACTIVE",
 		},
 	})
 }
@@ -196,7 +194,7 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	).Scan(&instanceExists)
 
 	if err != nil || !instanceExists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -208,12 +206,12 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	).Scan(&attachedInstanceID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "port not found"})
+		common.SendError(c, common.NewNotFoundError("port"))
 		return
 	}
 
 	if attachedInstanceID != instanceID {
-		c.JSON(http.StatusConflict, gin.H{"error": "port not attached to this instance"})
+		common.SendError(c, common.NewConflictError("port not attached to this instance"))
 		return
 	}
 
@@ -224,7 +222,8 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_interface_attachment").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete interface attachment"))
 		return
 	}
 
@@ -236,7 +235,8 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	`, "DOWN", time.Now(), portID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_port_detach").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to detach port"))
 		return
 	}
 
@@ -259,7 +259,7 @@ func (svc *Service) ListInterfaceAttachments(c *gin.Context) {
 	).Scan(&instanceExists)
 
 	if err != nil || !instanceExists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -273,7 +273,8 @@ func (svc *Service) ListInterfaceAttachments(c *gin.Context) {
 	`, instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_interface_attachments").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list interface attachments"))
 		return
 	}
 	defer rows.Close()

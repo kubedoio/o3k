@@ -6,7 +6,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -34,7 +36,8 @@ func (svc *Service) GetQuotaSet(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_quota_set").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get quota set"))
 		return
 	}
 	defer rows.Close()
@@ -128,7 +131,7 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 
 	var req UpdateQuotaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -142,12 +145,7 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 		}
 	}
 	if !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": gin.H{
-				"code":    403,
-				"message": "Policy doesn't allow quota updates to be performed. Admin role required.",
-			},
-		})
+		common.SendError(c, common.NewForbiddenError("Policy doesn't allow quota updates to be performed. Admin role required."))
 		return
 	}
 
@@ -168,7 +166,8 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 		`, projectID, resource, limit, now, now)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "update_quota").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to update quota"))
 			return
 		}
 	}

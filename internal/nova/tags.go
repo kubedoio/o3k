@@ -3,8 +3,10 @@ package nova
 import (
 	"net/http"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // ListServerTags returns all tags for a server
@@ -20,7 +22,7 @@ func (svc *Service) ListServerTags(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
+		common.SendError(c, common.NewNotFoundError("server"))
 		return
 	}
 
@@ -30,7 +32,8 @@ func (svc *Service) ListServerTags(c *gin.Context) {
 		instanceID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_server_tags").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list server tags"))
 		return
 	}
 	defer rows.Close()
@@ -56,7 +59,7 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -68,7 +71,7 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
+		common.SendError(c, common.NewNotFoundError("server"))
 		return
 	}
 
@@ -78,7 +81,8 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 		instanceID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_server_tags").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete server tags"))
 		return
 	}
 
@@ -89,7 +93,8 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 			instanceID, tag,
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "insert_server_tag").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to insert server tag"))
 			return
 		}
 	}
@@ -111,7 +116,7 @@ func (svc *Service) AddServerTag(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
+		common.SendError(c, common.NewNotFoundError("server"))
 		return
 	}
 
@@ -121,7 +126,8 @@ func (svc *Service) AddServerTag(c *gin.Context) {
 		instanceID, tag,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_server_tag").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to add server tag"))
 		return
 	}
 
@@ -142,7 +148,7 @@ func (svc *Service) DeleteServerTag(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
+		common.SendError(c, common.NewNotFoundError("server"))
 		return
 	}
 
@@ -152,12 +158,13 @@ func (svc *Service) DeleteServerTag(c *gin.Context) {
 		instanceID, tag,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_server_tag").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete server tag"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "tag not found"})
+		common.SendError(c, common.NewNotFoundError("tag"))
 		return
 	}
 
@@ -177,7 +184,7 @@ func (svc *Service) DeleteAllServerTags(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
+		common.SendError(c, common.NewNotFoundError("server"))
 		return
 	}
 
@@ -187,7 +194,8 @@ func (svc *Service) DeleteAllServerTags(c *gin.Context) {
 		instanceID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_all_server_tags").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete server tags"))
 		return
 	}
 
