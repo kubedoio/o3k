@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -287,7 +286,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		c.String(http.StatusOK, instanceID)
 	case "hostname":
 		var hostname string
-		err := database.DB.QueryRow(context.Background(), `
+		err := database.DB.QueryRow(c.Request.Context(), `
 			SELECT name FROM instances WHERE id = $1
 		`, instanceID).Scan(&hostname)
 		if err == nil {
@@ -297,7 +296,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		}
 	case "instance-type":
 		var flavorName string
-		err := database.DB.QueryRow(context.Background(), `
+		err := database.DB.QueryRow(c.Request.Context(), `
 			SELECT f.name
 			FROM instances i
 			JOIN flavors f ON i.flavor_id = f.id
@@ -310,7 +309,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		}
 	case "local-ipv4":
 		var ip string
-		err := database.DB.QueryRow(context.Background(), `
+		err := database.DB.QueryRow(c.Request.Context(), `
 			SELECT fixed_ip FROM ports WHERE device_id = $1 LIMIT 1
 		`, instanceID).Scan(&ip)
 		if err == nil {
