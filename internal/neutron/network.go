@@ -1,9 +1,9 @@
 package neutron
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -1125,7 +1125,9 @@ func updateString(updates []string) string {
 
 func generateMAC() string {
 	buf := make([]byte, 6)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+	}
 	buf[0] = (buf[0] | 2) & 0xfe // Set local bit, clear multicast bit
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
 }
