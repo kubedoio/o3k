@@ -12,8 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -38,7 +40,8 @@ func (svc *Service) ListKeypairs(c *gin.Context) {
 	`, userID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_keypairs").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list keypairs"))
 		return
 	}
 	defer rows.Close()
@@ -84,11 +87,12 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 	`, userID, keypairName).Scan(&name, &publicKey, &fingerprint, &createdAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Keypair not found"})
+		common.SendError(c, common.NewNotFoundError("keypair"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_keypair").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get keypair"))
 		return
 	}
 
@@ -107,7 +111,7 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 func (svc *Service) CreateKeypair(c *gin.Context) {
 	var req CreateKeypairRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -123,7 +127,7 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 		// Calculate fingerprint
 		fp, err := calculateFingerprint(publicKey)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid public key: %v", err)})
+			common.SendError(c, common.NewBadRequestError(fmt.Sprintf("invalid public key: %v", err)))
 			return
 		}
 		fingerprint = fp
@@ -131,7 +135,8 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 		// Generate new keypair
 		pub, priv, fp, err := generateSSHKeyPair()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to generate keypair: %v", err)})
+			log.Error().Err(err).Str("operation", "generate_keypair").Msg("keypair generation error")
+			common.SendError(c, common.NewInternalServerError("failed to generate keypair"))
 			return
 		}
 		publicKey = pub
@@ -148,7 +153,7 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 
 	if err == nil {
 		// Keypair already exists
-		c.JSON(http.StatusConflict, gin.H{"error": "Keypair with this name already exists"})
+		common.SendError(c, common.NewConflictError("Keypair with this name already exists"))
 		return
 	}
 
@@ -160,7 +165,8 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 	`, userID, req.Keypair.Name, publicKey, fingerprint, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_keypair").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create keypair"))
 		return
 	}
 
@@ -190,12 +196,13 @@ func (svc *Service) DeleteKeypair(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_keypair").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete keypair"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Keypair not found"})
+		common.SendError(c, common.NewNotFoundError("keypair"))
 		return
 	}
 

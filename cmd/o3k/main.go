@@ -250,6 +250,12 @@ func main() {
 
 	log.Println("Shutting down servers...")
 
+	// Stop service background goroutines before closing HTTP servers
+	novaService.Shutdown()
+	log.Println("Nova background goroutines stopped")
+	cinderService.Shutdown()
+	log.Println("Cinder background goroutines stopped")
+
 	// Stop VXLAN services
 	if vxlanCoordinator != nil {
 		vxlanCoordinator.Stop()
@@ -275,9 +281,13 @@ func main() {
 
 func createKeystoneServer(cfg *common.Config, svc *keystone.Service) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
-	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	// Root version discovery
 	r.GET("/", func(c *gin.Context) {
@@ -306,10 +316,14 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service) *http.Serve
 
 func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keystone.AuthService) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
-	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	svc.RegisterRoutes(r.Group(""))
 
@@ -321,10 +335,14 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 
 func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *keystone.AuthService) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
-	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	svc.RegisterRoutes(r.Group(""))
 
@@ -336,10 +354,14 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 
 func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *keystone.AuthService) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
-	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	svc.RegisterRoutes(r.Group(""))
 
@@ -351,9 +373,13 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 
 func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *keystone.AuthService) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
-	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	// Version discovery endpoints (no auth required per OpenStack spec)
 	root := r.Group("")
@@ -373,9 +399,13 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 
 func createPlacementServer(cfg *common.Config, svc *placement.Service, authService *keystone.AuthService) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.AuthMiddleware(authService))
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	svc.RegisterRoutes(r.Group(""))
 
@@ -387,9 +417,13 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 
 func createMetadataServer(svc *metadata.Service) *http.Server {
 	r := gin.New()
+	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
 	// No auth middleware - metadata service uses instance IP identification
+	r.NoRoute(middleware.NotFoundHandler())
+	r.HandleMethodNotAllowed = true
+	r.NoMethod(middleware.MethodNotAllowedHandler())
 
 	svc.RegisterRoutes(r.Group(""))
 

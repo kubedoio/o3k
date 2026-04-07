@@ -1,14 +1,15 @@
 package metadata
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
-	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/rs/zerolog/log"
 )
 
 // Service handles EC2-compatible metadata service endpoints
@@ -74,7 +75,7 @@ func (svc *Service) instanceFromRequest(c *gin.Context) (string, error) {
 func (svc *Service) GetMetaDataJSON(c *gin.Context) {
 	instanceID, err := svc.instanceFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -87,11 +88,12 @@ func (svc *Service) GetMetaDataJSON(c *gin.Context) {
 	`, instanceID).Scan(&uuid, &name, &hostname, &projectID, &userID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_metadata_json").Str("instance_id", instanceID).Msg("failed to query instance")
+		common.SendError(c, common.NewInternalServerError("failed to get instance metadata"))
 		return
 	}
 
@@ -183,7 +185,7 @@ func (svc *Service) GetUserData(c *gin.Context) {
 func (svc *Service) GetNetworkDataJSON(c *gin.Context) {
 	instanceID, err := svc.instanceFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -198,7 +200,8 @@ func (svc *Service) GetNetworkDataJSON(c *gin.Context) {
 	`, instanceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_network_data_json").Str("instance_id", instanceID).Msg("failed to query instance ports")
+		common.SendError(c, common.NewInternalServerError("failed to get network data"))
 		return
 	}
 	defer rows.Close()
@@ -283,7 +286,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		c.String(http.StatusOK, instanceID)
 	case "hostname":
 		var hostname string
-		err := database.DB.QueryRow(context.Background(), `
+		err := database.DB.QueryRow(c.Request.Context(), `
 			SELECT name FROM instances WHERE id = $1
 		`, instanceID).Scan(&hostname)
 		if err == nil {
@@ -293,7 +296,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		}
 	case "instance-type":
 		var flavorName string
-		err := database.DB.QueryRow(context.Background(), `
+		err := database.DB.QueryRow(c.Request.Context(), `
 			SELECT f.name
 			FROM instances i
 			JOIN flavors f ON i.flavor_id = f.id
@@ -306,7 +309,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		}
 	case "local-ipv4":
 		var ip string
-		err := database.DB.QueryRow(context.Background(), `
+		err := database.DB.QueryRow(c.Request.Context(), `
 			SELECT fixed_ip FROM ports WHERE device_id = $1 LIMIT 1
 		`, instanceID).Scan(&ip)
 		if err == nil {

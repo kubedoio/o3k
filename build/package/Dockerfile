@@ -66,7 +66,7 @@ RUN chown -R o3k:o3k /app
 # The container must be run with privileged: true for real networking mode
 
 # Expose ports
-EXPOSE 5000 8774 9696 8776 9292 8775
+EXPOSE 35357 8774 9696 8776 9292 8775
 
 # Health check (use internal port 35357)
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \

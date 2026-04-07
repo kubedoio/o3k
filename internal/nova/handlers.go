@@ -2,17 +2,18 @@ package nova
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/middleware"
 	"github.com/cobaltcore-dev/o3k/internal/neutron"
@@ -27,7 +28,15 @@ type Service struct {
 	vmManager     *hypervisor.VMManager
 	cache         *cache.Cache
 	neutronSvc    NeutronService // For port allocation
+	wg            sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
+
+const (
+	novaMinVersion     = "2.1"
+	novaCurrentVersion = "2.90"
+)
 
 // NeutronService defines the interface for Neutron operations Nova needs
 type NeutronService interface {
@@ -36,12 +45,21 @@ type NeutronService interface {
 
 // NewService creates a new Nova service
 func NewService(libvirtURI, libvirtMode string, cacheInstance *cache.Cache) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		libvirtURI:  libvirtURI,
 		libvirtMode: libvirtMode,
 		cache:       cacheInstance,
 		neutronSvc:  nil, // Set via SetNeutronService after initialization
+		ctx:         ctx,
+		cancel:      cancel,
 	}
+}
+
+// Shutdown signals all background goroutines to stop and waits for them.
+func (svc *Service) Shutdown() {
+	svc.cancel()
+	svc.wg.Wait()
 }
 
 // SetNeutronService sets the Neutron service reference (called after both services are created)
@@ -187,10 +205,10 @@ func (svc *Service) ListVersions(c *gin.Context) {
 			{
 				"id":          "v2.1",
 				"status":      "CURRENT",
-				"version":     "2.79",
-				"min_version": "2.1",
+				"version":     novaCurrentVersion,
+				"min_version": novaMinVersion,
 				"links": []gin.H{
-					{"rel": "self", "href": "http://localhost:8774/v2.1"},
+					{"rel": "self", "href": fmt.Sprintf("%s/v2.1", common.BaseURL(c, 8774))},
 				},
 			},
 		},
@@ -199,14 +217,14 @@ func (svc *Service) ListVersions(c *gin.Context) {
 
 // GetVersion returns version details
 func (svc *Service) GetVersion(c *gin.Context) {
-	c.Header("OpenStack-API-Version", "compute 2.90")
-	c.Header("OpenStack-API-Minimum-Version", "compute 2.1")
+	c.Header("OpenStack-API-Version", "compute "+novaCurrentVersion)
+	c.Header("OpenStack-API-Minimum-Version", "compute "+novaMinVersion)
 	c.JSON(200, gin.H{
 		"version": gin.H{
 			"id":          "v2.1",
 			"status":      "CURRENT",
-			"version":     "2.90",
-			"min_version": "2.1",
+			"version":     novaCurrentVersion,
+			"min_version": novaMinVersion,
 		},
 	})
 }
@@ -232,11 +250,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	var req CreateServerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warn().Err(err).Msg("Invalid request body for server creation")
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -257,59 +271,47 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	if err == pgx.ErrNoRows {
 		logger.Warn().Str("flavor_ref", req.Server.FlavorRef).Msg("Flavor not found")
 		middleware.LogOperationEnd(c, "create", "server", req.Server.Name, time.Since(start), err)
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "flavor not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("flavor"))
 		return
 	}
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to query flavor")
 		middleware.LogOperationEnd(c, "create", "server", req.Server.Name, time.Since(start), err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "query_flavor").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to query flavor"))
 		return
 	}
 
 	// Check quotas before creating instance
 	if err := CheckQuota(c, "instances", 1); err != nil {
 		if _, ok := err.(*QuotaExceededError); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{
-				"message": "Quota exceeded for resource: instances",
-				"code":    413,
-				"title":   "Request Entity Too Large",
-			}})
+			common.SendError(c, common.NewQuotaExceededError("instances"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "check_quota_instances").Msg("quota check error")
+		common.SendError(c, common.NewInternalServerError("failed to check quota"))
 		return
 	}
 
 	// Check cores quota
 	if err := CheckQuota(c, "cores", flavor.VCPUs); err != nil {
 		if _, ok := err.(*QuotaExceededError); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{
-				"message": "Quota exceeded for resource: cores",
-				"code":    413,
-				"title":   "Request Entity Too Large",
-			}})
+			common.SendError(c, common.NewQuotaExceededError("cores"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "check_quota_cores").Msg("quota check error")
+		common.SendError(c, common.NewInternalServerError("failed to check quota"))
 		return
 	}
 
 	// Check RAM quota
 	if err := CheckQuota(c, "ram", flavor.RAMMB); err != nil {
 		if _, ok := err.(*QuotaExceededError); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{
-				"message": "Quota exceeded for resource: ram",
-				"code":    413,
-				"title":   "Request Entity Too Large",
-			}})
+			common.SendError(c, common.NewQuotaExceededError("ram"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "check_quota_ram").Msg("quota check error")
+		common.SendError(c, common.NewInternalServerError("failed to check quota"))
 		return
 	}
 
@@ -337,7 +339,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	if err != nil {
 		logger.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create instance in database")
 		middleware.LogOperationEnd(c, "create", "server", instanceID, time.Since(start), err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "insert_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create instance"))
 		return
 	}
 
@@ -345,41 +348,44 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Log instance action
 	requestID := uuid.New().String()
-	_, _ = database.DB.Exec(c.Request.Context(), `
+	if _, err := database.DB.Exec(c.Request.Context(), `
 		INSERT INTO instance_actions (instance_id, action, request_id, user_id, project_id, start_time, message)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, instanceID, "create", requestID, userID, projectID, now, "Instance created")
+	`, instanceID, "create", requestID, userID, projectID, now, "Instance created"); err != nil {
+		log.Debug().Err(err).Str("instance_id", instanceID).Msg("failed to log instance action (non-critical)")
+	}
 
 	// Create VM asynchronously (or synchronously if libvirt is available)
 	if svc.vmManager != nil {
 		logger.Info().Str("instance_id", instanceID).Msg("Starting VM creation via libvirt")
+		svc.wg.Add(1)
 		go func() {
+			defer svc.wg.Done()
 			// Recover from panics in goroutine
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("PANIC in VM creation goroutine for instance %s: %v", instanceID, r)
+					log.Error().Interface("panic", r).Str("instance_id", instanceID).Msg("PANIC in VM creation goroutine")
 					database.DB.Exec(context.Background(),
 						"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3",
 						"ERROR", time.Now(), instanceID)
 				}
 			}()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(svc.ctx, 30*time.Second)
 			defer cancel()
 
-			log.Printf("DEBUG: VM creation goroutine started for instance %s", instanceID)
+			log.Debug().Str("instance_id", instanceID).Msg("VM creation goroutine started")
 			libvirtStart := time.Now()
 
 			// Allocate ports from Neutron for requested networks
-			log.Printf("DEBUG: Allocating ports for instance %s (network count: %d)", instanceID, len(req.Server.Networks))
+			log.Debug().Str("instance_id", instanceID).Int("network_count", len(req.Server.Networks)).Msg("Allocating ports")
 			var networks []hypervisor.NetworkConfig
 			if svc.neutronSvc != nil && len(req.Server.Networks) > 0 {
 				for _, network := range req.Server.Networks {
-					log.Printf("DEBUG: Allocating port for network %s", network.UUID)
+					log.Debug().Str("network_id", network.UUID).Msg("Allocating port for network")
 					portInfoRaw, err := svc.neutronSvc.AllocatePortForInstance(ctx, network.UUID, projectID, instanceID)
 					if err != nil {
-						log.Printf("ERROR: Failed to allocate port from Neutron: %v", err)
-						logger.Error().Err(err).
+						log.Error().Err(err).
 							Str("instance_id", instanceID).
 							Str("network_id", network.UUID).
 							Msg("Failed to allocate port from Neutron")
@@ -433,7 +439,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			}
 
 			// Generate VM XML
-			log.Printf("DEBUG: Generating VM XML for instance %s", instanceID)
+			log.Debug().Str("instance_id", instanceID).Msg("Generating VM XML")
 			spec := hypervisor.VMSpec{
 				UUID:      instanceID,
 				Name:      fmt.Sprintf("instance-%s", instanceID[:8]),
@@ -445,25 +451,25 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				CloudInit: cloudInit,
 			}
 
-			log.Printf("DEBUG: VM spec - ImagePath: %s, Networks: %d", spec.ImagePath, len(spec.Networks))
+			log.Debug().Str("image_path", spec.ImagePath).Int("network_count", len(spec.Networks)).Msg("VM spec prepared")
 			xml := hypervisor.GenerateVMXML(spec)
-			log.Printf("DEBUG: Generated XML (first 200 chars): %s", xml[:min(200, len(xml))])
 
 			// Create VM
-			log.Printf("DEBUG: Calling CreateVM for instance %s", instanceID)
+			log.Debug().Str("instance_id", instanceID).Msg("Calling CreateVM")
 			libvirtUUID, err := svc.vmManager.CreateVM(ctx, xml)
 
 			if err != nil {
-				log.Printf("ERROR: Failed to create VM via libvirt for instance %s: %v", instanceID, err)
-				logger.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create VM via libvirt")
+				log.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create VM via libvirt")
 				// Update instance status to ERROR
-				database.DB.Exec(context.Background(),
+				dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
+				defer dbCancel()
+				database.DB.Exec(dbCtx,
 					"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3",
 					"ERROR", time.Now(), instanceID)
 				return
 			}
 
-			log.Printf("DEBUG: VM created successfully, libvirt UUID: %s", libvirtUUID)
+			log.Debug().Str("libvirt_uuid", libvirtUUID).Msg("VM created successfully")
 
 			logger.Info().
 				Str("instance_id", instanceID).
@@ -472,7 +478,9 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				Msg("VM created successfully via libvirt")
 
 			// Update instance with libvirt UUID
-			database.DB.Exec(context.Background(), `
+			dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
+			defer dbCancel()
+			database.DB.Exec(dbCtx, `
 				UPDATE instances
 				SET status = $1, power_state = $2, libvirt_domain_id = $3, launched_at = $4, updated_at = $5
 				WHERE id = $6
@@ -497,7 +505,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			"flavor":     gin.H{"id": flavor.ID},
 			"image":      gin.H{"id": req.Server.ImageRef},
 			"metadata":   gin.H{},
-			"adminPass":  "generated-password",
+			"adminPass":  common.GeneratePassword(16),
 		},
 	})
 }
@@ -537,7 +545,8 @@ func (svc *Service) ListServers(c *gin.Context) {
 		projectID, limit, offset,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_servers").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list servers"))
 		return
 	}
 	defer rows.Close()
@@ -546,13 +555,14 @@ func (svc *Service) ListServers(c *gin.Context) {
 	for rows.Next() {
 		var id, name string
 		if err := rows.Scan(&id, &name); err != nil {
+			log.Warn().Err(err).Msg("failed to scan server row")
 			continue
 		}
 		servers = append(servers, gin.H{
 			"id":   id,
 			"name": name,
 			"links": []gin.H{
-				{"rel": "self", "href": fmt.Sprintf("http://localhost:8774/v2.1/servers/%s", id)},
+				{"rel": "self", "href": fmt.Sprintf("%s/v2.1/servers/%s", common.BaseURL(c, 8774), id)},
 			},
 		})
 	}
@@ -615,7 +625,8 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_servers_detail").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list servers"))
 		return
 	}
 	defer rows.Close()
@@ -629,6 +640,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		if err := rows.Scan(&id, &name, &status, &powerState, &projectID, &userID,
 			&flavorID, &imageID, &createdAt, &updatedAt, &launchedAt,
 			&vcpus, &ramMB, &diskGB, &flavorName); err != nil {
+			log.Warn().Err(err).Msg("failed to scan server detail row")
 			continue
 		}
 
@@ -685,6 +697,7 @@ func (svc *Service) getInstanceAddresses(ctx context.Context, instanceID, projec
 		var fixedIPsJSON []byte
 
 		if err := rows.Scan(&networkID, &fixedIPsJSON, &networkName); err != nil {
+			log.Warn().Err(err).Msg("failed to scan network row")
 			continue
 		}
 
@@ -720,7 +733,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	var id, name, status, projID string
-	var userID, flavorID, imageID sql.NullString
+	var userID, flavorID, imageID interface{}
 	var powerState int
 	var createdAt, updatedAt time.Time
 
@@ -735,11 +748,12 @@ func (svc *Service) GetServer(c *gin.Context) {
 	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_server").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get server"))
 		return
 	}
 
@@ -758,14 +772,14 @@ func (svc *Service) GetServer(c *gin.Context) {
 		"OS-EXT-STS:power_state": powerState,
 	}
 
-	if userID.Valid {
-		response["user_id"] = userID.String
+	if userID != nil {
+		response["user_id"] = userID
 	}
-	if flavorID.Valid {
-		response["flavor"] = gin.H{"id": flavorID.String}
+	if flavorID != nil {
+		response["flavor"] = gin.H{"id": flavorID}
 	}
-	if imageID.Valid {
-		response["image"] = gin.H{"id": imageID.String}
+	if imageID != nil {
+		response["image"] = gin.H{"id": imageID}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"server": response})
@@ -793,7 +807,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	if err == pgx.ErrNoRows {
 		logger.Warn().Str("instance_id", instanceID).Msg("Instance not found")
 		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -807,7 +821,8 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 			logger.Error().Err(err).Str("libvirt_domain_id", libvirtDomainID).Msg("Failed to delete VM from libvirt")
 			middleware.LogExternalService(c, "libvirt", "delete_vm", time.Since(libvirtStart), err)
 			middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "delete_vm_libvirt").Msg("libvirt error")
+			common.SendError(c, common.NewInternalServerError("failed to delete server"))
 			return
 		}
 		middleware.LogExternalService(c, "libvirt", "delete_vm", time.Since(libvirtStart), nil)
@@ -825,7 +840,8 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to delete instance from database")
 		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete server"))
 		return
 	}
 
@@ -842,12 +858,12 @@ func (svc *Service) ServerAction(c *gin.Context) {
 
 	var req map[string]interface{}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("ERROR in ServerAction: failed to bind JSON: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		log.Warn().Err(err).Str("operation", "server_action_bind").Msg("Failed to bind JSON")
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
-	log.Printf("ServerAction: instanceID=%s, projectID=%s, action=%v", instanceID, projectID, req)
+	log.Debug().Str("instance_id", instanceID).Str("project_id", projectID).Interface("action", req).Msg("ServerAction")
 
 	// Handle console actions first (don't require libvirt)
 	if vncConsole, ok := req["os-getVNCConsole"]; ok {
@@ -960,37 +976,54 @@ func (svc *Service) ServerAction(c *gin.Context) {
 	}
 
 	// Get libvirt domain ID for remaining actions (support lookup by ID or name)
-	var libvirtDomainID sql.NullString
+	var libvirtDomainID interface{}
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT libvirt_domain_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
 
 	if err == pgx.ErrNoRows {
-		log.Printf("ERROR in ServerAction: instance not found: %s", instanceID)
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		log.Warn().Str("instance_id", instanceID).Msg("Instance not found in ServerAction")
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 	if err != nil {
-		log.Printf("ERROR in ServerAction: database error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("database error: %v", err)})
+		log.Error().Err(err).Str("operation", "server_action_query").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to query instance"))
 		return
 	}
 
-	log.Printf("ServerAction: libvirtDomainID.Valid=%v, libvirtDomainID.String=%s, vmManager=%v, mode=%s",
-		libvirtDomainID.Valid, libvirtDomainID.String, svc.vmManager != nil, svc.libvirtMode)
+	libvirtDomainStr := ""
+	if libvirtDomainID != nil {
+		libvirtDomainStr = fmt.Sprintf("%v", libvirtDomainID)
+	}
+
+	log.Debug().
+		Bool("libvirt_valid", libvirtDomainStr != "").
+		Str("libvirt_domain", libvirtDomainStr).
+		Bool("vm_manager", svc.vmManager != nil).
+		Str("mode", svc.libvirtMode).
+		Msg("ServerAction state")
 
 	// In stub mode, just update database status (don't call vmManager even if it exists)
-	if svc.libvirtMode == "stub" || !libvirtDomainID.Valid || libvirtDomainID.String == "" {
+	if svc.libvirtMode == "stub" || libvirtDomainStr == "" {
 		// Handle actions in stub mode by updating database only
 		if _, ok := req["reboot"]; ok {
 			// Just mark as rebooting then active
 			database.DB.Exec(c.Request.Context(),
 				"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
 				"REBOOT", time.Now(), instanceID, projectID)
+			svc.wg.Add(1)
 			go func() {
-				time.Sleep(1 * time.Second)
-				database.DB.Exec(context.Background(),
+				defer svc.wg.Done()
+				select {
+				case <-time.After(1 * time.Second):
+				case <-svc.ctx.Done():
+					return
+				}
+				ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
+				defer cancel()
+				database.DB.Exec(ctx,
 					"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
 					"ACTIVE", time.Now(), instanceID, projectID)
 			}()
@@ -1003,7 +1036,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
 				"ACTIVE", 1, time.Now(), instanceID, projectID)
 		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			common.SendError(c, common.NewBadRequestError("unknown action"))
 			return
 		}
 		c.Status(http.StatusAccepted)
@@ -1015,22 +1048,25 @@ func (svc *Service) ServerAction(c *gin.Context) {
 
 	// Handle different actions with real libvirt
 	if _, ok := req["reboot"]; ok {
-		if err := svc.vmManager.RebootVM(ctx, libvirtDomainID.String); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if err := svc.vmManager.RebootVM(ctx, libvirtDomainStr); err != nil {
+			log.Error().Err(err).Str("operation", "reboot_vm").Msg("libvirt error")
+			common.SendError(c, common.NewInternalServerError("failed to reboot server"))
 			return
 		}
 	} else if _, ok := req["os-stop"]; ok {
-		if err := svc.vmManager.StopVM(ctx, libvirtDomainID.String); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if err := svc.vmManager.StopVM(ctx, libvirtDomainStr); err != nil {
+			log.Error().Err(err).Str("operation", "stop_vm").Msg("libvirt error")
+			common.SendError(c, common.NewInternalServerError("failed to stop server"))
 			return
 		}
 	} else if _, ok := req["os-start"]; ok {
-		if err := svc.vmManager.StartVM(ctx, libvirtDomainID.String); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if err := svc.vmManager.StartVM(ctx, libvirtDomainStr); err != nil {
+			log.Error().Err(err).Str("operation", "start_vm").Msg("libvirt error")
+			common.SendError(c, common.NewInternalServerError("failed to start server"))
 			return
 		}
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+		common.SendError(c, common.NewBadRequestError("unknown action"))
 		return
 	}
 
@@ -1043,7 +1079,8 @@ func (svc *Service) ListFlavors(c *gin.Context) {
 		"SELECT id, name FROM flavors WHERE is_public = true ORDER BY ram_mb",
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_flavors").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list flavors"))
 		return
 	}
 	defer rows.Close()
@@ -1052,13 +1089,14 @@ func (svc *Service) ListFlavors(c *gin.Context) {
 	for rows.Next() {
 		var id, name string
 		if err := rows.Scan(&id, &name); err != nil {
+			log.Warn().Err(err).Msg("failed to scan flavor row")
 			continue
 		}
 		flavors = append(flavors, gin.H{
 			"id":   id,
 			"name": name,
 			"links": []gin.H{
-				{"rel": "self", "href": fmt.Sprintf("http://localhost:8774/v2.1/flavors/%s", id)},
+				{"rel": "self", "href": fmt.Sprintf("%s/v2.1/flavors/%s", common.BaseURL(c, 8774), id)},
 			},
 		})
 	}
@@ -1083,26 +1121,33 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 	var args []interface{}
 	argIndex := 1
 
-	// Add marker filter (cursor-based pagination)
+	// Add marker filter using created_at cursor (avoids broken UUID lexicographic ordering)
 	if marker != "" {
-		query += fmt.Sprintf(" AND id > $%d", argIndex)
-		args = append(args, marker)
-		argIndex++
+		var markerTime interface{}
+		lookupErr := database.DB.QueryRow(ctx,
+			"SELECT created_at FROM flavors WHERE id = $1", marker).Scan(&markerTime)
+		if lookupErr == nil {
+			query += fmt.Sprintf(" AND created_at > $%d", argIndex)
+			args = append(args, markerTime)
+			argIndex++
+		}
+		// If the marker flavor is not found, ignore the marker and return from the start.
 	}
 
-	query += " ORDER BY id"
+	query += " ORDER BY created_at, id"
 
 	// Add limit
 	if limitStr != "" {
-		query += fmt.Sprintf(" LIMIT $%d", argIndex)
 		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			query += fmt.Sprintf(" LIMIT $%d", argIndex)
 			args = append(args, limit)
 		}
 	}
 
 	rows, err := database.DB.Query(ctx, query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_flavors_detail").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list flavors"))
 		return
 	}
 	defer rows.Close()
@@ -1114,6 +1159,7 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 		var isPublic bool
 
 		if err := rows.Scan(&id, &name, &vcpus, &ramMB, &diskGB, &isPublic); err != nil {
+			log.Warn().Err(err).Msg("failed to scan flavor detail row")
 			continue
 		}
 
@@ -1145,10 +1191,7 @@ func (svc *Service) GetFlavor(c *gin.Context) {
 
 	// Validate ID is not empty
 	if flavorID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"badRequest": gin.H{
-			"message": "Flavor ID cannot be empty",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("Flavor ID cannot be empty"))
 		return
 	}
 
@@ -1175,15 +1218,12 @@ func (svc *Service) GetFlavor(c *gin.Context) {
 	).Scan(&id, &name, &vcpus, &ramMB, &diskGB, &isPublic)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "flavor not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("flavor"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_flavor").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get flavor"))
 		return
 	}
 
@@ -1301,7 +1341,8 @@ func (svc *Service) ListAvailabilityZones(c *gin.Context) {
 	rows, err := database.DB.Query(c.Request.Context(),
 		"SELECT DISTINCT availability_zone FROM host_aggregates WHERE availability_zone IS NOT NULL AND availability_zone != ''")
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{"message": "Failed to query availability zones", "code": 500}})
+		log.Error().Err(err).Str("operation", "list_availability_zones").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to query availability zones"))
 		return
 	}
 	defer rows.Close()
@@ -1310,6 +1351,7 @@ func (svc *Service) ListAvailabilityZones(c *gin.Context) {
 	for rows.Next() {
 		var zoneName string
 		if err := rows.Scan(&zoneName); err != nil {
+			log.Warn().Err(err).Msg("failed to scan availability zone row")
 			continue
 		}
 		zones = append(zones, gin.H{
@@ -1337,7 +1379,8 @@ func (svc *Service) ListAvailabilityZonesDetail(c *gin.Context) {
 	rows, err := database.DB.Query(c.Request.Context(),
 		"SELECT availability_zone, hosts FROM host_aggregates WHERE availability_zone IS NOT NULL AND availability_zone != ''")
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{"message": "Failed to query availability zones", "code": 500}})
+		log.Error().Err(err).Str("operation", "list_availability_zones_detail").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to query availability zones"))
 		return
 	}
 	defer rows.Close()
@@ -1348,6 +1391,7 @@ func (svc *Service) ListAvailabilityZonesDetail(c *gin.Context) {
 		var zoneName string
 		var hosts []string
 		if err := rows.Scan(&zoneName, &hosts); err != nil {
+			log.Warn().Err(err).Msg("failed to scan availability zone host row")
 			continue
 		}
 		zoneHosts[zoneName] = append(zoneHosts[zoneName], hosts...)
@@ -1395,47 +1439,82 @@ func (svc *Service) ListAvailabilityZonesDetail(c *gin.Context) {
 
 // GetLimits returns compute limits and quota information
 func (svc *Service) GetLimits(c *gin.Context) {
+	ctx := c.Request.Context()
 	projectID := c.GetString("project_id")
 
 	// Query current usage from database
 	var instancesUsed, coresUsed, ramUsed int
-	database.DB.QueryRow(c.Request.Context(),
+	if err := database.DB.QueryRow(ctx,
 		`SELECT
 			COUNT(*),
-			COALESCE(SUM(vcpus), 0),
-			COALESCE(SUM(memory_mb), 0)
-		FROM instances
-		WHERE project_id = $1 AND status != 'DELETED'`,
+			COALESCE(SUM(f.vcpus), 0),
+			COALESCE(SUM(f.ram_mb), 0)
+		FROM instances i
+		LEFT JOIN flavors f ON i.flavor_id = f.id
+		WHERE i.project_id = $1 AND i.status != 'DELETED'`,
 		projectID,
-	).Scan(&instancesUsed, &coresUsed, &ramUsed)
+	).Scan(&instancesUsed, &coresUsed, &ramUsed); err != nil {
+		instancesUsed, coresUsed, ramUsed = 0, 0, 0
+	}
+
+	// Query project quotas from the quotas table (row-per-resource schema).
+	// Defaults are used for any resource not explicitly configured.
+	quotaDefaults := map[string]int{
+		"instances":            100,
+		"cores":                200,
+		"ram":                  512000,
+		"keypairs":             100,
+		"server_groups":        10,
+		"server_group_members": 10,
+		"floatingip":           10,
+		"security_groups":      50,
+		"security_group_rules": 100,
+	}
+	quotas := make(map[string]int)
+	for k, v := range quotaDefaults {
+		quotas[k] = v
+	}
+
+	quotaRows, err := database.DB.Query(ctx,
+		`SELECT resource, hard_limit FROM quotas WHERE project_id = $1`, projectID)
+	if err == nil {
+		defer quotaRows.Close()
+		for quotaRows.Next() {
+			var resource string
+			var hardLimit int
+			if scanErr := quotaRows.Scan(&resource, &hardLimit); scanErr == nil {
+				quotas[resource] = hardLimit
+			}
+		}
+	}
 
 	// Return limits response
 	c.JSON(200, gin.H{
 		"limits": gin.H{
 			"rate": []gin.H{}, // No rate limiting implemented
 			"absolute": gin.H{
-				// Quota limits (hardcoded for now, should come from quota table)
-				"maxTotalInstances":       100,
-				"maxTotalCores":           200,
-				"maxTotalRAMSize":         512000, // 500GB in MB
-				"maxTotalKeypairs":        100,
-				"maxServerMeta":           128,
-				"maxPersonality":          5,
-				"maxPersonalitySize":      10240,
-				"maxServerGroups":         10,
-				"maxServerGroupMembers":   10,
-				"maxTotalFloatingIps":     10,
-				"maxSecurityGroups":       50,
-				"maxSecurityGroupRules":   100,
-				"maxImageMeta":            128,
+				// Quota limits from the quotas table (with defaults)
+				"maxTotalInstances":     quotas["instances"],
+				"maxTotalCores":         quotas["cores"],
+				"maxTotalRAMSize":       quotas["ram"],
+				"maxTotalKeypairs":      quotas["keypairs"],
+				"maxServerMeta":         128,
+				"maxPersonality":        5,
+				"maxPersonalitySize":    10240,
+				"maxServerGroups":       quotas["server_groups"],
+				"maxServerGroupMembers": quotas["server_group_members"],
+				"maxTotalFloatingIps":   quotas["floatingip"],
+				"maxSecurityGroups":     quotas["security_groups"],
+				"maxSecurityGroupRules": quotas["security_group_rules"],
+				"maxImageMeta":          128,
 
 				// Current usage
-				"totalInstancesUsed":    instancesUsed,
-				"totalCoresUsed":        coresUsed,
-				"totalRAMUsed":          ramUsed,
-				"totalFloatingIpsUsed":  0,
+				"totalInstancesUsed":      instancesUsed,
+				"totalCoresUsed":          coresUsed,
+				"totalRAMUsed":            ramUsed,
+				"totalFloatingIpsUsed":    0,
 				"totalSecurityGroupsUsed": 0,
-				"totalServerGroupsUsed": 0,
+				"totalServerGroupsUsed":   0,
 			},
 		},
 	})
@@ -1498,11 +1577,7 @@ func (svc *Service) GetServerMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "Instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -1512,11 +1587,8 @@ func (svc *Service) GetServerMetadata(c *gin.Context) {
 		serverID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "Failed to fetch metadata",
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "get_server_metadata").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to fetch metadata"))
 		return
 	}
 	defer rows.Close()
@@ -1525,11 +1597,8 @@ func (svc *Service) GetServerMetadata(c *gin.Context) {
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "Failed to scan metadata",
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "scan_metadata").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to read metadata"))
 			return
 		}
 		metadata[key] = value
@@ -1547,11 +1616,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "Invalid request body: " + err.Error(),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1563,11 +1628,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "Instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -1581,11 +1642,8 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 			serverID, key, value,
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "Failed to update metadata: " + err.Error(),
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "upsert_metadata").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to update metadata"))
 			return
 		}
 	}
@@ -1596,11 +1654,8 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 		serverID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "Failed to fetch metadata",
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "fetch_metadata_after_update").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to fetch metadata"))
 		return
 	}
 	defer rows.Close()
@@ -1609,11 +1664,8 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "Failed to scan metadata",
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "scan_metadata_after_update").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to read metadata"))
 			return
 		}
 		metadata[key] = value
@@ -1631,11 +1683,7 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "Invalid request body: " + err.Error(),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1647,43 +1695,33 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "Instance not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
-	// Delete all existing metadata for this server
-	_, err = database.DB.Exec(c.Request.Context(),
-		"DELETE FROM instance_metadata WHERE instance_id = $1",
-		serverID,
-	)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "Failed to clear metadata: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
-		return
-	}
-
-	// Insert new metadata
-	for key, value := range req.Metadata {
-		_, err := database.DB.Exec(c.Request.Context(),
-			`INSERT INTO instance_metadata (instance_id, meta_key, meta_value)
-			 VALUES ($1, $2, $3)`,
-			serverID, key, value,
-		)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "Failed to insert metadata: " + err.Error(),
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
-			return
+	// Delete all existing metadata then insert new metadata atomically
+	err = database.WithTx(c.Request.Context(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(c.Request.Context(),
+			"DELETE FROM instance_metadata WHERE instance_id = $1",
+			serverID,
+		); err != nil {
+			return fmt.Errorf("clear_metadata: %w", err)
 		}
+		for key, value := range req.Metadata {
+			if _, err := tx.Exec(c.Request.Context(),
+				`INSERT INTO instance_metadata (instance_id, meta_key, meta_value)
+				 VALUES ($1, $2, $3)`,
+				serverID, key, value,
+			); err != nil {
+				return fmt.Errorf("insert_metadata: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error().Err(err).Str("operation", "reset_metadata").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to reset metadata"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"metadata": req.Metadata})
@@ -1696,7 +1734,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 
 	rebuildMap, ok := rebuildData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid rebuild data"})
+		common.SendError(c, common.NewBadRequestError("invalid rebuild data"))
 		return
 	}
 
@@ -1704,7 +1742,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 	name, _ := rebuildMap["name"].(string)
 
 	if imageRef == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "imageRef is required"})
+		common.SendError(c, common.NewBadRequestError("imageRef is required"))
 		return
 	}
 
@@ -1715,15 +1753,24 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 		imageRef, name, "REBUILD", now, instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "rebuild_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to rebuild instance"))
 		return
 	}
 
 	// In stub mode, simulate rebuild completion
 	if svc.libvirtMode == "stub" {
+		svc.wg.Add(1)
 		go func() {
-			time.Sleep(2 * time.Second)
-			database.DB.Exec(context.Background(),
+			defer svc.wg.Done()
+			select {
+			case <-time.After(2 * time.Second):
+			case <-svc.ctx.Done():
+				return
+			}
+			ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
+			defer cancel()
+			database.DB.Exec(ctx,
 				"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
 				"ACTIVE", time.Now(), instanceID, projectID)
 		}()
@@ -1739,7 +1786,8 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 	).Scan(&instanceID, &serverName, &flavorID, &imageID, &userID, &status, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_instance_after_rebuild").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance after rebuild"))
 		return
 	}
 
@@ -1774,13 +1822,14 @@ func (svc *Service) RescueInstanceAction(c *gin.Context, rescueData interface{})
 		"RESCUE", now, instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "rescue_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to rescue instance"))
 		return
 	}
 
 	// Return admin password (in real OpenStack this would be a generated rescue password)
 	c.JSON(http.StatusOK, gin.H{
-		"adminPass": "rescuepass123",
+		"adminPass": common.GeneratePassword(16),
 	})
 }
 
@@ -1790,13 +1839,13 @@ func (svc *Service) CreateImageAction(c *gin.Context, createImageData interface{
 
 	createImageMap, ok := createImageData.(map[string]interface{})
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid createImage data"})
+		common.SendError(c, common.NewBadRequestError("invalid createImage data"))
 		return
 	}
 
 	imageName, _ := createImageMap["name"].(string)
 	if imageName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		common.SendError(c, common.NewBadRequestError("name is required"))
 		return
 	}
 
@@ -1819,7 +1868,8 @@ func (svc *Service) CreateImageAction(c *gin.Context, createImageData interface{
 	`, imageID, imageName, projectID, "active", "bare", "qcow2", 0, "private", now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_image").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create image"))
 		return
 	}
 
@@ -1832,7 +1882,7 @@ func (svc *Service) CreateImageAction(c *gin.Context, createImageData interface{
 	}
 
 	// Return Location header with image URL
-	imageLocation := fmt.Sprintf("http://localhost:9292/v2/images/%s", imageID)
+	imageLocation := fmt.Sprintf("%s/v2/images/%s", common.BaseURL(c, 9292), imageID)
 	c.Header("Location", imageLocation)
 	c.Status(http.StatusAccepted)
 }
@@ -1848,7 +1898,8 @@ func (svc *Service) PauseInstanceAction(c *gin.Context) {
 		"PAUSED", time.Now(), instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "pause_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to pause instance"))
 		return
 	}
 
@@ -1866,7 +1917,8 @@ func (svc *Service) UnpauseInstanceAction(c *gin.Context) {
 		"ACTIVE", time.Now(), instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "unpause_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to unpause instance"))
 		return
 	}
 
@@ -1884,7 +1936,8 @@ func (svc *Service) LockInstanceAction(c *gin.Context) {
 		time.Now(), instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "lock_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to lock instance"))
 		return
 	}
 
@@ -1902,7 +1955,8 @@ func (svc *Service) UnlockInstanceAction(c *gin.Context) {
 		time.Now(), instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "unlock_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to unlock instance"))
 		return
 	}
 
@@ -1921,7 +1975,8 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 			instanceID, projectID,
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "force_delete_instance").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to delete instance"))
 			return
 		}
 		c.Status(http.StatusNoContent)
@@ -1929,16 +1984,19 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 	}
 
 	// In real mode, destroy VM then delete from database
-	var libvirtDomainID sql.NullString
+	var libvirtDomainID interface{}
 	err := database.DB.QueryRow(c.Request.Context(),
 		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
 
-	if err == nil && libvirtDomainID.Valid && libvirtDomainID.String != "" {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-		defer cancel()
-		svc.vmManager.DeleteVM(ctx, libvirtDomainID.String)
+	if err == nil && libvirtDomainID != nil {
+		domainStr := fmt.Sprintf("%v", libvirtDomainID)
+		if domainStr != "" {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+			svc.vmManager.DeleteVM(ctx, domainStr)
+		}
 	}
 
 	_, err = database.DB.Exec(c.Request.Context(),
@@ -1946,10 +2004,10 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 		instanceID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "force_delete_instance_db").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete instance"))
 		return
 	}
 
 	c.Status(http.StatusNoContent)
 }
-

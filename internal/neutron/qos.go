@@ -6,10 +6,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListQoSPolicies lists all QoS policies
@@ -23,7 +25,8 @@ func (svc *Service) ListQoSPolicies(c *gin.Context) {
 		ORDER BY created_at DESC
 	`, projectID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_qos_policies").Msg("failed to query QoS policies")
+		common.SendError(c, common.NewInternalServerError("failed to list QoS policies"))
 		return
 	}
 	defer rows.Close()
@@ -42,7 +45,8 @@ func (svc *Service) ListQoSPolicies(c *gin.Context) {
 
 		err := rows.Scan(&id, &projID, &name, &description, &shared, &createdAt, &updatedAt)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "list_qos_policies_scan").Msg("failed to scan QoS policy row")
+			common.SendError(c, common.NewInternalServerError("failed to read QoS policy data"))
 			return
 		}
 
@@ -75,7 +79,7 @@ func (svc *Service) CreateQoSPolicy(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -93,7 +97,8 @@ func (svc *Service) CreateQoSPolicy(c *gin.Context) {
 	`, policyID, projectID, req.Policy.Name, req.Policy.Description, shared, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_qos_policy").Msg("failed to create QoS policy")
+		common.SendError(c, common.NewInternalServerError("failed to create QoS policy"))
 		return
 	}
 
@@ -132,11 +137,12 @@ func (svc *Service) GetQoSPolicy(c *gin.Context) {
 	`, policyID, projectID).Scan(&projID, &name, &description, &shared, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_qos_policy").Msg("failed to get QoS policy")
+		common.SendError(c, common.NewInternalServerError("failed to get QoS policy"))
 		return
 	}
 
@@ -168,7 +174,7 @@ func (svc *Service) UpdateQoSPolicy(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -180,7 +186,7 @@ func (svc *Service) UpdateQoSPolicy(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -208,7 +214,7 @@ func (svc *Service) UpdateQoSPolicy(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -219,7 +225,8 @@ func (svc *Service) UpdateQoSPolicy(c *gin.Context) {
 	_, err = database.DB.Exec(c.Request.Context(), query, args...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_qos_policy").Msg("failed to update QoS policy")
+		common.SendError(c, common.NewInternalServerError("failed to update QoS policy"))
 		return
 	}
 
@@ -238,12 +245,13 @@ func (svc *Service) DeleteQoSPolicy(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_qos_policy").Msg("failed to delete QoS policy")
+		common.SendError(c, common.NewInternalServerError("failed to delete QoS policy"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -263,7 +271,7 @@ func (svc *Service) ListBandwidthLimitRules(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -274,7 +282,8 @@ func (svc *Service) ListBandwidthLimitRules(c *gin.Context) {
 		ORDER BY created_at DESC
 	`, policyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_bandwidth_limit_rules").Msg("failed to query bandwidth limit rules")
+		common.SendError(c, common.NewInternalServerError("failed to list bandwidth limit rules"))
 		return
 	}
 	defer rows.Close()
@@ -292,16 +301,17 @@ func (svc *Service) ListBandwidthLimitRules(c *gin.Context) {
 
 		err := rows.Scan(&id, &maxKbps, &maxBurstKbps, &direction, &createdAt, &updatedAt)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "list_bandwidth_limit_rules_scan").Msg("failed to scan bandwidth limit rule row")
+			common.SendError(c, common.NewInternalServerError("failed to read bandwidth limit rule data"))
 			return
 		}
 
 		rule := map[string]interface{}{
-			"id":              id,
-			"max_kbps":        maxKbps,
-			"max_burst_kbps":  maxBurstKbps,
-			"direction":       direction,
-			"qos_policy_id":   policyID,
+			"id":             id,
+			"max_kbps":       maxKbps,
+			"max_burst_kbps": maxBurstKbps,
+			"direction":      direction,
+			"qos_policy_id":  policyID,
 		}
 		rules = append(rules, rule)
 	}
@@ -323,7 +333,7 @@ func (svc *Service) CreateBandwidthLimitRule(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -335,7 +345,7 @@ func (svc *Service) CreateBandwidthLimitRule(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -353,17 +363,18 @@ func (svc *Service) CreateBandwidthLimitRule(c *gin.Context) {
 	`, ruleID, policyID, req.Rule.MaxKbps, req.Rule.MaxBurstKbps, direction, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_bandwidth_limit_rule").Msg("failed to create bandwidth limit rule")
+		common.SendError(c, common.NewInternalServerError("failed to create bandwidth limit rule"))
 		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"bandwidth_limit_rule": map[string]interface{}{
-			"id":              ruleID,
-			"max_kbps":        req.Rule.MaxKbps,
-			"max_burst_kbps":  req.Rule.MaxBurstKbps,
-			"direction":       direction,
-			"qos_policy_id":   policyID,
+			"id":             ruleID,
+			"max_kbps":       req.Rule.MaxKbps,
+			"max_burst_kbps": req.Rule.MaxBurstKbps,
+			"direction":      direction,
+			"qos_policy_id":  policyID,
 		},
 	})
 }
@@ -382,7 +393,7 @@ func (svc *Service) GetBandwidthLimitRule(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -401,21 +412,22 @@ func (svc *Service) GetBandwidthLimitRule(c *gin.Context) {
 	`, ruleID, policyID).Scan(&maxKbps, &maxBurstKbps, &direction, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "rule not found"})
+		common.SendError(c, common.NewNotFoundError("rule"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_bandwidth_limit_rule").Msg("failed to get bandwidth limit rule")
+		common.SendError(c, common.NewInternalServerError("failed to get bandwidth limit rule"))
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"bandwidth_limit_rule": map[string]interface{}{
-			"id":              ruleID,
-			"max_kbps":        maxKbps,
-			"max_burst_kbps":  maxBurstKbps,
-			"direction":       direction,
-			"qos_policy_id":   policyID,
+			"id":             ruleID,
+			"max_kbps":       maxKbps,
+			"max_burst_kbps": maxBurstKbps,
+			"direction":      direction,
+			"qos_policy_id":  policyID,
 		},
 	})
 }
@@ -435,7 +447,7 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -447,7 +459,7 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -458,7 +470,7 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "rule not found"})
+		common.SendError(c, common.NewNotFoundError("rule"))
 		return
 	}
 
@@ -486,7 +498,7 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -497,7 +509,8 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	_, err = database.DB.Exec(c.Request.Context(), query, args...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_bandwidth_limit_rule").Msg("failed to update bandwidth limit rule")
+		common.SendError(c, common.NewInternalServerError("failed to update bandwidth limit rule"))
 		return
 	}
 
@@ -519,7 +532,7 @@ func (svc *Service) DeleteBandwidthLimitRule(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "policy not found"})
+		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
 
@@ -529,12 +542,13 @@ func (svc *Service) DeleteBandwidthLimitRule(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_bandwidth_limit_rule").Msg("failed to delete bandwidth limit rule")
+		common.SendError(c, common.NewInternalServerError("failed to delete bandwidth limit rule"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "rule not found"})
+		common.SendError(c, common.NewNotFoundError("rule"))
 		return
 	}
 

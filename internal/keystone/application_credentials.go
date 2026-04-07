@@ -3,13 +3,14 @@ package keystone
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListApplicationCredentials returns application credentials for a user
@@ -23,7 +24,8 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query application credentials"})
+		log.Error().Err(err).Str("operation", "list_application_credentials").Str("user_id", userID).Msg("Failed to query application credentials")
+		common.SendError(c, common.NewInternalServerError("failed to query application credentials"))
 		return
 	}
 	defer rows.Close()
@@ -82,7 +84,7 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		credentials = append(credentials, credential)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"application_credentials": credentials})
+	c.JSON(200, gin.H{"application_credentials": credentials})
 }
 
 // CreateApplicationCredential creates a new application credential
@@ -91,17 +93,17 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 
 	var req struct {
 		ApplicationCredential struct {
-			Name          string                   `json:"name" binding:"required"`
-			Description   string                   `json:"description"`
-			ProjectID     string                   `json:"project_id"`
-			ExpiresAt     string                   `json:"expires_at"`
-			Unrestricted  bool                     `json:"unrestricted"`
-			Roles         []map[string]interface{} `json:"roles"`
+			Name         string                   `json:"name" binding:"required"`
+			Description  string                   `json:"description"`
+			ProjectID    string                   `json:"project_id"`
+			ExpiresAt    string                   `json:"expires_at"`
+			Unrestricted bool                     `json:"unrestricted"`
+			Roles        []map[string]interface{} `json:"roles"`
 		} `json:"application_credential"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -131,7 +133,8 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 	`, credID, userID, projectID, req.ApplicationCredential.Name, secret, req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_application_credential").Str("user_id", userID).Msg("Failed to create application credential")
+		common.SendError(c, common.NewInternalServerError("failed to create application credential"))
 		return
 	}
 
@@ -167,7 +170,7 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		credential["roles"] = req.ApplicationCredential.Roles
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"application_credential": credential})
+	c.JSON(201, gin.H{"application_credential": credential})
 }
 
 // GetApplicationCredential returns a specific application credential
@@ -187,11 +190,12 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	`, credID, userID).Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application credential not found"})
+		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query application credential"})
+		log.Error().Err(err).Str("operation", "get_application_credential").Str("cred_id", credID).Msg("Failed to query application credential")
+		common.SendError(c, common.NewInternalServerError("failed to query application credential"))
 		return
 	}
 
@@ -234,7 +238,7 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 		credential["roles"] = roles
 	}
 
-	c.JSON(http.StatusOK, gin.H{"application_credential": credential})
+	c.JSON(200, gin.H{"application_credential": credential})
 }
 
 // DeleteApplicationCredential deletes an application credential
@@ -247,16 +251,17 @@ func (svc *Service) DeleteApplicationCredential(c *gin.Context) {
 		credID, userID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete application credential"})
+		log.Error().Err(err).Str("operation", "delete_application_credential").Str("cred_id", credID).Msg("Failed to delete application credential")
+		common.SendError(c, common.NewInternalServerError("failed to delete application credential"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application credential not found"})
+		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
 
 // GetApplicationCredentialByID returns an application credential by ID only
@@ -275,11 +280,12 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	`, credID).Scan(&id, &userID, &projectID, &name, &description, &expiresAt, &unrestricted)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application credential not found"})
+		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query application credential"})
+		log.Error().Err(err).Str("operation", "get_application_credential_by_id").Str("cred_id", credID).Msg("Failed to query application credential")
+		common.SendError(c, common.NewInternalServerError("failed to query application credential"))
 		return
 	}
 
@@ -322,5 +328,5 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 		credential["roles"] = roles
 	}
 
-	c.JSON(http.StatusOK, gin.H{"application_credential": credential})
+	c.JSON(200, gin.H{"application_credential": credential})
 }

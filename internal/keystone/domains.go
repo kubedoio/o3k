@@ -1,12 +1,13 @@
 package keystone
 
 import (
-	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ListDomains handles GET /v3/domains
@@ -18,7 +19,8 @@ func (svc *Service) ListDomains(c *gin.Context) {
 	`)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_domains").Msg("Failed to query domains")
+		common.SendError(c, common.NewInternalServerError("failed to query domains"))
 		return
 	}
 	defer rows.Close()
@@ -48,7 +50,7 @@ func (svc *Service) ListDomains(c *gin.Context) {
 		domains = append(domains, domain)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"domains": domains})
+	c.JSON(200, gin.H{"domains": domains})
 }
 
 // CreateDomain handles POST /v3/domains
@@ -62,7 +64,7 @@ func (svc *Service) CreateDomain(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -83,7 +85,7 @@ func (svc *Service) CreateDomain(c *gin.Context) {
 	`, domainID, req.Domain.Name, description, enabled, time.Now(), time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "Domain already exists"})
+		common.SendError(c, common.NewConflictError("domain already exists"))
 		return
 	}
 
@@ -97,7 +99,7 @@ func (svc *Service) CreateDomain(c *gin.Context) {
 		domain["description"] = *description
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"domain": domain})
+	c.JSON(201, gin.H{"domain": domain})
 }
 
 // GetDomain handles GET /v3/domains/:id
@@ -116,7 +118,7 @@ func (svc *Service) GetDomain(c *gin.Context) {
 	`, domainID).Scan(&id, &name, &description, &enabled)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Domain not found"})
+		common.SendError(c, common.NewNotFoundError("domain"))
 		return
 	}
 
@@ -130,7 +132,7 @@ func (svc *Service) GetDomain(c *gin.Context) {
 		domain["description"] = *description
 	}
 
-	c.JSON(http.StatusOK, gin.H{"domain": domain})
+	c.JSON(200, gin.H{"domain": domain})
 }
 
 // UpdateDomain handles PATCH /v3/domains/:id
@@ -142,7 +144,7 @@ func (svc *Service) UpdateDomain(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -153,7 +155,7 @@ func (svc *Service) UpdateDomain(c *gin.Context) {
 	`, domainID).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Domain not found"})
+		common.SendError(c, common.NewNotFoundError("domain"))
 		return
 	}
 
@@ -198,7 +200,8 @@ func (svc *Service) UpdateDomain(c *gin.Context) {
 
 		_, err = database.DB.Exec(c.Request.Context(), query, args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "update_domain").Str("domain_id", domainID).Msg("Failed to update domain")
+			common.SendError(c, common.NewInternalServerError("failed to update domain"))
 			return
 		}
 	}
@@ -216,7 +219,8 @@ func (svc *Service) UpdateDomain(c *gin.Context) {
 	`, domainID).Scan(&id, &name, &description, &enabled)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_domain_fetch").Str("domain_id", domainID).Msg("Failed to fetch updated domain")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated domain"))
 		return
 	}
 
@@ -230,7 +234,7 @@ func (svc *Service) UpdateDomain(c *gin.Context) {
 		domain["description"] = *description
 	}
 
-	c.JSON(http.StatusOK, gin.H{"domain": domain})
+	c.JSON(200, gin.H{"domain": domain})
 }
 
 // DeleteDomain handles DELETE /v3/domains/:id
@@ -244,12 +248,12 @@ func (svc *Service) DeleteDomain(c *gin.Context) {
 	`, domainID).Scan(&enabled)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Domain not found"})
+		common.SendError(c, common.NewNotFoundError("domain"))
 		return
 	}
 
 	if enabled {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Cannot delete enabled domain. Disable it first."})
+		common.SendError(c, common.NewForbiddenError("cannot delete enabled domain; disable it first"))
 		return
 	}
 
@@ -259,16 +263,17 @@ func (svc *Service) DeleteDomain(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_domain").Str("domain_id", domainID).Msg("Failed to delete domain")
+		common.SendError(c, common.NewInternalServerError("failed to delete domain"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Domain not found"})
+		common.SendError(c, common.NewNotFoundError("domain"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
 
 // GetDomainConfig handles GET /v3/domains/:id/config
@@ -282,7 +287,7 @@ func (svc *Service) GetDomainConfig(c *gin.Context) {
 	`, domainID).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Domain not found"})
+		common.SendError(c, common.NewNotFoundError("domain"))
 		return
 	}
 
@@ -292,5 +297,5 @@ func (svc *Service) GetDomainConfig(c *gin.Context) {
 		"ldap":     map[string]interface{}{},
 	}
 
-	c.JSON(http.StatusOK, gin.H{"config": config})
+	c.JSON(200, gin.H{"config": config})
 }

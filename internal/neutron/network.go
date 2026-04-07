@@ -1,9 +1,8 @@
 package neutron
 
 import (
+	"crypto/rand"
 	"fmt"
-	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -12,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
@@ -32,7 +33,10 @@ type Service struct {
 
 // NewService creates a new Neutron service
 func NewService(mode string, cacheInstance *cache.Cache) *Service {
-	sgManager, _ := networking.NewSecurityGroupManager(mode, "") // Ignore error for now, empty path for stub/iptables
+	sgManager, err := networking.NewSecurityGroupManager(mode, "")
+	if err != nil {
+		log.Error().Err(err).Str("mode", mode).Msg("failed to initialize security group manager")
+	}
 	return &Service{
 		mode:          mode,
 		nsManager:     networking.NewNetworkNamespaceManager(mode),
@@ -59,16 +63,24 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Log incoming request
 		c.Set("neutron_request_start", time.Now())
-		log.Printf("NEUTRON-DEBUG: Incoming %s %s (project=%s, query=%s)",
-			method, path, c.GetString("project_id"), c.Request.URL.RawQuery)
+		log.Debug().
+			Str("method", method).
+			Str("path", path).
+			Str("project_id", c.GetString("project_id")).
+			Str("query", c.Request.URL.RawQuery).
+			Msg("NEUTRON: Incoming request")
 
 		c.Next()
 
 		// Log response
 		status := c.Writer.Status()
 		duration := time.Since(c.GetTime("neutron_request_start"))
-		log.Printf("NEUTRON-DEBUG: Response %d for %s %s (duration=%v)",
-			status, method, path, duration)
+		log.Debug().
+			Int("status", status).
+			Str("method", method).
+			Str("path", path).
+			Dur("duration", duration).
+			Msg("NEUTRON: Response")
 	})
 	{
 		// Extensions
@@ -421,7 +433,7 @@ type CreateNetworkRequest struct {
 func (svc *Service) CreateNetwork(c *gin.Context) {
 	var req CreateNetworkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -441,7 +453,8 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 
 	// Create bridge in default namespace (not project namespace) for libvirt access
 	if err := svc.brManager.CreateBridge(bridgeName, false, ""); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create bridge: %v", err)})
+		log.Error().Err(err).Str("operation", "create_bridge").Str("bridge", bridgeName).Msg("failed to create bridge")
+		common.SendError(c, common.NewInternalServerError("failed to create bridge"))
 		return
 	}
 
@@ -462,7 +475,8 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 	`, networkID, req.Network.Name, projectID, adminStateUp, "ACTIVE", shared, networkType, mtu, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_network").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create network"))
 		return
 	}
 
@@ -529,7 +543,8 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_networks").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list networks"))
 		return
 	}
 	defer rows.Close()
@@ -595,11 +610,12 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	`, networkID, projectID).Scan(&id, &name, &adminStateUp, &status, &shared, &mtu, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "network not found"})
+		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_network").Str("network_id", networkID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get network"))
 		return
 	}
 
@@ -641,7 +657,8 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 		networkID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_network").Str("network_id", networkID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete network"))
 		return
 	}
 
@@ -667,7 +684,7 @@ func (svc *Service) UpdateNetwork(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -688,7 +705,7 @@ func (svc *Service) UpdateNetwork(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no updates provided"})
+		common.SendError(c, common.NewBadRequestError("no updates provided"))
 		return
 	}
 
@@ -703,7 +720,8 @@ func (svc *Service) UpdateNetwork(c *gin.Context) {
 
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_network").Str("network_id", networkID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update network"))
 		return
 	}
 
@@ -728,7 +746,7 @@ type CreateSubnetRequest struct {
 func (svc *Service) CreateSubnet(c *gin.Context) {
 	var req CreateSubnetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -748,7 +766,7 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 	// Parse CIDR to calculate gateway if not provided
 	_, ipNet, err := net.ParseCIDR(req.Subnet.CIDR)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid CIDR"})
+		common.SendError(c, common.NewBadRequestError("invalid CIDR"))
 		return
 	}
 
@@ -766,7 +784,8 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 	`, subnetID, req.Subnet.Name, req.Subnet.NetworkID, projectID, req.Subnet.CIDR, gatewayIP, ipVersion, enableDHCP, req.Subnet.DNSNameservers, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_subnet").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create subnet"))
 		return
 	}
 
@@ -864,7 +883,8 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_subnets").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list subnets"))
 		return
 	}
 	defer rows.Close()
@@ -922,11 +942,12 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 	`, subnetID, projectID).Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameservers, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subnet not found"})
+		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_subnet").Str("subnet_id", subnetID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get subnet"))
 		return
 	}
 
@@ -970,7 +991,8 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 		subnetID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_subnet").Str("subnet_id", subnetID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete subnet"))
 		return
 	}
 
@@ -988,7 +1010,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 		} `json:"subnet"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1000,11 +1022,12 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 	).Scan(&currentName)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subnet not found"})
+		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_subnet").Str("subnet_id", subnetID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update subnet"))
 		return
 	}
 
@@ -1018,7 +1041,8 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 		currentName, subnetID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_subnet").Str("subnet_id", subnetID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update subnet"))
 		return
 	}
 
@@ -1031,7 +1055,8 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 	).Scan(&networkID, &cidr, &gatewayIP, &ipVersion)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_subnet_fetch").Str("subnet_id", subnetID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated subnet"))
 		return
 	}
 
@@ -1125,7 +1150,9 @@ func updateString(updates []string) string {
 
 func generateMAC() string {
 	buf := make([]byte, 6)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+	}
 	buf[0] = (buf[0] | 2) & 0xfe // Set local bit, clear multicast bit
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
 }

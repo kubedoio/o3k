@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/storage"
@@ -134,7 +136,7 @@ func (svc *Service) GetVersions(c *gin.Context) {
 				"links": []gin.H{
 					{
 						"rel":  "self",
-						"href": "http://localhost:9292/",
+						"href": fmt.Sprintf("%s/", common.BaseURL(c, 9292)),
 					},
 				},
 			},
@@ -151,7 +153,7 @@ func (svc *Service) GetVersionV2(c *gin.Context) {
 			"links": []gin.H{
 				{
 					"rel":  "self",
-					"href": "http://localhost:9292/",
+					"href": fmt.Sprintf("%s/", common.BaseURL(c, 9292)),
 				},
 			},
 		},
@@ -162,7 +164,7 @@ func (svc *Service) GetVersionV2(c *gin.Context) {
 func (svc *Service) CreateImage(c *gin.Context) {
 	var req CreateImageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -193,7 +195,8 @@ func (svc *Service) CreateImage(c *gin.Context) {
 	`, imageID, req.Name, sql.NullString{String: projectID, Valid: visibility == "private"}, "queued", visibility, diskFormat, containerFormat, req.MinDisk, req.MinRAM, svc.cephPool, "image-"+imageID, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_image").Msg("failed to insert image into database")
+		common.SendError(c, common.NewInternalServerError("failed to create image"))
 		return
 	}
 
@@ -264,7 +267,8 @@ func (svc *Service) ListImages(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_images").Msg("failed to query images")
+		common.SendError(c, common.NewInternalServerError("failed to list images"))
 		return
 	}
 	defer rows.Close()
@@ -347,11 +351,12 @@ func (svc *Service) GetImage(c *gin.Context) {
 	`, imageID, projectID).Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &checksum, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_image").Str("image_id", imageID).Msg("failed to query image")
+		common.SendError(c, common.NewInternalServerError("failed to get image"))
 		return
 	}
 
@@ -420,11 +425,12 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 		imageID, projectID,
 	).Scan(&exists)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_image_check").Str("image_id", imageID).Msg("failed to check image existence")
+		common.SendError(c, common.NewInternalServerError("failed to delete image"))
 		return
 	}
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 
@@ -434,7 +440,8 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 		imageID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_image_db").Str("image_id", imageID).Msg("failed to delete image from database")
+		common.SendError(c, common.NewInternalServerError("failed to delete image"))
 		return
 	}
 
@@ -450,6 +457,18 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+var imageUpdateFields = map[string]string{
+	"/name":       "name",
+	"/visibility": "visibility",
+	"/min_disk":   "min_disk_gb",
+	"/min_ram":    "min_ram_mb",
+}
+
+func allowedImageUpdateField(path string) (string, bool) {
+	col, ok := imageUpdateFields[path]
+	return col, ok
+}
+
 // UpdateImage updates an image
 func (svc *Service) UpdateImage(c *gin.Context) {
 	imageID := c.Param("id")
@@ -458,7 +477,7 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 	// Parse JSON Patch operations
 	var updates []map[string]interface{}
 	if err := c.ShouldBindJSON(&updates); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -469,20 +488,11 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 		value := update["value"]
 
 		if op == "replace" {
-			var field string
-			switch path {
-			case "/name":
-				field = "name"
-			case "/visibility":
-				field = "visibility"
-			case "/min_disk":
-				field = "min_disk_gb"
-			case "/min_ram":
-				field = "min_ram_mb"
-			default:
+			field, ok := allowedImageUpdateField(path)
+			if !ok {
 				continue
 			}
-
+			// field is now a validated column name from the allowlist
 			query := fmt.Sprintf("UPDATE images SET %s = $1, updated_at = $2 WHERE id = $3 AND (visibility != 'public' OR project_id = $4)", field)
 			database.DB.Exec(c.Request.Context(), query, value, time.Now(), imageID, projectID)
 		}
@@ -505,12 +515,12 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 	).Scan(&status)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 
 	if status != "queued" {
-		c.JSON(http.StatusConflict, gin.H{"error": "image data already exists"})
+		common.SendError(c, common.NewConflictError("image data already exists"))
 		return
 	}
 
@@ -525,7 +535,8 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 		database.DB.Exec(c.Request.Context(),
 			"UPDATE images SET status = $1 WHERE id = $2",
 			"queued", imageID)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("failed to upload image: %v", err)})
+		log.Error().Err(err).Str("operation", "upload_image").Str("image_id", imageID).Msg("failed to upload image to storage")
+		common.SendError(c, common.NewServiceUnavailableError("failed to upload image"))
 		return
 	}
 
@@ -551,12 +562,12 @@ func (svc *Service) DownloadImageData(c *gin.Context) {
 	).Scan(&status, &sizeBytes)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 
 	if status != "active" {
-		c.JSON(http.StatusConflict, gin.H{"error": "image is not active"})
+		common.SendError(c, common.NewConflictError("image is not active"))
 		return
 	}
 
@@ -620,7 +631,7 @@ func (svc *Service) CreateImageMember(c *gin.Context) {
 		Member string `json:"member"` // member_id is the project ID to share with
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -632,16 +643,17 @@ func (svc *Service) CreateImageMember(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_image_member_check").Str("image_id", imageID).Msg("failed to query image")
+		common.SendError(c, common.NewInternalServerError("failed to create image member"))
 		return
 	}
 
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized to share this image"})
+		common.SendError(c, common.NewForbiddenError("not authorized to share this image"))
 		return
 	}
 
@@ -654,7 +666,8 @@ func (svc *Service) CreateImageMember(c *gin.Context) {
 	`, memberID, imageID, req.Member, "pending", now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_image_member").Str("image_id", imageID).Msg("failed to insert image member")
+		common.SendError(c, common.NewInternalServerError("failed to create image member"))
 		return
 	}
 
@@ -681,17 +694,18 @@ func (svc *Service) ListImageMembers(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_image_members_check").Str("image_id", imageID).Msg("failed to query image")
+		common.SendError(c, common.NewInternalServerError("failed to list image members"))
 		return
 	}
 
 	// Only owner can list members
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized to view image members"})
+		common.SendError(c, common.NewForbiddenError("not authorized to view image members"))
 		return
 	}
 
@@ -703,7 +717,8 @@ func (svc *Service) ListImageMembers(c *gin.Context) {
 	`, imageID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_image_members").Str("image_id", imageID).Msg("failed to query image members")
+		common.SendError(c, common.NewInternalServerError("failed to list image members"))
 		return
 	}
 	defer rows.Close()
@@ -714,6 +729,7 @@ func (svc *Service) ListImageMembers(c *gin.Context) {
 		var createdAt, updatedAt time.Time
 
 		if err := rows.Scan(&memberID, &status, &createdAt, &updatedAt); err != nil {
+			log.Warn().Err(err).Msg("failed to scan image member row")
 			continue
 		}
 
@@ -751,17 +767,18 @@ func (svc *Service) GetImageMember(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_image_member_check").Str("image_id", imageID).Msg("failed to query image")
+		common.SendError(c, common.NewInternalServerError("failed to get image member"))
 		return
 	}
 
 	// Only owner or member can view membership
 	if (!ownerID.Valid || ownerID.String != projectID) && memberID != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
@@ -774,11 +791,12 @@ func (svc *Service) GetImageMember(c *gin.Context) {
 	`, imageID, memberID).Scan(&status, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		common.SendError(c, common.NewNotFoundError("member"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_image_member").Str("image_id", imageID).Msg("failed to query image member")
+		common.SendError(c, common.NewInternalServerError("failed to get image member"))
 		return
 	}
 
@@ -802,13 +820,13 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 		Status string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
 	// Validate status
 	if req.Status != "accepted" && req.Status != "rejected" && req.Status != "pending" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+		common.SendError(c, common.NewBadRequestError("invalid status"))
 		return
 	}
 
@@ -820,11 +838,12 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_image_member_check").Str("image_id", imageID).Msg("failed to query image")
+		common.SendError(c, common.NewInternalServerError("failed to update image member"))
 		return
 	}
 
@@ -835,13 +854,13 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 	isMember := memberID == projectID
 
 	if !isOwner && !isMember {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
 	// Owner can only set status to "pending"
 	if isOwner && !isMember && req.Status != "pending" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "owner can only set status to pending"})
+		common.SendError(c, common.NewForbiddenError("owner can only set status to pending"))
 		return
 	}
 
@@ -853,7 +872,8 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 	`, req.Status, time.Now(), imageID, memberID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_image_member").Str("image_id", imageID).Msg("failed to update image member")
+		common.SendError(c, common.NewInternalServerError("failed to update image member"))
 		return
 	}
 
@@ -867,7 +887,8 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 	`, imageID, memberID).Scan(&status, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_image_member_fetch").Str("image_id", imageID).Msg("failed to fetch updated image member")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated image member"))
 		return
 	}
 
@@ -895,17 +916,18 @@ func (svc *Service) DeleteImageMember(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_image_member_check").Str("image_id", imageID).Msg("failed to query image owner")
+		common.SendError(c, common.NewInternalServerError("failed to delete image member"))
 		return
 	}
 
 	// Only owner can delete members
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
@@ -915,7 +937,8 @@ func (svc *Service) DeleteImageMember(c *gin.Context) {
 		imageID, memberID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_image_member").Str("image_id", imageID).Msg("failed to delete image member")
+		common.SendError(c, common.NewInternalServerError("failed to delete image member"))
 		return
 	}
 
@@ -936,17 +959,18 @@ func (svc *Service) AddImageTag(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_image_tag_check").Str("image_id", imageID).Msg("failed to query image owner")
+		common.SendError(c, common.NewInternalServerError("failed to add image tag"))
 		return
 	}
 
 	// Only owner can add tags
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
@@ -958,7 +982,8 @@ func (svc *Service) AddImageTag(c *gin.Context) {
 	`, imageID, tag)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_image_tag").Str("image_id", imageID).Msg("failed to add image tag")
+		common.SendError(c, common.NewInternalServerError("failed to add image tag"))
 		return
 	}
 
@@ -979,17 +1004,18 @@ func (svc *Service) DeleteImageTag(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_image_tag_check").Str("image_id", imageID).Msg("failed to query image owner")
+		common.SendError(c, common.NewInternalServerError("failed to delete image tag"))
 		return
 	}
 
 	// Only owner can delete tags
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
@@ -999,7 +1025,8 @@ func (svc *Service) DeleteImageTag(c *gin.Context) {
 		imageID, tag,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_image_tag").Str("image_id", imageID).Msg("failed to delete image tag")
+		common.SendError(c, common.NewInternalServerError("failed to delete image tag"))
 		return
 	}
 
@@ -1019,17 +1046,18 @@ func (svc *Service) DeactivateImage(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "deactivate_image_check").Str("image_id", imageID).Msg("failed to query image owner")
+		common.SendError(c, common.NewInternalServerError("failed to deactivate image"))
 		return
 	}
 
 	// Only owner can deactivate
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
@@ -1039,7 +1067,8 @@ func (svc *Service) DeactivateImage(c *gin.Context) {
 		"deactivated", time.Now(), imageID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "deactivate_image").Str("image_id", imageID).Msg("failed to deactivate image")
+		common.SendError(c, common.NewInternalServerError("failed to deactivate image"))
 		return
 	}
 
@@ -1059,17 +1088,18 @@ func (svc *Service) ReactivateImage(c *gin.Context) {
 	).Scan(&ownerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "reactivate_image_check").Str("image_id", imageID).Msg("failed to query image owner")
+		common.SendError(c, common.NewInternalServerError("failed to reactivate image"))
 		return
 	}
 
 	// Only owner can reactivate
 	if !ownerID.Valid || ownerID.String != projectID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		common.SendError(c, common.NewForbiddenError("not authorized"))
 		return
 	}
 
@@ -1079,7 +1109,8 @@ func (svc *Service) ReactivateImage(c *gin.Context) {
 		"active", time.Now(), imageID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "reactivate_image").Str("image_id", imageID).Msg("failed to reactivate image")
+		common.SendError(c, common.NewInternalServerError("failed to reactivate image"))
 		return
 	}
 

@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // GetServerDiagnostics handles GET /v2.1/servers/:id/diagnostics
@@ -27,12 +29,7 @@ func (svc *Service) GetServerDiagnostics(c *gin.Context) {
 	).Scan(&status, &createdAt, &vcpus, &memoryMB, &diskGB, &flavorID)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"itemNotFound": gin.H{
-				"message": "Instance not found",
-				"code":    404,
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -42,23 +39,23 @@ func (svc *Service) GetServerDiagnostics(c *gin.Context) {
 	// Return diagnostic information
 	// In stub mode, return mock values; in real mode, these would come from libvirt
 	c.JSON(http.StatusOK, gin.H{
-		"state":           status,
-		"driver":          "libvirt",
-		"hypervisor":      "kvm",
-		"uptime":          int(uptime),
-		"num_cpus":        vcpus,
-		"num_nics":        1,
-		"num_disks":       1,
-		"memory":          memoryMB,
-		"memory-actual":   memoryMB,
-		"memory-rss":      memoryMB / 2,
-		"cpu0_time":       int(uptime * 1000000000), // nanoseconds
-		"vda_read":        1024 * 1024,              // bytes
-		"vda_write":       512 * 1024,               // bytes
-		"vda_read_req":    100,
-		"vda_write_req":   50,
-		"vnet0_rx":        2048 * 1024, // bytes
-		"vnet0_tx":        1024 * 1024,
+		"state":            status,
+		"driver":           "libvirt",
+		"hypervisor":       "kvm",
+		"uptime":           int(uptime),
+		"num_cpus":         vcpus,
+		"num_nics":         1,
+		"num_disks":        1,
+		"memory":           memoryMB,
+		"memory-actual":    memoryMB,
+		"memory-rss":       memoryMB / 2,
+		"cpu0_time":        int(uptime * 1000000000), // nanoseconds
+		"vda_read":         1024 * 1024,              // bytes
+		"vda_write":        512 * 1024,               // bytes
+		"vda_read_req":     100,
+		"vda_write_req":    50,
+		"vnet0_rx":         2048 * 1024, // bytes
+		"vnet0_tx":         1024 * 1024,
 		"vnet0_rx_packets": 1000,
 		"vnet0_tx_packets": 500,
 	})
@@ -77,12 +74,7 @@ func (svc *Service) ListInstanceActions(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{
-			"itemNotFound": gin.H{
-				"message": "Instance not found",
-				"code":    404,
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -95,7 +87,8 @@ func (svc *Service) ListInstanceActions(c *gin.Context) {
 		instanceID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_instance_actions").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list instance actions"))
 		return
 	}
 	defer rows.Close()
@@ -106,6 +99,7 @@ func (svc *Service) ListInstanceActions(c *gin.Context) {
 		var startTime time.Time
 
 		if err := rows.Scan(&id, &action, &requestID, &userID, &projectIDStr, &startTime, &message); err != nil {
+			log.Warn().Err(err).Msg("failed to scan instance action row")
 			continue
 		}
 
@@ -136,12 +130,7 @@ func (svc *Service) GetInstanceAction(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{
-			"itemNotFound": gin.H{
-				"message": "Instance not found",
-				"code":    404,
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
 
@@ -157,12 +146,7 @@ func (svc *Service) GetInstanceAction(c *gin.Context) {
 	).Scan(&action, &userID, &projectIDStr, &startTime, &message)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"itemNotFound": gin.H{
-				"message": "Action not found",
-				"code":    404,
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("action"))
 		return
 	}
 

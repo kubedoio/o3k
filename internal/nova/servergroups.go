@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ListServerGroups handles GET /v2.1/os-server-groups
@@ -19,7 +21,8 @@ func (svc *Service) ListServerGroups(c *gin.Context) {
 		projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_server_groups").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list server groups"))
 		return
 	}
 	defer rows.Close()
@@ -61,7 +64,7 @@ func (svc *Service) CreateServerGroup(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -74,7 +77,8 @@ func (svc *Service) CreateServerGroup(c *gin.Context) {
 		groupID, req.ServerGroup.Name, req.ServerGroup.Policies, []string{}, projectID, now, now,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_server_group").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create server group"))
 		return
 	}
 
@@ -107,12 +111,7 @@ func (svc *Service) GetServerGroup(c *gin.Context) {
 	).Scan(&name, &policies, &members, &projectIDFromDB, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"itemNotFound": gin.H{
-				"message": "Server group not found",
-				"code":    404,
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("server group"))
 		return
 	}
 
@@ -138,18 +137,13 @@ func (svc *Service) DeleteServerGroup(c *gin.Context) {
 		groupID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_server_group").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete server group"))
 		return
 	}
 
-	rowsAffected := result.RowsAffected()
-	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"itemNotFound": gin.H{
-				"message": "Server group not found",
-				"code":    404,
-			},
-		})
+	if result.RowsAffected() == 0 {
+		common.SendError(c, common.NewNotFoundError("server group"))
 		return
 	}
 

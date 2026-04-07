@@ -7,10 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // CreatePortForwardingRequest represents a port forwarding creation request
@@ -64,7 +66,7 @@ func (svc *Service) ListPortForwardings(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "floating IP not found"})
+		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
 
@@ -79,7 +81,8 @@ func (svc *Service) ListPortForwardings(c *gin.Context) {
 	`, floatingIPID, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_port_forwardings").Msg("failed to query port forwardings")
+		common.SendError(c, common.NewInternalServerError("failed to list port forwardings"))
 		return
 	}
 	defer rows.Close()
@@ -125,24 +128,24 @@ func (svc *Service) CreatePortForwarding(c *gin.Context) {
 
 	var req CreatePortForwardingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
 	// Validate protocol
 	protocol := strings.ToLower(req.PortForwarding.Protocol)
 	if protocol != "tcp" && protocol != "udp" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "protocol must be tcp or udp"})
+		common.SendError(c, common.NewBadRequestError("protocol must be tcp or udp"))
 		return
 	}
 
 	// Validate port ranges
 	if req.PortForwarding.ExternalPort < 1 || req.PortForwarding.ExternalPort > 65535 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "external_port must be between 1 and 65535"})
+		common.SendError(c, common.NewBadRequestError("external_port must be between 1 and 65535"))
 		return
 	}
 	if req.PortForwarding.InternalPort < 1 || req.PortForwarding.InternalPort > 65535 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "internal_port must be between 1 and 65535"})
+		common.SendError(c, common.NewBadRequestError("internal_port must be between 1 and 65535"))
 		return
 	}
 
@@ -155,16 +158,17 @@ func (svc *Service) CreatePortForwarding(c *gin.Context) {
 	`, floatingIPID, projectID).Scan(&floatingIP, &routerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "floating IP not found"})
+		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_port_forwarding_fetch_fip").Msg("failed to fetch floating IP")
+		common.SendError(c, common.NewInternalServerError("failed to create port forwarding"))
 		return
 	}
 
 	if !routerID.Valid {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "floating IP must be associated with a router"})
+		common.SendError(c, common.NewBadRequestError("floating IP must be associated with a router"))
 		return
 	}
 
@@ -176,11 +180,12 @@ func (svc *Service) CreatePortForwarding(c *gin.Context) {
 	).Scan(&dupExists)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_port_forwarding_check_dup").Msg("failed to check for duplicate port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to create port forwarding"))
 		return
 	}
 	if dupExists {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("port forwarding for %s:%d already exists", protocol, req.PortForwarding.ExternalPort)})
+		common.SendError(c, common.NewConflictError(fmt.Sprintf("port forwarding for %s:%d already exists", protocol, req.PortForwarding.ExternalPort)))
 		return
 	}
 
@@ -199,7 +204,8 @@ func (svc *Service) CreatePortForwarding(c *gin.Context) {
 		req.PortForwarding.Description, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_port_forwarding").Msg("failed to create port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to create port forwarding"))
 		return
 	}
 
@@ -254,11 +260,12 @@ func (svc *Service) GetPortForwarding(c *gin.Context) {
 		&pf.Protocol, &pf.Status, &pf.Description, &pf.CreatedAt, &pf.UpdatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "port forwarding not found"})
+		common.SendError(c, common.NewNotFoundError("port forwarding"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_port_forwarding").Msg("failed to get port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to get port forwarding"))
 		return
 	}
 
@@ -288,7 +295,7 @@ func (svc *Service) UpdatePortForwarding(c *gin.Context) {
 
 	var req UpdatePortForwardingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -306,11 +313,12 @@ func (svc *Service) UpdatePortForwarding(c *gin.Context) {
 		&currentPF.Protocol, &floatingIP, &routerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "port forwarding not found"})
+		common.SendError(c, common.NewNotFoundError("port forwarding"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_port_forwarding_fetch").Msg("failed to fetch port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to update port forwarding"))
 		return
 	}
 
@@ -397,7 +405,8 @@ func (svc *Service) UpdatePortForwarding(c *gin.Context) {
 
 	_, err = database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_port_forwarding").Msg("failed to update port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to update port forwarding"))
 		return
 	}
 
@@ -426,11 +435,12 @@ func (svc *Service) DeletePortForwarding(c *gin.Context) {
 		&internalIP, &floatingIP, &routerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "port forwarding not found"})
+		common.SendError(c, common.NewNotFoundError("port forwarding"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_port_forwarding_fetch").Msg("failed to fetch port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to delete port forwarding"))
 		return
 	}
 
@@ -456,7 +466,8 @@ func (svc *Service) DeletePortForwarding(c *gin.Context) {
 		pfID, floatingIPID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_port_forwarding").Msg("failed to delete port forwarding")
+		common.SendError(c, common.NewInternalServerError("failed to delete port forwarding"))
 		return
 	}
 

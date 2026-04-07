@@ -4,10 +4,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListQosSpecs lists all QoS specifications
@@ -21,7 +23,8 @@ func (svc *Service) ListQosSpecs(c *gin.Context) {
 		ORDER BY created_at DESC
 	`, projectID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_qos_specs").Msg("failed to query QoS specs")
+		common.SendError(c, common.NewInternalServerError("failed to list QoS specs"))
 		return
 	}
 	defer rows.Close()
@@ -38,7 +41,8 @@ func (svc *Service) ListQosSpecs(c *gin.Context) {
 
 		err := rows.Scan(&id, &name, &consumer, &specs, &createdAt)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "list_qos_specs_scan").Msg("failed to scan QoS spec row")
+			common.SendError(c, common.NewInternalServerError("failed to list QoS specs"))
 			return
 		}
 
@@ -65,7 +69,7 @@ func (svc *Service) CreateQosSpec(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -87,7 +91,8 @@ func (svc *Service) CreateQosSpec(c *gin.Context) {
 	`, qosID, req.QosSpecs.Name, req.QosSpecs.Consumer, req.QosSpecs.Specs, projectID, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_qos_spec").Msg("failed to create QoS spec")
+		common.SendError(c, common.NewInternalServerError("failed to create QoS spec"))
 		return
 	}
 
@@ -120,11 +125,12 @@ func (svc *Service) GetQosSpec(c *gin.Context) {
 	`, qosID, projectID).Scan(&name, &consumer, &specs, &createdAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "QoS spec not found"})
+		common.SendError(c, common.NewNotFoundError("QoS spec"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_qos_spec").Str("qos_id", qosID).Msg("failed to query QoS spec")
+		common.SendError(c, common.NewInternalServerError("failed to get QoS spec"))
 		return
 	}
 
@@ -148,7 +154,7 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -160,11 +166,12 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	).Scan(&currentSpecs)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "QoS spec not found"})
+		common.SendError(c, common.NewNotFoundError("QoS spec"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_qos_spec_check").Str("qos_id", qosID).Msg("failed to query QoS spec")
+		common.SendError(c, common.NewInternalServerError("failed to update QoS spec"))
 		return
 	}
 
@@ -184,7 +191,8 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	`, currentSpecs, time.Now(), qosID, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_qos_spec").Str("qos_id", qosID).Msg("failed to update QoS spec")
+		common.SendError(c, common.NewInternalServerError("failed to update QoS spec"))
 		return
 	}
 
@@ -202,7 +210,8 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	`, qosID).Scan(&name, &consumer, &specs)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_qos_spec_fetch").Str("qos_id", qosID).Msg("failed to fetch updated QoS spec")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated QoS spec"))
 		return
 	}
 
@@ -227,12 +236,13 @@ func (svc *Service) DeleteQosSpec(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_qos_spec").Str("qos_id", qosID).Msg("failed to delete QoS spec")
+		common.SendError(c, common.NewInternalServerError("failed to delete QoS spec"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "QoS spec not found"})
+		common.SendError(c, common.NewNotFoundError("QoS spec"))
 		return
 	}
 

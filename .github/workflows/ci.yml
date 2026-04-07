@@ -245,67 +245,8 @@ jobs:
         if: always()
         run: docker compose -f deployments/docker-compose.yml down -v
 
-  e2e-fast:
-    name: E2E Tests (Fast)
-    runs-on: ubuntu-latest
-    needs: [unit-tests, contract-tests, integration-tests]
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Start O3K services
-        run: |
-          docker compose -f deployments/docker-compose.yml up -d
-          sleep 15
-          docker compose -f deployments/docker-compose.yml ps
-
-      - name: Wait for O3K to be ready
-        run: |
-          timeout 60 bash -c 'until curl -sf http://localhost:35357/v3 > /dev/null; do sleep 2; done'
-
-      - name: Run fast E2E scenarios
-        run: |
-          echo "ℹ️  Fast E2E scenarios not yet implemented"
-          echo "ℹ️  Planned: VM lifecycle, volume attach/detach, network isolation"
-          echo "ℹ️  See E2E_CI_TESTING_STRATEGY.md for implementation plan"
-
-      - name: Cleanup
-        if: always()
-        run: docker compose -f deployments/docker-compose.yml down -v
-
-  e2e-full:
-    name: E2E Tests (Full)
-    runs-on: ubuntu-latest
-    needs: e2e-fast
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Start O3K services
-        run: |
-          docker compose -f deployments/docker-compose.yml up -d
-          sleep 15
-          docker compose -f deployments/docker-compose.yml ps
-
-      - name: Wait for O3K to be ready
-        run: |
-          timeout 60 bash -c 'until curl -sf http://localhost:35357/v3 > /dev/null; do sleep 2; done'
-
-      - name: Run full E2E test suite
-        run: |
-          echo "ℹ️  Full E2E test suite not yet implemented"
-          echo "ℹ️  Planned: Terraform validation, Horizon UI tests, multi-tenant scenarios"
-          echo "ℹ️  See E2E_CI_TESTING_STRATEGY.md for implementation plan"
-
-      - name: Cleanup
-        if: always()
-        run: docker compose -f deployments/docker-compose.yml down -v
+  # TODO: Add e2e-fast and e2e-full jobs once E2E test scenarios are implemented.
+  # Planned: VM lifecycle, volume attach/detach, network isolation, Terraform validation, Horizon UI tests.
 
   status-check:
     name: CI Status

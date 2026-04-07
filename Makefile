@@ -7,6 +7,9 @@ VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
 
 # Database variables
+POSTGRES_VERSION?=18
+# Development-only defaults. Do NOT use in production.
+# Production should set DB_URL via environment variable with sslmode=require.
 DB_URL?=postgres://o3k:secret@localhost:5432/o3k?sslmode=disable
 
 # Build the binary
@@ -118,7 +121,7 @@ db-up:
 		-e POSTGRES_USER=o3k \
 		-e POSTGRES_PASSWORD=secret \
 		-p 5432:5432 \
-		postgres:16
+		postgres:$(POSTGRES_VERSION)
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 3
 

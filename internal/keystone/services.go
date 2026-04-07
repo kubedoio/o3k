@@ -2,14 +2,15 @@ package keystone
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListServices returns all services in the catalog
@@ -20,7 +21,8 @@ func (svc *Service) ListServices(c *gin.Context) {
 		ORDER BY name
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query services"})
+		log.Error().Err(err).Str("operation", "list_services").Msg("Failed to query services")
+		common.SendError(c, common.NewInternalServerError("failed to query services"))
 		return
 	}
 	defer rows.Close()
@@ -50,7 +52,7 @@ func (svc *Service) ListServices(c *gin.Context) {
 		services = append(services, service)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"services": services})
+	c.JSON(200, gin.H{"services": services})
 }
 
 // CreateService creates a new service in the catalog
@@ -65,7 +67,7 @@ func (svc *Service) CreateService(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -83,7 +85,8 @@ func (svc *Service) CreateService(c *gin.Context) {
 	`, serviceID, req.Service.Type, req.Service.Name, req.Service.Description, enabled, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create service"})
+		log.Error().Err(err).Str("operation", "create_service").Msg("Failed to create service")
+		common.SendError(c, common.NewInternalServerError("failed to create service"))
 		return
 	}
 
@@ -98,7 +101,7 @@ func (svc *Service) CreateService(c *gin.Context) {
 		service["description"] = req.Service.Description
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"service": service})
+	c.JSON(201, gin.H{"service": service})
 }
 
 // GetService returns a specific service by ID
@@ -116,11 +119,12 @@ func (svc *Service) GetService(c *gin.Context) {
 	`, serviceID).Scan(&id, &svcType, &name, &description, &enabled)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
+		common.SendError(c, common.NewNotFoundError("service"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query service"})
+		log.Error().Err(err).Str("operation", "get_service").Str("service_id", serviceID).Msg("Failed to query service")
+		common.SendError(c, common.NewInternalServerError("failed to query service"))
 		return
 	}
 
@@ -135,7 +139,7 @@ func (svc *Service) GetService(c *gin.Context) {
 		service["description"] = *description
 	}
 
-	c.JSON(http.StatusOK, gin.H{"service": service})
+	c.JSON(200, gin.H{"service": service})
 }
 
 // DeleteService deletes a service from the catalog
@@ -147,16 +151,17 @@ func (svc *Service) DeleteService(c *gin.Context) {
 		serviceID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete service"})
+		log.Error().Err(err).Str("operation", "delete_service").Str("service_id", serviceID).Msg("Failed to delete service")
+		common.SendError(c, common.NewInternalServerError("failed to delete service"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
+		common.SendError(c, common.NewNotFoundError("service"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
 
 // UpdateService updates a service (PATCH /v3/services/:id)
@@ -173,10 +178,7 @@ func (svc *Service) UpdateService(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "Invalid request body",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -202,10 +204,7 @@ func (svc *Service) UpdateService(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "No fields to update",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -236,16 +235,11 @@ func (svc *Service) UpdateService(c *gin.Context) {
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-				"message": "Service not found",
-				"code":    404,
-			}})
+			common.SendError(c, common.NewNotFoundError("service"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": fmt.Sprintf("Failed to update service: %v", err),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "update_service").Str("service_id", serviceID).Msg("Failed to update service")
+		common.SendError(c, common.NewInternalServerError("failed to update service"))
 		return
 	}
 
@@ -256,7 +250,7 @@ func (svc *Service) UpdateService(c *gin.Context) {
 		"name":    name,
 		"enabled": enabled,
 		"links": map[string]interface{}{
-			"self": fmt.Sprintf("http://localhost:35357/v3/services/%s", id),
+			"self": fmt.Sprintf("%s/v3/services/%s", common.BaseURL(c, 35357), id),
 		},
 	}
 
@@ -264,7 +258,7 @@ func (svc *Service) UpdateService(c *gin.Context) {
 		service["description"] = *description
 	}
 
-	c.JSON(http.StatusOK, gin.H{"service": service})
+	c.JSON(200, gin.H{"service": service})
 }
 
 // ListEndpoints returns all endpoints in the catalog
@@ -276,7 +270,8 @@ func (svc *Service) ListEndpoints(c *gin.Context) {
 		ORDER BY s.name, e.interface
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query endpoints"})
+		log.Error().Err(err).Str("operation", "list_endpoints").Msg("Failed to query endpoints")
+		common.SendError(c, common.NewInternalServerError("failed to query endpoints"))
 		return
 	}
 	defer rows.Close()
@@ -307,7 +302,7 @@ func (svc *Service) ListEndpoints(c *gin.Context) {
 		endpoints = append(endpoints, endpoint)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"endpoints": endpoints})
+	c.JSON(200, gin.H{"endpoints": endpoints})
 }
 
 // CreateEndpoint creates a new endpoint in the catalog
@@ -323,7 +318,7 @@ func (svc *Service) CreateEndpoint(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -340,7 +335,8 @@ func (svc *Service) CreateEndpoint(c *gin.Context) {
 	`, endpointID, req.Endpoint.ServiceID, req.Endpoint.Interface, req.Endpoint.URL, req.Endpoint.Region, enabled)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create endpoint"})
+		log.Error().Err(err).Str("operation", "create_endpoint").Msg("Failed to create endpoint")
+		common.SendError(c, common.NewInternalServerError("failed to create endpoint"))
 		return
 	}
 
@@ -356,7 +352,7 @@ func (svc *Service) CreateEndpoint(c *gin.Context) {
 		endpoint["region"] = req.Endpoint.Region
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"endpoint": endpoint})
+	c.JSON(201, gin.H{"endpoint": endpoint})
 }
 
 // DeleteEndpoint deletes an endpoint from the catalog
@@ -368,14 +364,15 @@ func (svc *Service) DeleteEndpoint(c *gin.Context) {
 		endpointID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete endpoint"})
+		log.Error().Err(err).Str("operation", "delete_endpoint").Str("endpoint_id", endpointID).Msg("Failed to delete endpoint")
+		common.SendError(c, common.NewInternalServerError("failed to delete endpoint"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Endpoint not found"})
+		common.SendError(c, common.NewNotFoundError("endpoint"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }

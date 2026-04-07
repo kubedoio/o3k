@@ -55,7 +55,7 @@ type Flavor struct {
 	VCPUs     int       `json:"vcpus"`
 	RAMMB     int       `json:"ram"`
 	DiskGB    int       `json:"disk"`
-	IsPublic  bool      `json:"OS-FLV-EXT-DATA:ephemeral"`
+	IsPublic  bool      `json:"os-flavor-access:is_public"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
