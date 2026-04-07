@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 )
@@ -34,7 +35,7 @@ type CreatePortRequest struct {
 func (svc *Service) CreatePort(c *gin.Context) {
 	var req CreatePortRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -56,7 +57,7 @@ func (svc *Service) CreatePort(c *gin.Context) {
 	).Scan(&networkID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "network not found"})
+		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
 
@@ -84,14 +85,16 @@ func (svc *Service) CreatePort(c *gin.Context) {
 	// Create TAP device in namespace
 	nsName := svc.nsManager.GetNamespaceName(projectID)
 	if err := svc.tapManager.CreateTAPDevice(tapName, true, nsName); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create TAP device: %v", err)})
+		log.Error().Err(err).Str("operation", "create_tap_device").Str("tap", tapName).Msg("failed to create TAP device")
+		common.SendError(c, common.NewInternalServerError("failed to create TAP device"))
 		return
 	}
 
 	// Attach TAP to bridge
 	bridgeName := "br-" + req.Port.NetworkID[:8]
 	if err := svc.brManager.AttachToBridge(tapName, bridgeName, true, nsName); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to attach TAP to bridge: %v", err)})
+		log.Error().Err(err).Str("operation", "attach_tap_to_bridge").Str("tap", tapName).Msg("failed to attach TAP to bridge")
+		common.SendError(c, common.NewInternalServerError("failed to attach TAP to bridge"))
 		return
 	}
 
@@ -104,7 +107,8 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		sql.NullString{String: req.Port.DeviceOwner, Valid: req.Port.DeviceOwner != ""}, macAddress, adminStateUp, "ACTIVE", fixedIPsJSON, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_port").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create port"))
 		return
 	}
 
@@ -135,7 +139,7 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		if err != nil || !exists {
 			// Clean up port on failure
 			database.DB.Exec(c.Request.Context(), "DELETE FROM ports WHERE id = $1", portID)
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("security group %s not found", sgID)})
+			common.SendError(c, common.NewNotFoundError(fmt.Sprintf("security group %s", sgID)))
 			return
 		}
 
@@ -146,7 +150,8 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		if err != nil {
 			// Clean up port on failure
 			database.DB.Exec(c.Request.Context(), "DELETE FROM ports WHERE id = $1", portID)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to associate security group: %v", err)})
+			log.Error().Err(err).Str("operation", "associate_security_group").Str("sg_id", sgID).Msg("failed to associate security group")
+			common.SendError(c, common.NewInternalServerError("failed to associate security group"))
 			return
 		}
 	}
@@ -257,7 +262,8 @@ func (svc *Service) ListPorts(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_ports").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list ports"))
 		return
 	}
 	defer rows.Close()
@@ -338,11 +344,12 @@ func (svc *Service) GetPort(c *gin.Context) {
 	`, portID, projectID).Scan(&id, &name, &networkID, &deviceID, &deviceOwner, &macAddress, &adminStateUp, &status, &fixedIPsJSON, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "port not found"})
+		common.SendError(c, common.NewNotFoundError("port"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_port").Str("port_id", portID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get port"))
 		return
 	}
 
@@ -429,7 +436,8 @@ func (svc *Service) DeletePort(c *gin.Context) {
 		portID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_port").Str("port_id", portID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete port"))
 		return
 	}
 
@@ -451,7 +459,7 @@ func (svc *Service) UpdatePort(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -484,7 +492,7 @@ func (svc *Service) UpdatePort(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no updates provided"})
+		common.SendError(c, common.NewBadRequestError("no updates provided"))
 		return
 	}
 
@@ -499,7 +507,8 @@ func (svc *Service) UpdatePort(c *gin.Context) {
 
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_port").Str("port_id", portID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update port"))
 		return
 	}
 
@@ -533,7 +542,7 @@ type CreateSecurityGroupRequest struct {
 func (svc *Service) CreateSecurityGroup(c *gin.Context) {
 	var req CreateSecurityGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -543,7 +552,8 @@ func (svc *Service) CreateSecurityGroup(c *gin.Context) {
 	// Create iptables chain for security group
 	if svc.sgManager != nil {
 		if err := svc.sgManager.CreateSecurityGroupChain(sgID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create security group chain: %v", err)})
+			log.Error().Err(err).Str("operation", "create_sg_chain").Str("sg_id", sgID).Msg("failed to create security group chain")
+			common.SendError(c, common.NewInternalServerError("failed to create security group chain"))
 			return
 		}
 	}
@@ -556,7 +566,8 @@ func (svc *Service) CreateSecurityGroup(c *gin.Context) {
 	`, sgID, req.SecurityGroup.Name, projectID, req.SecurityGroup.Description, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_security_group").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create security group"))
 		return
 	}
 
@@ -584,7 +595,8 @@ func (svc *Service) ListSecurityGroups(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_security_groups").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list security groups"))
 		return
 	}
 	defer rows.Close()
@@ -630,11 +642,12 @@ func (svc *Service) GetSecurityGroup(c *gin.Context) {
 	`, sgID, projectID).Scan(&id, &name, &description, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "security group not found"})
+		common.SendError(c, common.NewNotFoundError("security group"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_security_group").Str("sg_id", sgID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get security group"))
 		return
 	}
 
@@ -646,7 +659,8 @@ func (svc *Service) GetSecurityGroup(c *gin.Context) {
 		WHERE security_group_id = $1
 	`, sgID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_sg_rules").Str("sg_id", sgID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get security group rules"))
 		return
 	}
 	defer rows.Close()
@@ -724,7 +738,8 @@ func (svc *Service) DeleteSecurityGroup(c *gin.Context) {
 		sgID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_security_group").Str("sg_id", sgID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete security group"))
 		return
 	}
 
@@ -743,7 +758,7 @@ func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
 		} `json:"security_group"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -755,11 +770,12 @@ func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
 	).Scan(&currentName, &currentDesc)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "security group not found"})
+		common.SendError(c, common.NewNotFoundError("security group"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_security_group").Str("sg_id", sgID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update security group"))
 		return
 	}
 
@@ -776,7 +792,8 @@ func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
 		currentName, currentDesc, sgID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_security_group").Str("sg_id", sgID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update security group"))
 		return
 	}
 
@@ -809,7 +826,7 @@ type CreateSecurityGroupRuleRequest struct {
 func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 	var req CreateSecurityGroupRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -859,7 +876,8 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 		}
 
 		if err := svc.sgManager.AddRule(req.SecurityGroupRule.SecurityGroupID, rule); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to add iptables rule: %v", err)})
+			log.Error().Err(err).Str("operation", "add_sg_rule").Msg("failed to add iptables rule")
+			common.SendError(c, common.NewInternalServerError("failed to add security group rule"))
 			return
 		}
 	}
@@ -878,7 +896,8 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 		now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_sg_rule").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create security group rule"))
 		return
 	}
 
@@ -907,7 +926,8 @@ func (svc *Service) ListSecurityGroupRules(c *gin.Context) {
 	`)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_sg_rules").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list security group rules"))
 		return
 	}
 	defer rows.Close()
@@ -993,7 +1013,8 @@ func (svc *Service) DeleteSecurityGroupRule(c *gin.Context) {
 		ruleID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_sg_rule").Str("rule_id", ruleID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete security group rule"))
 		return
 	}
 
@@ -1066,7 +1087,7 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 		bridgeName := "br-" + networkID[:8]
 		if err := svc.brManager.CreateBridge(bridgeName, false, ""); err != nil {
 			// Bridge might already exist, log but don't fail
-			log.Printf("DEBUG: Bridge creation returned error (may already exist): %v", err)
+			log.Debug().Err(err).Str("bridge", bridgeName).Msg("bridge creation returned error (may already exist)")
 		}
 
 		// Attach TAP to bridge in default namespace

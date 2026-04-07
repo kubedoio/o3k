@@ -13,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -114,7 +116,8 @@ func (svc *Service) ListRouters(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_routers").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list routers"))
 		return
 	}
 	defer rows.Close()
@@ -160,7 +163,7 @@ func (svc *Service) ListRouters(c *gin.Context) {
 func (svc *Service) CreateRouter(c *gin.Context) {
 	var req CreateRouterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -190,7 +193,8 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 
 	// Create router namespace
 	if err := svc.routerManager.CreateRouterNamespace(routerID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create router namespace: %v", err)})
+		log.Error().Err(err).Str("operation", "create_router_namespace").Str("router_id", routerID).Msg("failed to create router namespace")
+		common.SendError(c, common.NewInternalServerError("failed to create router namespace"))
 		return
 	}
 
@@ -203,7 +207,8 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 
 	if err != nil {
 		svc.routerManager.DeleteRouterNamespace(routerID) // Cleanup on error
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_router").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create router"))
 		return
 	}
 
@@ -249,11 +254,12 @@ func (svc *Service) GetRouter(c *gin.Context) {
 		&gatewayInfo, &r.Distributed, &r.HA, &r.CreatedAt, &r.UpdatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "router not found"})
+		common.SendError(c, common.NewNotFoundError("router"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_router").Str("router_id", routerID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get router"))
 		return
 	}
 
@@ -286,7 +292,7 @@ func (svc *Service) UpdateRouter(c *gin.Context) {
 
 	var req UpdateRouterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -319,7 +325,7 @@ func (svc *Service) UpdateRouter(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no updates provided"})
+		common.SendError(c, common.NewBadRequestError("no updates provided"))
 		return
 	}
 
@@ -334,7 +340,8 @@ func (svc *Service) UpdateRouter(c *gin.Context) {
 
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_router").Str("router_id", routerID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update router"))
 		return
 	}
 
@@ -355,14 +362,15 @@ func (svc *Service) DeleteRouter(c *gin.Context) {
 	).Scan(&interfaceCount)
 
 	if err != nil && err != pgx.ErrNoRows {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_router_check").Str("router_id", routerID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to check router interfaces"))
 		return
 	}
 
 	if interfaceCount > 0 {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": fmt.Sprintf("router %s has %d interfaces attached", routerID, interfaceCount),
-		})
+		common.SendError(c, common.NewConflictError(
+			fmt.Sprintf("router %s has %d interfaces attached", routerID, interfaceCount),
+		))
 		return
 	}
 
@@ -377,7 +385,8 @@ func (svc *Service) DeleteRouter(c *gin.Context) {
 		routerID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_router").Str("router_id", routerID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete router"))
 		return
 	}
 
@@ -395,7 +404,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -407,7 +416,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	).Scan(&routerExists)
 
 	if err != nil || !routerExists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "router not found"})
+		common.SendError(c, common.NewNotFoundError("router"))
 		return
 	}
 
@@ -419,11 +428,12 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	).Scan(&subnetID, &networkID, &cidr, &gatewayIP)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subnet not found"})
+		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_router_interface_subnet_lookup").Str("subnet_id", req.SubnetID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get subnet"))
 		return
 	}
 
@@ -447,7 +457,8 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 		macAddress, true, "ACTIVE", fixedIPsJSON, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_router_interface_port").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create router interface port"))
 		return
 	}
 
@@ -458,7 +469,8 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	`, uuid.New().String(), routerID, portID, subnetID, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_router_interface_record").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create router interface record"))
 		return
 	}
 
@@ -489,7 +501,7 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -502,7 +514,7 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 		).Scan(&portID)
 
 		if err == pgx.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "router interface not found"})
+			common.SendError(c, common.NewNotFoundError("router interface"))
 			return
 		}
 	}
@@ -519,7 +531,8 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 		routerID, portID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "remove_router_interface_record").Str("router_id", routerID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to remove router interface record"))
 		return
 	}
 
@@ -529,7 +542,8 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 		portID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "remove_router_interface_port").Str("port_id", portID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete router interface port"))
 		return
 	}
 

@@ -13,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -86,7 +88,8 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_floatingips").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to list floating IPs"))
 		return
 	}
 	defer rows.Close()
@@ -150,7 +153,7 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 func (svc *Service) CreateFloatingIP(c *gin.Context) {
 	var req CreateFloatingIPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -168,14 +171,16 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 		// No subnet exists - use default external IP pool (RFC 5737 TEST-NET-1)
 		subnetCIDR = "192.0.2.0/24"
 	} else if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_floatingip_subnet_lookup").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to allocate floating IP"))
 		return
 	}
 
 	// Allocate an IP from the external network subnet
 	floatingIP, err := svc.allocateFloatingIP(c.Request.Context(), subnetCIDR)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to allocate floating IP: %v", err)})
+		log.Error().Err(err).Str("operation", "allocate_floatingip").Msg("failed to allocate floating IP")
+		common.SendError(c, common.NewInternalServerError("failed to allocate floating IP"))
 		return
 	}
 
@@ -196,7 +201,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 		).Scan(&fixedIPsJSON)
 
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "port not found"})
+			common.SendError(c, common.NewNotFoundError("port"))
 			return
 		}
 
@@ -208,12 +213,13 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 			// Extract from fixed_ips JSON
 			var fixedIPs []map[string]interface{}
 			if err := json.Unmarshal([]byte(fixedIPsJSON), &fixedIPs); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse port fixed_ips"})
+				log.Error().Err(err).Str("operation", "parse_port_fixed_ips").Msg("failed to parse port fixed_ips")
+				common.SendError(c, common.NewInternalServerError("failed to parse port fixed IPs"))
 				return
 			}
 
 			if len(fixedIPs) == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "port has no fixed IP addresses"})
+				common.SendError(c, common.NewBadRequestError("port has no fixed IP addresses"))
 				return
 			}
 
@@ -221,7 +227,8 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 			if ipAddr, ok := fixedIPs[0]["ip_address"].(string); ok {
 				fixedIPAddr = ipAddr
 			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid fixed_ips format"})
+				log.Error().Str("operation", "parse_port_fixed_ips").Msg("invalid fixed_ips format")
+				common.SendError(c, common.NewInternalServerError("invalid fixed_ips format"))
 				return
 			}
 		}
@@ -264,7 +271,8 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 	`, floatingIPID, projectID, req.FloatingIP.FloatingNetworkID, floatingIP, fixedIP, portID, routerID, status, req.FloatingIP.Description, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_floatingip").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create floating IP"))
 		return
 	}
 
@@ -319,11 +327,12 @@ func (svc *Service) GetFloatingIP(c *gin.Context) {
 		&fixedIP, &portID, &routerID, &fip.Status, &description, &fip.CreatedAt, &fip.UpdatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "floating IP not found"})
+		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_floatingip").Str("floatingip_id", floatingIPID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get floating IP"))
 		return
 	}
 
@@ -373,7 +382,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	// Parse raw JSON to detect if port_id key is present
 	var rawReq map[string]map[string]interface{}
 	if err := c.ShouldBindJSON(&rawReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -386,7 +395,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	).Scan(&currentFloatingIP, &currentFixedIP, &currentPortID, &currentRouterID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "floating IP not found"})
+		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
 
@@ -427,7 +436,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 				// Associate with new port
 				newPortID, ok := portIDValue.(string)
 				if !ok {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "port_id must be a string or null"})
+					common.SendError(c, common.NewBadRequestError("port_id must be a string or null"))
 					return
 				}
 			// Associate with new port
@@ -449,7 +458,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 			`, networkID).Scan(&routerID)
 
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "no router with external gateway found for this network"})
+				common.SendError(c, common.NewBadRequestError("no router with external gateway found for this network"))
 				return
 			}
 
@@ -464,7 +473,8 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 				// Configure NAT rules
 				externalInterface := "qg-ext-" + routerID[:7]
 				if err := svc.routerManager.AddFloatingIP(routerID, currentFloatingIP.String, fixedIP, externalInterface); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to configure NAT: %v", err)})
+					log.Error().Err(err).Str("operation", "configure_nat").Msg("failed to configure NAT rules")
+					common.SendError(c, common.NewInternalServerError("failed to configure NAT"))
 					return
 				}
 
@@ -513,7 +523,8 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 
 	_, err = database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_floatingip").Str("floatingip_id", floatingIPID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to update floating IP"))
 		return
 	}
 
@@ -535,7 +546,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 	).Scan(&floatingIP, &fixedIP, &portID, &routerID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "floating IP not found"})
+		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
 
@@ -553,7 +564,8 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 		floatingIPID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_floatingip").Str("floatingip_id", floatingIPID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete floating IP"))
 		return
 	}
 

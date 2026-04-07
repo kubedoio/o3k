@@ -4,10 +4,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
 // GetAutoAllocatedTopology returns the auto-allocated network topology for a project
@@ -39,7 +41,8 @@ func (svc *Service) GetAutoAllocatedTopology(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_auto_allocated_topology").Str("project_id", projectID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get auto-allocated topology"))
 		return
 	}
 
@@ -87,7 +90,8 @@ func (svc *Service) CreateAutoAllocatedTopology(c *gin.Context) {
 	`, networkID, networkName, projectID, true, "ACTIVE", false, "flat", 1500, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_auto_allocated_network").Str("project_id", projectID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create auto-allocated network"))
 		return
 	}
 
@@ -102,7 +106,8 @@ func (svc *Service) CreateAutoAllocatedTopology(c *gin.Context) {
 	`, subnetID, "auto-allocated-subnet", networkID, projectID, subnetCIDR, gatewayIP, 4, true, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_auto_allocated_subnet").Str("project_id", projectID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to create auto-allocated subnet"))
 		return
 	}
 
@@ -139,12 +144,13 @@ func (svc *Service) DeleteAutoAllocatedTopology(c *gin.Context) {
 	`, projectID).Scan(&networkID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "auto-allocated topology not found"})
+		common.SendError(c, common.NewNotFoundError("auto-allocated topology"))
 		return
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_auto_allocated_topology_lookup").Str("project_id", projectID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to find auto-allocated topology"))
 		return
 	}
 
@@ -154,7 +160,8 @@ func (svc *Service) DeleteAutoAllocatedTopology(c *gin.Context) {
 	`, networkID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_auto_allocated_subnets").Str("network_id", networkID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete auto-allocated subnets"))
 		return
 	}
 
@@ -164,7 +171,8 @@ func (svc *Service) DeleteAutoAllocatedTopology(c *gin.Context) {
 	`, networkID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_auto_allocated_network").Str("network_id", networkID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete auto-allocated network"))
 		return
 	}
 
