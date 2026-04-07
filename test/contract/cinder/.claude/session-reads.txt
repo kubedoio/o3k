@@ -1,2 +1,8 @@
 /Users/I761222/git/o3k/test/contract/helpers.go
 /Users/I761222/git/o3k/internal/cinder/groups.go
+/Users/I761222/git/o3k/test/contract/cinder/qos_specs_test.go
+/Users/I761222/git/o3k/test/contract/cinder/availability_zones_test.go
+/Users/I761222/git/o3k/test/contract/cinder/backups_test.go
+/Users/I761222/git/o3k/internal/cinder/availability_zones.go
+/Users/I761222/git/o3k/internal/cinder/backups.go
+/Users/I761222/git/o3k/internal/cinder/volumes.go

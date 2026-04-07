@@ -123,6 +123,28 @@ Deep dives into specific features and experimental implementations.
 
 ---
 
+### 🧪 Testing & Quality
+
+Test reports, strategies, and code quality reviews.
+
+#### Code Review
+- **[testing/TESTING_SUMMARY](testing/TESTING_SUMMARY.md)** - Comprehensive testing summary with lifecycle coverage
+- **[testing/E2E_CI_TESTING_STRATEGY](testing/E2E_CI_TESTING_STRATEGY.md)** - E2E and CI pipeline strategy
+
+#### Contract Test Reports
+- **[testing/CONTRACT_TESTS_FINAL](testing/CONTRACT_TESTS_FINAL.md)** - Final results: 95.7% passing (223/233)
+- **[testing/CONTRACT_TEST_RESULTS](testing/CONTRACT_TEST_RESULTS.md)** - Results snapshot: 90.2% (258/286)
+- **[testing/CONTRACT_TESTS_FINAL_REPORT](testing/CONTRACT_TESTS_FINAL_REPORT.md)** - Detailed execution report
+- **[testing/TEST_FAILURES_ANALYSIS](testing/TEST_FAILURES_ANALYSIS.md)** - Root cause analysis of remaining failures
+
+#### Code Reviews
+- **[review/full-repo-review-report](review/full-repo-review-report.md)** - Full codebase review (42 findings, April 2026)
+
+#### Compatibility
+- **[compatibility/OPENSTACK_COMPATIBILITY_REPORT](compatibility/OPENSTACK_COMPATIBILITY_REPORT.md)** - OpenStack 2025.2 compatibility analysis
+
+---
+
 ### 🤝 Contributing & Development
 
 - **[CONTRIBUTING](CONTRIBUTING.md)** - Development guidelines and contribution process
@@ -278,6 +300,6 @@ Analysis of dashboard compatibility and integration options.
 
 ---
 
-**Last Updated**: March 17, 2026
-**Total Documentation Files**: 31
-**Coverage**: Getting Started, Installation, Configuration, Operations, Architecture, API Reference
+**Last Updated**: April 2026
+**Total Documentation Files**: 39
+**Coverage**: Getting Started, Installation, Configuration, Operations, Architecture, API Reference, Testing, Code Quality
