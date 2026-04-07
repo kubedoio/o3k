@@ -1,11 +1,11 @@
 package middleware
 
 import (
-	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/keystone"
+	"github.com/gin-gonic/gin"
 )
 
 // AuthMiddleware validates OpenStack tokens
@@ -29,24 +29,14 @@ func AuthMiddleware(authService *keystone.AuthService) gin.HandlerFunc {
 		// Get token from X-Auth-Token header
 		token := c.GetHeader("X-Auth-Token")
 		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
-				"message": "authentication required",
-				"code":    401,
-				"title":   "Unauthorized",
-			}})
-			c.Abort()
+			common.AbortWithError(c, common.NewUnauthorizedError("authentication required"))
 			return
 		}
 
 		// Validate token
 		claims, err := authService.ValidateToken(token)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
-				"message": "invalid or expired token",
-				"code":    401,
-				"title":   "Unauthorized",
-			}})
-			c.Abort()
+			common.AbortWithError(c, common.NewUnauthorizedError("invalid or expired token"))
 			return
 		}
 
@@ -65,12 +55,7 @@ func RequireProjectScope() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID, exists := c.Get("project_id")
 		if !exists || projectID == "" {
-			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-				"message": "project-scoped token required",
-				"code":    403,
-				"title":   "Forbidden",
-			}})
-			c.Abort()
+			common.AbortWithError(c, common.NewForbiddenError("project-scoped token required"))
 			return
 		}
 		c.Next()
@@ -82,12 +67,7 @@ func RequireRole(role string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		roles, exists := c.Get("roles")
 		if !exists {
-			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-				"message": "insufficient privileges",
-				"code":    403,
-				"title":   "Forbidden",
-			}})
-			c.Abort()
+			common.AbortWithError(c, common.NewForbiddenError("insufficient privileges"))
 			return
 		}
 
@@ -99,11 +79,6 @@ func RequireRole(role string) gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-			"message": "insufficient privileges",
-			"code":    403,
-			"title":   "Forbidden",
-		}})
-		c.Abort()
+		common.AbortWithError(c, common.NewForbiddenError("insufficient privileges"))
 	}
 }

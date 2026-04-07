@@ -13,6 +13,7 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // Service handles Keystone API endpoints
@@ -133,8 +134,8 @@ func (svc *Service) GetVersion(c *gin.Context) {
 			},
 			"media-types": []gin.H{
 				{
-					"base":      "application/json",
-					"type":      "application/vnd.openstack.identity-v3+json",
+					"base": "application/json",
+					"type": "application/vnd.openstack.identity-v3+json",
 				},
 			},
 		},
@@ -151,11 +152,7 @@ func (svc *Service) AuthenticateToken(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// Log parse error with request body
 		c.Error(fmt.Errorf("auth parse failed: %v, body: %s", err, string(bodyBytes)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body: " + err.Error(),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body: "+err.Error()))
 		return
 	}
 
@@ -171,28 +168,17 @@ func (svc *Service) AuthenticateToken(c *gin.Context) {
 		// Password-based authentication
 		resp, tokenString, err = svc.authService.AuthenticatePassword(c.Request.Context(), &req)
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "password or token authentication required",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("password or token authentication required"))
 		return
 	}
 
 	if err != nil {
 		if osErr, ok := err.(*common.OpenStackError); ok {
-			c.JSON(osErr.StatusCode, gin.H{"error": gin.H{
-				"message": osErr.Message,
-				"code":    osErr.StatusCode,
-				"title":   osErr.Code,
-			}})
+			common.SendError(c, osErr)
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "authenticate").Msg("Authentication failed")
+		common.SendError(c, common.NewInternalServerError("authentication failed"))
 		return
 	}
 
@@ -205,29 +191,17 @@ func (svc *Service) AuthenticateToken(c *gin.Context) {
 func (svc *Service) ValidateToken(c *gin.Context) {
 	tokenString := c.GetHeader("X-Subject-Token")
 	if tokenString == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "X-Subject-Token header required",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("X-Subject-Token header required"))
 		return
 	}
 
 	claims, err := svc.authService.ValidateToken(tokenString)
 	if err != nil {
 		if osErr, ok := err.(*common.OpenStackError); ok {
-			c.JSON(osErr.StatusCode, gin.H{"error": gin.H{
-				"message": osErr.Message,
-				"code":    osErr.StatusCode,
-				"title":   osErr.Code,
-			}})
+			common.SendError(c, osErr)
 			return
 		}
-		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
-			"message": "invalid token",
-			"code":    401,
-			"title":   "Unauthorized",
-		}})
+		common.SendError(c, common.NewUnauthorizedError("invalid token"))
 		return
 	}
 
@@ -259,21 +233,13 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 		tokenString = c.GetHeader("X-Subject-Token")
 	}
 	if tokenString == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
-			"message": "authentication required",
-			"code":    401,
-			"title":   "Unauthorized",
-		}})
+		common.SendError(c, common.NewUnauthorizedError("authentication required"))
 		return
 	}
 
 	claims, err := svc.authService.ValidateToken(tokenString)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
-			"message": "invalid token",
-			"code":    401,
-			"title":   "Unauthorized",
-		}})
+		common.SendError(c, common.NewUnauthorizedError("invalid token"))
 		return
 	}
 
@@ -288,11 +254,8 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 	`, claims.UserID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "list_auth_projects").Str("user_id", claims.UserID).Msg("Failed to query auth projects")
+		common.SendError(c, common.NewInternalServerError("failed to query projects"))
 		return
 	}
 	defer rows.Close()
@@ -331,7 +294,8 @@ func (svc *Service) ListUsers(c *gin.Context) {
 		"SELECT id, name, enabled, domain_id FROM users ORDER BY name",
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_users").Msg("Failed to query users")
+		common.SendError(c, common.NewInternalServerError("failed to query users"))
 		return
 	}
 	defer rows.Close()
@@ -341,7 +305,8 @@ func (svc *Service) ListUsers(c *gin.Context) {
 		var id, name, domainID string
 		var enabled bool
 		if err := rows.Scan(&id, &name, &enabled, &domainID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "list_users_scan").Msg("Failed to scan user row")
+			common.SendError(c, common.NewInternalServerError("failed to read users"))
 			return
 		}
 		users = append(users, gin.H{
@@ -367,11 +332,7 @@ func (svc *Service) GetUser(c *gin.Context) {
 	).Scan(&id, &name, &enabled, &domainID)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "user not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.HandleDatabaseError(c, err, "user")
 		return
 	}
 
@@ -389,7 +350,8 @@ func (svc *Service) ListProjects(c *gin.Context) {
 		"SELECT id, name, description, enabled, domain_id FROM projects ORDER BY name",
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_projects").Msg("Failed to query projects")
+		common.SendError(c, common.NewInternalServerError("failed to query projects"))
 		return
 	}
 	defer rows.Close()
@@ -399,7 +361,8 @@ func (svc *Service) ListProjects(c *gin.Context) {
 		var id, name, description, domainID string
 		var enabled bool
 		if err := rows.Scan(&id, &name, &description, &enabled, &domainID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "list_projects_scan").Msg("Failed to scan project row")
+			common.SendError(c, common.NewInternalServerError("failed to read projects"))
 			return
 		}
 		projects = append(projects, gin.H{
@@ -426,11 +389,7 @@ func (svc *Service) GetProject(c *gin.Context) {
 	).Scan(&id, &name, &description, &enabled, &domainID)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "project not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.HandleDatabaseError(c, err, "project")
 		return
 	}
 
@@ -455,11 +414,7 @@ func (svc *Service) CreateProject(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -486,11 +441,8 @@ func (svc *Service) CreateProject(c *gin.Context) {
 		projectID, req.Project.Name, req.Project.Description, domainID, enabled, now, now,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "create_project").Msg("Failed to create project")
+		common.SendError(c, common.NewInternalServerError("failed to create project"))
 		return
 	}
 
@@ -519,11 +471,7 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -549,10 +497,7 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "No fields to update",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -562,10 +507,8 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE projects SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "update_project").Str("project_id", projectID).Msg("Failed to update project")
+		common.SendError(c, common.NewInternalServerError("failed to update project"))
 		return
 	}
 
@@ -578,10 +521,7 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 	).Scan(&name, &description, &domainID, &enabled)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "project not found",
-			"code":    404,
-		}})
+		common.HandleDatabaseError(c, err, "project")
 		return
 	}
 
@@ -606,20 +546,14 @@ func (svc *Service) DeleteProject(c *gin.Context) {
 		projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "delete_project").Str("project_id", projectID).Msg("Failed to delete project")
+		common.SendError(c, common.NewInternalServerError("failed to delete project"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "project not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("project"))
 		return
 	}
 
@@ -632,7 +566,8 @@ func (svc *Service) ListRoles(c *gin.Context) {
 		"SELECT id, name FROM roles ORDER BY name",
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_roles").Msg("Failed to query roles")
+		common.SendError(c, common.NewInternalServerError("failed to query roles"))
 		return
 	}
 	defer rows.Close()
@@ -641,7 +576,8 @@ func (svc *Service) ListRoles(c *gin.Context) {
 	for rows.Next() {
 		var id, name string
 		if err := rows.Scan(&id, &name); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "list_roles_scan").Msg("Failed to scan role row")
+			common.SendError(c, common.NewInternalServerError("failed to read roles"))
 			return
 		}
 		roles = append(roles, gin.H{
@@ -664,11 +600,7 @@ func (svc *Service) GetRole(c *gin.Context) {
 	).Scan(&id, &name)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "role not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.HandleDatabaseError(c, err, "role")
 		return
 	}
 
@@ -691,11 +623,7 @@ func (svc *Service) CreateRole(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -710,11 +638,8 @@ func (svc *Service) CreateRole(c *gin.Context) {
 		roleID, req.Role.Name, now,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "create_role").Msg("Failed to create role")
+		common.SendError(c, common.NewInternalServerError("failed to create role"))
 		return
 	}
 
@@ -738,11 +663,7 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -758,10 +679,7 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "No fields to update",
-			"code":    400,
-		}})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -770,10 +688,8 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE roles SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "update_role").Str("role_id", roleID).Msg("Failed to update role")
+		common.SendError(c, common.NewInternalServerError("failed to update role"))
 		return
 	}
 
@@ -785,10 +701,7 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 	).Scan(&name)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "role not found",
-			"code":    404,
-		}})
+		common.HandleDatabaseError(c, err, "role")
 		return
 	}
 
@@ -810,20 +723,14 @@ func (svc *Service) DeleteRole(c *gin.Context) {
 		roleID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "delete_role").Str("role_id", roleID).Msg("Failed to delete role")
+		common.SendError(c, common.NewInternalServerError("failed to delete role"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "role not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("role"))
 		return
 	}
 
@@ -844,10 +751,8 @@ func (svc *Service) AssignRole(c *gin.Context) {
 		userID, projectID, roleID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "assign_role").Str("project_id", projectID).Str("user_id", userID).Str("role_id", roleID).Msg("Failed to assign role")
+		common.SendError(c, common.NewInternalServerError("failed to assign role"))
 		return
 	}
 
@@ -865,19 +770,14 @@ func (svc *Service) UnassignRole(c *gin.Context) {
 		userID, projectID, roleID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"code":    500,
-		}})
+		log.Error().Err(err).Str("operation", "unassign_role").Msg("Failed to unassign role")
+		common.SendError(c, common.NewInternalServerError("failed to unassign role"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "role assignment not found",
-			"code":    404,
-		}})
+		common.SendError(c, common.NewNotFoundError("role assignment"))
 		return
 	}
 
@@ -897,7 +797,8 @@ func (svc *Service) ListUserProjectRoles(c *gin.Context) {
 		userID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_user_project_roles").Msg("Failed to query user project roles")
+		common.SendError(c, common.NewInternalServerError("failed to query roles"))
 		return
 	}
 	defer rows.Close()
@@ -937,15 +838,13 @@ func (svc *Service) CheckRoleAssignment(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "check_role_assignment").Msg("Failed to check role assignment")
+		common.SendError(c, common.NewInternalServerError("failed to check role assignment"))
 		return
 	}
 
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "role assignment not found",
-			"code":    404,
-		}})
+		common.SendError(c, common.NewNotFoundError("role assignment"))
 		return
 	}
 
@@ -985,7 +884,8 @@ func (svc *Service) ListRoleAssignments(c *gin.Context) {
 
 	rows, err := database.DB.Query(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_role_assignments").Msg("Failed to query role assignments")
+		common.SendError(c, common.NewInternalServerError("failed to query role assignments"))
 		return
 	}
 	defer rows.Close()
@@ -1023,21 +923,17 @@ func (svc *Service) ListRoleAssignments(c *gin.Context) {
 func (svc *Service) CreateUser(c *gin.Context) {
 	var req struct {
 		User struct {
-			Name        string  `json:"name" binding:"required"`
-			Password    string  `json:"password"`
-			Email       string  `json:"email"`
-			Description string  `json:"description"`
-			Enabled     *bool   `json:"enabled"`
-			DomainID    string  `json:"domain_id"`
+			Name        string `json:"name" binding:"required"`
+			Password    string `json:"password"`
+			Email       string `json:"email"`
+			Description string `json:"description"`
+			Enabled     *bool  `json:"enabled"`
+			DomainID    string `json:"domain_id"`
 		} `json:"user" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body: " + err.Error(),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body: "+err.Error()))
 		return
 	}
 
@@ -1056,11 +952,7 @@ func (svc *Service) CreateUser(c *gin.Context) {
 			req.User.DomainID,
 		).Scan(&domainID)
 		if domainErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-				"message": "specified domain not found or disabled",
-				"code":    400,
-				"title":   "Bad Request",
-			}})
+			common.SendError(c, common.NewBadRequestError("specified domain not found or disabled"))
 			return
 		}
 	} else {
@@ -1070,11 +962,8 @@ func (svc *Service) CreateUser(c *gin.Context) {
 			"Default",
 		).Scan(&domainID)
 		if domainErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "failed to resolve default domain: " + domainErr.Error(),
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(domainErr).Str("operation", "create_user_resolve_domain").Msg("Failed to resolve default domain")
+			common.SendError(c, common.NewInternalServerError("failed to resolve default domain"))
 			return
 		}
 	}
@@ -1084,11 +973,8 @@ func (svc *Service) CreateUser(c *gin.Context) {
 	if req.User.Password != "" {
 		hashedBytes, err := svc.authService.HashPassword(req.User.Password)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "failed to hash password",
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "create_user_hash_password").Msg("Failed to hash password")
+			common.SendError(c, common.NewInternalServerError("failed to hash password"))
 			return
 		}
 		passwordHash = string(hashedBytes)
@@ -1107,19 +993,12 @@ func (svc *Service) CreateUser(c *gin.Context) {
 	).Scan(&userID, &userName, &userEmail, &userDescription, &userEnabled, &userDomainID)
 
 	if err != nil {
-		if err.Error() == "ERROR: duplicate key value violates unique constraint \"users_name_key\" (SQLSTATE 23505)" {
-			c.JSON(http.StatusConflict, gin.H{"error": gin.H{
-				"message": "user with name '" + req.User.Name + "' already exists",
-				"code":    409,
-				"title":   "Conflict",
-			}})
+		if strings.Contains(err.Error(), "duplicate key") && strings.Contains(err.Error(), "users_name_key") {
+			common.SendError(c, common.NewConflictError("user with name '"+req.User.Name+"' already exists"))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to create user: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "create_user").Msg("Failed to create user")
+		common.SendError(c, common.NewInternalServerError("failed to create user"))
 		return
 	}
 
@@ -1156,11 +1035,7 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body: " + err.Error(),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body: "+err.Error()))
 		return
 	}
 
@@ -1172,11 +1047,7 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "user not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("user"))
 		return
 	}
 
@@ -1208,11 +1079,8 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	if req.User.Password != nil {
 		hashedBytes, err := svc.authService.HashPassword(*req.User.Password)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "failed to hash password",
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "update_user_hash_password").Msg("Failed to hash password")
+			common.SendError(c, common.NewInternalServerError("failed to hash password"))
 			return
 		}
 		updates = append(updates, "password_hash = $"+fmt.Sprint(argIndex))
@@ -1221,11 +1089,7 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "no fields to update",
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -1237,11 +1101,8 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	_, err = database.DB.Exec(c.Request.Context(), query, args...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to update user: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "update_user").Str("user_id", userID).Msg("Failed to update user")
+		common.SendError(c, common.NewInternalServerError("failed to update user"))
 		return
 	}
 
@@ -1256,11 +1117,8 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	).Scan(&id, &name, &email, &description, &enabled, &domainID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to fetch updated user",
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "update_user_fetch").Str("user_id", userID).Msg("Failed to fetch updated user")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated user"))
 		return
 	}
 
@@ -1292,22 +1150,15 @@ func (svc *Service) DeleteUser(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to delete user: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "delete_user").Str("user_id", userID).Msg("Failed to delete user")
+		common.SendError(c, common.NewInternalServerError("failed to delete user"))
 		return
 	}
 
 	// Check if user was actually deleted
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "user not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("user"))
 		return
 	}
 
@@ -1326,11 +1177,7 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-			"message": "invalid request body: " + err.Error(),
-			"code":    400,
-			"title":   "Bad Request",
-		}})
+		common.SendError(c, common.NewBadRequestError("invalid request body: "+err.Error()))
 		return
 	}
 
@@ -1342,32 +1189,21 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	).Scan(&currentPasswordHash)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "user not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.HandleDatabaseError(c, err, "user")
 		return
 	}
 
 	// Verify original password
 	if !svc.authService.CheckPassword(req.User.OriginalPassword, currentPasswordHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{
-			"message": "original password is incorrect",
-			"code":    401,
-			"title":   "Unauthorized",
-		}})
+		common.SendError(c, common.NewUnauthorizedError("original password is incorrect"))
 		return
 	}
 
 	// Hash new password
 	hashedBytes, err := svc.authService.HashPassword(req.User.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to hash password",
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "change_password_hash").Msg("Failed to hash password")
+		common.SendError(c, common.NewInternalServerError("failed to hash password"))
 		return
 	}
 
@@ -1378,11 +1214,8 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to update password: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "change_password_update").Str("user_id", userID).Msg("Failed to update password")
+		common.SendError(c, common.NewInternalServerError("failed to update password"))
 		return
 	}
 
@@ -1401,11 +1234,7 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "user not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("user"))
 		return
 	}
 
@@ -1420,11 +1249,8 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to fetch user projects: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "get_user_projects").Str("user_id", userID).Msg("Failed to fetch user projects")
+		common.SendError(c, common.NewInternalServerError("failed to fetch user projects"))
 		return
 	}
 	defer rows.Close()
@@ -1434,11 +1260,8 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 		var id, name, description, domainID string
 		var enabled bool
 		if err := rows.Scan(&id, &name, &description, &enabled, &domainID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "failed to scan project: " + err.Error(),
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "get_user_projects_scan").Msg("Failed to scan project row")
+			common.SendError(c, common.NewInternalServerError("failed to read project data"))
 			return
 		}
 		projects = append(projects, gin.H{
@@ -1465,11 +1288,7 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
-			"message": "user not found",
-			"code":    404,
-			"title":   "Not Found",
-		}})
+		common.SendError(c, common.NewNotFoundError("user"))
 		return
 	}
 
@@ -1484,11 +1303,8 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-			"message": "failed to fetch user groups: " + err.Error(),
-			"code":    500,
-			"title":   "Internal Server Error",
-		}})
+		log.Error().Err(err).Str("operation", "get_user_groups").Str("user_id", userID).Msg("Failed to fetch user groups")
+		common.SendError(c, common.NewInternalServerError("failed to fetch user groups"))
 		return
 	}
 	defer rows.Close()
@@ -1497,11 +1313,8 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 	for rows.Next() {
 		var id, name, description, domainID string
 		if err := rows.Scan(&id, &name, &description, &domainID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": "failed to scan group: " + err.Error(),
-				"code":    500,
-				"title":   "Internal Server Error",
-			}})
+			log.Error().Err(err).Str("operation", "get_user_groups_scan").Msg("Failed to scan group row")
+			common.SendError(c, common.NewInternalServerError("failed to read group data"))
 			return
 		}
 		groups = append(groups, gin.H{

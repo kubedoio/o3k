@@ -2,13 +2,14 @@ package keystone
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListGroups handles GET /v3/groups
@@ -17,7 +18,8 @@ func (svc *Service) ListGroups(c *gin.Context) {
 		"SELECT id, name, domain_id, description, created_at FROM groups ORDER BY created_at DESC",
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_groups").Msg("Failed to query groups")
+		common.SendError(c, common.NewInternalServerError("failed to query groups"))
 		return
 	}
 	defer rows.Close()
@@ -46,7 +48,7 @@ func (svc *Service) ListGroups(c *gin.Context) {
 		groups = []gin.H{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"groups": groups})
+	c.JSON(200, gin.H{"groups": groups})
 }
 
 // CreateGroup handles POST /v3/groups
@@ -60,7 +62,7 @@ func (svc *Service) CreateGroup(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -79,11 +81,12 @@ func (svc *Service) CreateGroup(c *gin.Context) {
 		groupID, req.Group.Name, domainID, req.Group.Description, now, now,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_group").Msg("Failed to create group")
+		common.SendError(c, common.NewInternalServerError("failed to create group"))
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
+	c.JSON(201, gin.H{
 		"group": gin.H{
 			"id":          groupID,
 			"name":        req.Group.Name,
@@ -109,21 +112,16 @@ func (svc *Service) GetGroup(c *gin.Context) {
 	).Scan(&name, &domainID, &description, &createdAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": gin.H{
-				"message": "Group not found",
-				"code":    404,
-				"title":   "Not Found",
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("group"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_group").Str("group_id", groupID).Msg("Failed to query group")
+		common.SendError(c, common.NewInternalServerError("failed to query group"))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(200, gin.H{
 		"group": gin.H{
 			"id":          groupID,
 			"name":        name,
@@ -148,7 +146,7 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -169,7 +167,7 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -179,7 +177,8 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE groups SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_group").Str("group_id", groupID).Msg("Failed to update group")
+		common.SendError(c, common.NewInternalServerError("failed to update group"))
 		return
 	}
 
@@ -191,11 +190,12 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 	).Scan(&name, &domainID, &description)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_group_fetch").Str("group_id", groupID).Msg("Failed to fetch updated group")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated group"))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(200, gin.H{
 		"group": gin.H{
 			"id":          groupID,
 			"name":        name,
@@ -217,23 +217,18 @@ func (svc *Service) DeleteGroup(c *gin.Context) {
 		groupID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_group").Str("group_id", groupID).Msg("Failed to delete group")
+		common.SendError(c, common.NewInternalServerError("failed to delete group"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": gin.H{
-				"message": "Group not found",
-				"code":    404,
-				"title":   "Not Found",
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("group"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
 
 // ListGroupUsers handles GET /v3/groups/:id/users
@@ -248,7 +243,8 @@ func (svc *Service) ListGroupUsers(c *gin.Context) {
 		groupID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_group_users").Str("group_id", groupID).Msg("Failed to query group users")
+		common.SendError(c, common.NewInternalServerError("failed to query group users"))
 		return
 	}
 	defer rows.Close()
@@ -274,7 +270,7 @@ func (svc *Service) ListGroupUsers(c *gin.Context) {
 		users = []gin.H{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"users": users})
+	c.JSON(200, gin.H{"users": users})
 }
 
 // AddUserToGroup handles PUT /v3/groups/:id/users/:user_id
@@ -289,11 +285,12 @@ func (svc *Service) AddUserToGroup(c *gin.Context) {
 		groupID, userID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_user_to_group").Str("group_id", groupID).Str("user_id", userID).Msg("Failed to add user to group")
+		common.SendError(c, common.NewInternalServerError("failed to add user to group"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
 
 // RemoveUserFromGroup handles DELETE /v3/groups/:id/users/:user_id
@@ -306,22 +303,18 @@ func (svc *Service) RemoveUserFromGroup(c *gin.Context) {
 		groupID, userID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "remove_user_from_group").Str("group_id", groupID).Str("user_id", userID).Msg("Failed to remove user from group")
+		common.SendError(c, common.NewInternalServerError("failed to remove user from group"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": gin.H{
-				"message": "User not in group",
-				"code":    404,
-			},
-		})
+		common.SendError(c, common.NewNotFoundError("user in group"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
 
 // Helper function to join update strings

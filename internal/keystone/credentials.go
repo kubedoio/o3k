@@ -1,13 +1,14 @@
 package keystone
 
 import (
-	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListCredentials returns all credentials
@@ -18,7 +19,8 @@ func (svc *Service) ListCredentials(c *gin.Context) {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query credentials"})
+		log.Error().Err(err).Str("operation", "list_credentials").Msg("Failed to query credentials")
+		common.SendError(c, common.NewInternalServerError("failed to query credentials"))
 		return
 	}
 	defer rows.Close()
@@ -47,7 +49,7 @@ func (svc *Service) ListCredentials(c *gin.Context) {
 		credentials = append(credentials, credential)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"credentials": credentials})
+	c.JSON(200, gin.H{"credentials": credentials})
 }
 
 // CreateCredential creates a new credential
@@ -62,7 +64,7 @@ func (svc *Service) CreateCredential(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -80,7 +82,8 @@ func (svc *Service) CreateCredential(c *gin.Context) {
 	`, credID, req.Credential.UserID, projectID, req.Credential.Type, req.Credential.Blob, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create credential"})
+		log.Error().Err(err).Str("operation", "create_credential").Msg("Failed to create credential")
+		common.SendError(c, common.NewInternalServerError("failed to create credential"))
 		return
 	}
 
@@ -95,7 +98,7 @@ func (svc *Service) CreateCredential(c *gin.Context) {
 		credential["project_id"] = req.Credential.ProjectID
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"credential": credential})
+	c.JSON(201, gin.H{"credential": credential})
 }
 
 // GetCredential returns a specific credential by ID
@@ -112,11 +115,12 @@ func (svc *Service) GetCredential(c *gin.Context) {
 	`, credID).Scan(&id, &userID, &projectID, &credType, &blob)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Credential not found"})
+		common.SendError(c, common.NewNotFoundError("credential"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query credential"})
+		log.Error().Err(err).Str("operation", "get_credential").Str("cred_id", credID).Msg("Failed to query credential")
+		common.SendError(c, common.NewInternalServerError("failed to query credential"))
 		return
 	}
 
@@ -131,7 +135,7 @@ func (svc *Service) GetCredential(c *gin.Context) {
 		credential["project_id"] = *projectID
 	}
 
-	c.JSON(http.StatusOK, gin.H{"credential": credential})
+	c.JSON(200, gin.H{"credential": credential})
 }
 
 // UpdateCredential updates a credential
@@ -143,7 +147,7 @@ func (svc *Service) UpdateCredential(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -159,7 +163,7 @@ func (svc *Service) UpdateCredential(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -178,12 +182,13 @@ func (svc *Service) UpdateCredential(c *gin.Context) {
 
 	result, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update credential"})
+		log.Error().Err(err).Str("operation", "update_credential").Str("cred_id", credID).Msg("Failed to update credential")
+		common.SendError(c, common.NewInternalServerError("failed to update credential"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Credential not found"})
+		common.SendError(c, common.NewNotFoundError("credential"))
 		return
 	}
 
@@ -200,14 +205,15 @@ func (svc *Service) DeleteCredential(c *gin.Context) {
 		credID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete credential"})
+		log.Error().Err(err).Str("operation", "delete_credential").Str("cred_id", credID).Msg("Failed to delete credential")
+		common.SendError(c, common.NewInternalServerError("failed to delete credential"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Credential not found"})
+		common.SendError(c, common.NewNotFoundError("credential"))
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Status(204)
 }
