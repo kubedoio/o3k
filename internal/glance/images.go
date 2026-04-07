@@ -450,6 +450,18 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+var imageUpdateFields = map[string]string{
+	"/name":       "name",
+	"/visibility": "visibility",
+	"/min_disk":   "min_disk_gb",
+	"/min_ram":    "min_ram_mb",
+}
+
+func allowedImageUpdateField(path string) (string, bool) {
+	col, ok := imageUpdateFields[path]
+	return col, ok
+}
+
 // UpdateImage updates an image
 func (svc *Service) UpdateImage(c *gin.Context) {
 	imageID := c.Param("id")
@@ -469,20 +481,11 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 		value := update["value"]
 
 		if op == "replace" {
-			var field string
-			switch path {
-			case "/name":
-				field = "name"
-			case "/visibility":
-				field = "visibility"
-			case "/min_disk":
-				field = "min_disk_gb"
-			case "/min_ram":
-				field = "min_ram_mb"
-			default:
+			field, ok := allowedImageUpdateField(path)
+			if !ok {
 				continue
 			}
-
+			// field is now a validated column name from the allowlist
 			query := fmt.Sprintf("UPDATE images SET %s = $1, updated_at = $2 WHERE id = $3 AND (visibility != 'public' OR project_id = $4)", field)
 			database.DB.Exec(c.Request.Context(), query, value, time.Now(), imageID, projectID)
 		}
