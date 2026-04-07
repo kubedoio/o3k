@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // ListAgents returns all network agents
@@ -16,7 +18,8 @@ func (svc *Service) ListAgents(c *gin.Context) {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query agents"})
+		log.Error().Err(err).Str("operation", "list_agents").Msg("failed to query agents")
+		common.SendError(c, common.NewInternalServerError("failed to list agents"))
 		return
 	}
 	defer rows.Close()
@@ -34,15 +37,15 @@ func (svc *Service) ListAgents(c *gin.Context) {
 		}
 
 		agent := map[string]interface{}{
-			"id":              id,
-			"agent_type":      agentType,
-			"binary":          binary,
-			"host":            host,
-			"admin_state_up":  adminStateUp,
-			"alive":           alive,
-			"started_at":      startedAt.Format(time.RFC3339),
-			"created_at":      createdAt.Format(time.RFC3339),
-			"configurations":  configurations,
+			"id":             id,
+			"agent_type":     agentType,
+			"binary":         binary,
+			"host":           host,
+			"admin_state_up": adminStateUp,
+			"alive":          alive,
+			"started_at":     startedAt.Format(time.RFC3339),
+			"created_at":     createdAt.Format(time.RFC3339),
+			"configurations": configurations,
 		}
 
 		if description != nil {
@@ -72,20 +75,20 @@ func (svc *Service) GetAgent(c *gin.Context) {
 	`, agentID).Scan(&id, &agentType, &binary, &host, &description, &adminStateUp, &alive, &startedAt, &createdAt, &configurations)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		common.SendError(c, common.NewNotFoundError("agent"))
 		return
 	}
 
 	agent := map[string]interface{}{
-		"id":              id,
-		"agent_type":      agentType,
-		"binary":          binary,
-		"host":            host,
-		"admin_state_up":  adminStateUp,
-		"alive":           alive,
-		"started_at":      startedAt.Format(time.RFC3339),
-		"created_at":      createdAt.Format(time.RFC3339),
-		"configurations":  configurations,
+		"id":             id,
+		"agent_type":     agentType,
+		"binary":         binary,
+		"host":           host,
+		"admin_state_up": adminStateUp,
+		"alive":          alive,
+		"started_at":     startedAt.Format(time.RFC3339),
+		"created_at":     createdAt.Format(time.RFC3339),
+		"configurations": configurations,
 	}
 
 	if description != nil {
@@ -105,7 +108,7 @@ func (svc *Service) ListL3AgentsOnRouter(c *gin.Context) {
 		"SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1)",
 		routerID).Scan(&exists)
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Router not found"})
+		common.SendError(c, common.NewNotFoundError("router"))
 		return
 	}
 
@@ -117,7 +120,8 @@ func (svc *Service) ListL3AgentsOnRouter(c *gin.Context) {
 		ORDER BY a.created_at DESC
 	`, routerID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query agents"})
+		log.Error().Err(err).Str("operation", "list_l3_agents_on_router").Msg("failed to query agents")
+		common.SendError(c, common.NewInternalServerError("failed to list agents"))
 		return
 	}
 	defer rows.Close()
@@ -135,15 +139,15 @@ func (svc *Service) ListL3AgentsOnRouter(c *gin.Context) {
 		}
 
 		agent := map[string]interface{}{
-			"id":              id,
-			"agent_type":      agentType,
-			"binary":          binary,
-			"host":            host,
-			"admin_state_up":  adminStateUp,
-			"alive":           alive,
-			"started_at":      startedAt.Format(time.RFC3339),
-			"created_at":      createdAt.Format(time.RFC3339),
-			"configurations":  configurations,
+			"id":             id,
+			"agent_type":     agentType,
+			"binary":         binary,
+			"host":           host,
+			"admin_state_up": adminStateUp,
+			"alive":          alive,
+			"started_at":     startedAt.Format(time.RFC3339),
+			"created_at":     createdAt.Format(time.RFC3339),
+			"configurations": configurations,
 		}
 
 		if description != nil {
@@ -164,7 +168,7 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 		AgentID string `json:"agent_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -174,7 +178,7 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 		"SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1)",
 		routerID).Scan(&routerExists)
 	if err != nil || !routerExists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Router not found"})
+		common.SendError(c, common.NewNotFoundError("router"))
 		return
 	}
 
@@ -184,7 +188,7 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 		"SELECT EXISTS(SELECT 1 FROM neutron_agents WHERE id = $1)",
 		req.AgentID).Scan(&agentExists)
 	if err != nil || !agentExists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		common.SendError(c, common.NewNotFoundError("agent"))
 		return
 	}
 
@@ -196,7 +200,8 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 	`, routerID, req.AgentID, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add agent to router"})
+		log.Error().Err(err).Str("operation", "add_l3_agent_to_router").Msg("failed to add agent to router")
+		common.SendError(c, common.NewInternalServerError("failed to add agent to router"))
 		return
 	}
 

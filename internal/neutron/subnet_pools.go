@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // ListSubnetPools lists subnet pools
@@ -24,7 +26,8 @@ func (svc *Service) ListSubnetPools(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_subnet_pools").Msg("failed to query subnet pools")
+		common.SendError(c, common.NewInternalServerError("failed to list subnet pools"))
 		return
 	}
 	defer rows.Close()
@@ -45,17 +48,17 @@ func (svc *Service) ListSubnetPools(c *gin.Context) {
 		}
 
 		pool := gin.H{
-			"id":                id,
-			"name":              name,
-			"prefixes":          prefixes,
-			"min_prefixlen":     minPrefixlen,
-			"max_prefixlen":     maxPrefixlen,
-			"shared":            shared,
-			"is_default":        isDefault,
-			"ip_version":        ipVersion,
-			"tenant_id":         projectID,
-			"created_at":        createdAt.Format(time.RFC3339),
-			"updated_at":        updatedAt.Format(time.RFC3339),
+			"id":            id,
+			"name":          name,
+			"prefixes":      prefixes,
+			"min_prefixlen": minPrefixlen,
+			"max_prefixlen": maxPrefixlen,
+			"shared":        shared,
+			"is_default":    isDefault,
+			"ip_version":    ipVersion,
+			"tenant_id":     projectID,
+			"created_at":    createdAt.Format(time.RFC3339),
+			"updated_at":    updatedAt.Format(time.RFC3339),
 		}
 
 		if defaultPrefixlen != nil {
@@ -84,7 +87,7 @@ func (svc *Service) CreateSubnetPool(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -126,22 +129,23 @@ func (svc *Service) CreateSubnetPool(c *gin.Context) {
 		req.SubnetPool.DefaultPrefixlen, shared, isDefault, ipVersion, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_subnet_pool").Msg("failed to create subnet pool")
+		common.SendError(c, common.NewInternalServerError("failed to create subnet pool"))
 		return
 	}
 
 	pool := gin.H{
-		"id":          poolID,
-		"name":        req.SubnetPool.Name,
-		"prefixes":    req.SubnetPool.Prefixes,
+		"id":            poolID,
+		"name":          req.SubnetPool.Name,
+		"prefixes":      req.SubnetPool.Prefixes,
 		"min_prefixlen": minPrefixlen,
 		"max_prefixlen": maxPrefixlen,
-		"shared":      shared,
-		"is_default":  isDefault,
-		"ip_version":  ipVersion,
-		"tenant_id":   projectID,
-		"created_at":  now.Format(time.RFC3339),
-		"updated_at":  now.Format(time.RFC3339),
+		"shared":        shared,
+		"is_default":    isDefault,
+		"ip_version":    ipVersion,
+		"tenant_id":     projectID,
+		"created_at":    now.Format(time.RFC3339),
+		"updated_at":    now.Format(time.RFC3339),
 	}
 
 	if req.SubnetPool.DefaultPrefixlen != nil {
@@ -172,11 +176,12 @@ func (svc *Service) GetSubnetPool(c *gin.Context) {
 		&shared, &isDefault, &ipVersion, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subnet pool not found"})
+		common.SendError(c, common.NewNotFoundError("subnet pool"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_subnet_pool").Msg("failed to get subnet pool")
+		common.SendError(c, common.NewInternalServerError("failed to get subnet pool"))
 		return
 	}
 
@@ -217,7 +222,7 @@ func (svc *Service) UpdateSubnetPool(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -256,7 +261,7 @@ func (svc *Service) UpdateSubnetPool(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no updates provided"})
+		common.SendError(c, common.NewBadRequestError("no updates provided"))
 		return
 	}
 
@@ -271,12 +276,13 @@ func (svc *Service) UpdateSubnetPool(c *gin.Context) {
 
 	result, err := database.DB.Exec(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_subnet_pool").Msg("failed to update subnet pool")
+		common.SendError(c, common.NewInternalServerError("failed to update subnet pool"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subnet pool not found"})
+		common.SendError(c, common.NewNotFoundError("subnet pool"))
 		return
 	}
 
@@ -295,12 +301,13 @@ func (svc *Service) DeleteSubnetPool(c *gin.Context) {
 	`, poolID, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_subnet_pool").Msg("failed to delete subnet pool")
+		common.SendError(c, common.NewInternalServerError("failed to delete subnet pool"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "subnet pool not found"})
+		common.SendError(c, common.NewNotFoundError("subnet pool"))
 		return
 	}
 

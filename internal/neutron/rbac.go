@@ -6,9 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // CreateRBACPolicy handles POST /v2.0/rbac-policies
@@ -25,7 +27,7 @@ func (svc *Service) CreateRBACPolicy(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -38,7 +40,8 @@ func (svc *Service) CreateRBACPolicy(c *gin.Context) {
 	`, policyID, projectID, req.RBACPolicy.ObjectType, req.RBACPolicy.ObjectID, req.RBACPolicy.TargetTenant, req.RBACPolicy.Action, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_rbac_policy").Msg("failed to create RBAC policy")
+		common.SendError(c, common.NewInternalServerError("failed to create RBAC policy"))
 		return
 	}
 
@@ -65,7 +68,8 @@ func (svc *Service) ListRBACPolicies(c *gin.Context) {
 		ORDER BY created_at DESC
 	`, projectID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_rbac_policies").Msg("failed to query RBAC policies")
+		common.SendError(c, common.NewInternalServerError("failed to list RBAC policies"))
 		return
 	}
 	defer rows.Close()
@@ -105,7 +109,7 @@ func (svc *Service) GetRBACPolicy(c *gin.Context) {
 	`, policyID, projectID).Scan(&projID, &objectType, &objectID, &targetTenant, &action)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "RBAC policy not found"})
+		common.SendError(c, common.NewNotFoundError("RBAC policy"))
 		return
 	}
 
@@ -133,7 +137,7 @@ func (svc *Service) UpdateRBACPolicy(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -153,7 +157,7 @@ func (svc *Service) UpdateRBACPolicy(c *gin.Context) {
 	argPos++
 
 	if len(updates) == 1 { // Only updated_at
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		common.SendError(c, common.NewBadRequestError("no fields to update"))
 		return
 	}
 
@@ -164,7 +168,8 @@ func (svc *Service) UpdateRBACPolicy(c *gin.Context) {
 	_, err := database.DB.Exec(c.Request.Context(), query, args...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_rbac_policy").Msg("failed to update RBAC policy")
+		common.SendError(c, common.NewInternalServerError("failed to update RBAC policy"))
 		return
 	}
 
@@ -183,12 +188,13 @@ func (svc *Service) DeleteRBACPolicy(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_rbac_policy").Msg("failed to delete RBAC policy")
+		common.SendError(c, common.NewInternalServerError("failed to delete RBAC policy"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "RBAC policy not found"})
+		common.SendError(c, common.NewNotFoundError("RBAC policy"))
 		return
 	}
 

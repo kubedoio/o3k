@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ListTrunks handles GET /v2.0/trunks
@@ -19,7 +21,8 @@ func (svc *Service) ListTrunks(c *gin.Context) {
 		WHERE project_id = $1
 	`, projectID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_trunks").Msg("failed to query trunks")
+		common.SendError(c, common.NewInternalServerError("failed to list trunks"))
 		return
 	}
 	defer rows.Close()
@@ -62,17 +65,17 @@ func (svc *Service) ListTrunks(c *gin.Context) {
 		}
 
 		trunk := map[string]interface{}{
-			"id":              id.String(),
-			"name":            name,
-			"description":     description,
-			"project_id":      projectIDStr.String(),
-			"tenant_id":       projectIDStr.String(),
-			"port_id":         portID.String(),
-			"admin_state_up":  adminStateUp,
-			"status":          status,
-			"sub_ports":       subPorts,
-			"created_at":      createdAt.Format(time.RFC3339),
-			"updated_at":      updatedAt.Format(time.RFC3339),
+			"id":             id.String(),
+			"name":           name,
+			"description":    description,
+			"project_id":     projectIDStr.String(),
+			"tenant_id":      projectIDStr.String(),
+			"port_id":        portID.String(),
+			"admin_state_up": adminStateUp,
+			"status":         status,
+			"sub_ports":      subPorts,
+			"created_at":     createdAt.Format(time.RFC3339),
+			"updated_at":     updatedAt.Format(time.RFC3339),
 		}
 		trunks = append(trunks, trunk)
 	}
@@ -94,7 +97,7 @@ func (svc *Service) CreateTrunk(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -106,7 +109,7 @@ func (svc *Service) CreateTrunk(c *gin.Context) {
 	trunkID := uuid.New()
 	portID, err := uuid.Parse(req.Trunk.PortID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid port_id"})
+		common.SendError(c, common.NewBadRequestError("invalid port_id"))
 		return
 	}
 
@@ -116,7 +119,8 @@ func (svc *Service) CreateTrunk(c *gin.Context) {
 	`, trunkID, req.Trunk.Name, req.Trunk.Description, projectID, portID, adminStateUp, "ACTIVE", time.Now(), time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_trunk").Msg("failed to create trunk")
+		common.SendError(c, common.NewInternalServerError("failed to create trunk"))
 		return
 	}
 
@@ -155,7 +159,7 @@ func (svc *Service) GetTrunk(c *gin.Context) {
 	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Trunk not found"})
+		common.SendError(c, common.NewNotFoundError("trunk"))
 		return
 	}
 
@@ -210,7 +214,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -222,7 +226,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Trunk not found"})
+		common.SendError(c, common.NewNotFoundError("trunk"))
 		return
 	}
 
@@ -264,7 +268,8 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 
 		_, err = database.DB.Exec(c.Request.Context(), query, args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "update_trunk").Msg("failed to update trunk")
+			common.SendError(c, common.NewInternalServerError("failed to update trunk"))
 			return
 		}
 	}
@@ -283,7 +288,8 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_trunk_fetch").Msg("failed to fetch updated trunk")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated trunk"))
 		return
 	}
 
@@ -339,13 +345,14 @@ func (svc *Service) DeleteTrunk(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_trunk").Msg("failed to delete trunk")
+		common.SendError(c, common.NewInternalServerError("failed to delete trunk"))
 		return
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Trunk not found"})
+		common.SendError(c, common.NewNotFoundError("trunk"))
 		return
 	}
 
@@ -366,7 +373,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -378,7 +385,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Trunk not found"})
+		common.SendError(c, common.NewNotFoundError("trunk"))
 		return
 	}
 
@@ -396,7 +403,8 @@ func (svc *Service) AddSubports(c *gin.Context) {
 		`, trunkID, portID, subPort.SegmentationType, subPort.SegmentationID, time.Now())
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "add_subports").Msg("failed to add subport")
+			common.SendError(c, common.NewInternalServerError("failed to add subport"))
 			return
 		}
 	}
@@ -421,7 +429,8 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "add_subports_fetch").Msg("failed to fetch trunk after adding subports")
+		common.SendError(c, common.NewInternalServerError("failed to fetch trunk"))
 		return
 	}
 
@@ -478,7 +487,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -490,7 +499,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Trunk not found"})
+		common.SendError(c, common.NewNotFoundError("trunk"))
 		return
 	}
 
@@ -502,7 +511,8 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 		)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "remove_subports").Msg("failed to remove subport")
+			common.SendError(c, common.NewInternalServerError("failed to remove subport"))
 			return
 		}
 	}
@@ -527,7 +537,8 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "remove_subports_fetch").Msg("failed to fetch trunk after removing subports")
+		common.SendError(c, common.NewInternalServerError("failed to fetch trunk"))
 		return
 	}
 

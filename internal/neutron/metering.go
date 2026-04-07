@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ListMeteringLabels handles GET /v2.0/metering/metering-labels
@@ -21,7 +23,8 @@ func (svc *Service) ListMeteringLabels(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_metering_labels").Msg("failed to query metering labels")
+		common.SendError(c, common.NewInternalServerError("failed to list metering labels"))
 		return
 	}
 	defer rows.Close()
@@ -70,7 +73,7 @@ func (svc *Service) CreateMeteringLabel(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -86,7 +89,8 @@ func (svc *Service) CreateMeteringLabel(c *gin.Context) {
 	`, id, req.MeteringLabel.Name, description, projectID, req.MeteringLabel.Shared, time.Now(), time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_metering_label").Msg("failed to create metering label")
+		common.SendError(c, common.NewInternalServerError("failed to create metering label"))
 		return
 	}
 
@@ -123,7 +127,7 @@ func (svc *Service) GetMeteringLabel(c *gin.Context) {
 	`, labelID, projectID).Scan(&id, &name, &description, &labelProjectID, &shared, &createdAt, &updatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Metering label not found"})
+		common.SendError(c, common.NewNotFoundError("metering label"))
 		return
 	}
 
@@ -153,12 +157,13 @@ func (svc *Service) DeleteMeteringLabel(c *gin.Context) {
 	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_metering_label").Msg("failed to delete metering label")
+		common.SendError(c, common.NewInternalServerError("failed to delete metering label"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Metering label not found"})
+		common.SendError(c, common.NewNotFoundError("metering label"))
 		return
 	}
 
@@ -178,7 +183,8 @@ func (svc *Service) ListMeteringLabelRules(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_metering_label_rules").Msg("failed to query metering label rules")
+		common.SendError(c, common.NewInternalServerError("failed to list metering label rules"))
 		return
 	}
 	defer rows.Close()
@@ -196,11 +202,11 @@ func (svc *Service) ListMeteringLabelRules(c *gin.Context) {
 		}
 
 		rule := map[string]interface{}{
-			"id":                 id.String(),
-			"metering_label_id":  labelID.String(),
-			"remote_ip_prefix":   remoteIPPrefix,
-			"direction":          direction,
-			"excluded":           excluded,
+			"id":                id.String(),
+			"metering_label_id": labelID.String(),
+			"remote_ip_prefix":  remoteIPPrefix,
+			"direction":         direction,
+			"excluded":          excluded,
 		}
 
 		rules = append(rules, rule)
@@ -223,7 +229,7 @@ func (svc *Service) CreateMeteringLabelRule(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -234,7 +240,7 @@ func (svc *Service) CreateMeteringLabelRule(c *gin.Context) {
 	`, req.MeteringLabelRule.MeteringLabelID, projectID).Scan(&labelExists)
 
 	if err != nil || !labelExists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Metering label not found"})
+		common.SendError(c, common.NewNotFoundError("metering label"))
 		return
 	}
 
@@ -252,16 +258,17 @@ func (svc *Service) CreateMeteringLabelRule(c *gin.Context) {
 	`, id, req.MeteringLabelRule.MeteringLabelID, req.MeteringLabelRule.RemoteIPPrefix, direction, req.MeteringLabelRule.Excluded, time.Now())
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_metering_label_rule").Msg("failed to create metering label rule")
+		common.SendError(c, common.NewInternalServerError("failed to create metering label rule"))
 		return
 	}
 
 	rule := map[string]interface{}{
-		"id":                 id.String(),
-		"metering_label_id":  req.MeteringLabelRule.MeteringLabelID,
-		"remote_ip_prefix":   req.MeteringLabelRule.RemoteIPPrefix,
-		"direction":          direction,
-		"excluded":           req.MeteringLabelRule.Excluded,
+		"id":                id.String(),
+		"metering_label_id": req.MeteringLabelRule.MeteringLabelID,
+		"remote_ip_prefix":  req.MeteringLabelRule.RemoteIPPrefix,
+		"direction":         direction,
+		"excluded":          req.MeteringLabelRule.Excluded,
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"metering_label_rule": rule})
@@ -280,12 +287,13 @@ func (svc *Service) DeleteMeteringLabelRule(c *gin.Context) {
 	`, ruleID, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_metering_label_rule").Msg("failed to delete metering label rule")
+		common.SendError(c, common.NewInternalServerError("failed to delete metering label rule"))
 		return
 	}
 
 	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Metering label rule not found"})
+		common.SendError(c, common.NewNotFoundError("metering label rule"))
 		return
 	}
 

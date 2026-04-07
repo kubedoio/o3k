@@ -3,8 +3,10 @@ package neutron
 import (
 	"net/http"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // ListNetworkIPAvailabilities lists IP availability for all networks
@@ -23,7 +25,8 @@ func (svc *Service) ListNetworkIPAvailabilities(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_network_ip_availabilities").Msg("failed to query network IP availabilities")
+		common.SendError(c, common.NewInternalServerError("failed to list network IP availabilities"))
 		return
 	}
 	defer rows.Close()
@@ -74,7 +77,7 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 	).Scan(&name)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "network not found"})
+		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
 
@@ -87,7 +90,8 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 	`, networkID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_network_ip_availability").Msg("failed to query subnets")
+		common.SendError(c, common.NewInternalServerError("failed to get network IP availability"))
 		return
 	}
 	defer rows.Close()
@@ -109,21 +113,21 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 		totalIPs += subnetTotal
 
 		subnetAvailabilities = append(subnetAvailabilities, gin.H{
-			"subnet_id":  subnetID,
-			"cidr":       cidr,
-			"total_ips":  subnetTotal,
-			"used_ips":   subnetUsed,
+			"subnet_id": subnetID,
+			"cidr":      cidr,
+			"total_ips": subnetTotal,
+			"used_ips":  subnetUsed,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"network_ip_availability": gin.H{
-			"network_id":                networkID,
-			"network_name":              name,
-			"project_id":                projectID,
-			"total_ips":                 totalIPs,
-			"used_ips":                  usedIPs,
-			"subnet_ip_availability":    subnetAvailabilities,
+			"network_id":             networkID,
+			"network_name":           name,
+			"project_id":             projectID,
+			"total_ips":              totalIPs,
+			"used_ips":               usedIPs,
+			"subnet_ip_availability": subnetAvailabilities,
 		},
 	})
 }
