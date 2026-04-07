@@ -12,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/storage"
 )
@@ -182,7 +184,7 @@ type CreateVolumeRequest struct {
 func (svc *Service) CreateVolume(c *gin.Context) {
 	var req CreateVolumeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -195,13 +197,14 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 	volumeID := uuid.New().String()
 
 	if req.Volume.Size < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "volume size must be at least 1 GB"})
+		common.SendError(c, common.NewBadRequestError("volume size must be at least 1 GB"))
 		return
 	}
 
 	// Create RBD volume in Ceph
 	if err := svc.cephClient.CreateVolume(c.Request.Context(), volumeID, req.Volume.Size); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("failed to create volume in Ceph: %v", err)})
+		log.Error().Err(err).Str("operation", "create_volume_ceph").Msg("failed to create volume in Ceph")
+		common.SendError(c, common.NewServiceUnavailableError("failed to create volume in Ceph"))
 		return
 	}
 
@@ -215,7 +218,8 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 	if err != nil {
 		// Rollback: delete from Ceph
 		svc.cephClient.DeleteVolume(c.Request.Context(), volumeID)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_volume_db").Msg("failed to insert volume into database")
+		common.SendError(c, common.NewInternalServerError("failed to create volume"))
 		return
 	}
 
@@ -297,7 +301,8 @@ func (svc *Service) ListVolumes(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_volumes").Msg("failed to query volumes")
+		common.SendError(c, common.NewInternalServerError("failed to list volumes"))
 		return
 	}
 	defer rows.Close()
@@ -377,7 +382,8 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 	`, markerCondition, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_volumes_detail").Msg("failed to query volumes")
+		common.SendError(c, common.NewInternalServerError("failed to list volumes"))
 		return
 	}
 	defer rows.Close()
@@ -445,11 +451,12 @@ func (svc *Service) GetVolume(c *gin.Context) {
 	`, volumeID, projectID).Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_volume").Str("volume_id", volumeID).Msg("failed to query volume")
+		common.SendError(c, common.NewInternalServerError("failed to get volume"))
 		return
 	}
 
@@ -493,18 +500,19 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 	).Scan(&attachedTo)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
 	if attachedTo.Valid {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "volume is attached to an instance"})
+		common.SendError(c, common.NewBadRequestError("volume is attached to an instance"))
 		return
 	}
 
 	// Delete from Ceph
 	if err := svc.cephClient.DeleteVolume(c.Request.Context(), volumeID); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("failed to delete volume from Ceph: %v", err)})
+		log.Error().Err(err).Str("operation", "delete_volume_ceph").Str("volume_id", volumeID).Msg("failed to delete volume from Ceph")
+		common.SendError(c, common.NewServiceUnavailableError("failed to delete volume from Ceph"))
 		return
 	}
 
@@ -514,7 +522,8 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 		volumeID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_volume_db").Str("volume_id", volumeID).Msg("failed to delete volume from database")
+		common.SendError(c, common.NewInternalServerError("failed to delete volume"))
 		return
 	}
 
@@ -532,7 +541,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 
 	var req map[string]interface{}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -549,7 +558,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, instanceID, "in-use", time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "attach_volume").Str("volume_id", volumeID).Msg("failed to attach volume")
+			common.SendError(c, common.NewInternalServerError("failed to attach volume"))
 			return
 		}
 
@@ -567,7 +577,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, "available", time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "detach_volume").Str("volume_id", volumeID).Msg("failed to detach volume")
+			common.SendError(c, common.NewInternalServerError("failed to detach volume"))
 			return
 		}
 
@@ -592,19 +603,19 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		case json.Number:
 			parsed, err := v.Int64()
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid new_size format"})
+				common.SendError(c, common.NewBadRequestError("invalid new_size format"))
 				return
 			}
 			newSize = int(parsed)
 		case string:
 			parsed, err := strconv.Atoi(v)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid new_size format"})
+				common.SendError(c, common.NewBadRequestError("invalid new_size format"))
 				return
 			}
 			newSize = parsed
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid new_size type: %T", newSizeVal)})
+			common.SendError(c, common.NewBadRequestError(fmt.Sprintf("invalid new_size type: %T", newSizeVal)))
 			return
 		}
 
@@ -616,7 +627,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, newSize, time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "extend_volume").Str("volume_id", volumeID).Msg("failed to extend volume")
+			common.SendError(c, common.NewInternalServerError("failed to extend volume"))
 			return
 		}
 
@@ -644,7 +656,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 				typeID, newType, "Auto-created volume type", true,
 			)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				log.Error().Err(err).Str("operation", "retype_volume_create_type").Msg("failed to create volume type")
+				common.SendError(c, common.NewInternalServerError("failed to create volume type"))
 				return
 			}
 		}
@@ -657,7 +670,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, newType, time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "retype_volume").Str("volume_id", volumeID).Msg("failed to retype volume")
+			common.SendError(c, common.NewInternalServerError("failed to retype volume"))
 			return
 		}
 
@@ -685,7 +699,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, volumeID, fmt.Sprintf("%t", readonly))
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "update_readonly_flag").Str("volume_id", volumeID).Msg("failed to update readonly flag")
+			common.SendError(c, common.NewInternalServerError("failed to update readonly flag"))
 			return
 		}
 
@@ -708,7 +723,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			`, volumeID, "volume_image_"+key, valueStr)
 
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				log.Error().Err(err).Str("operation", "set_image_metadata").Str("volume_id", volumeID).Msg("failed to set image metadata")
+				common.SendError(c, common.NewInternalServerError("failed to set image metadata"))
 				return
 			}
 		}
@@ -730,10 +746,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, volumeID, metadataKey)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": fmt.Sprintf("Failed to unset image metadata: %v", err),
-				"code":    500,
-			}})
+			log.Error().Err(err).Str("operation", "unset_image_metadata").Str("volume_id", volumeID).Msg("failed to unset image metadata")
+			common.SendError(c, common.NewInternalServerError("failed to unset image metadata"))
 			return
 		}
 
@@ -754,10 +768,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": fmt.Sprintf("Failed to reimage volume: %v", err),
-				"code":    500,
-			}})
+			log.Error().Err(err).Str("operation", "reimage_volume").Str("volume_id", volumeID).Msg("failed to reimage volume")
+			common.SendError(c, common.NewInternalServerError("failed to reimage volume"))
 			return
 		}
 
@@ -770,10 +782,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, volumeID, "volume_image_id", imageID, time.Now(), time.Now())
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
-				"message": fmt.Sprintf("Failed to store image metadata: %v", err),
-				"code":    500,
-			}})
+			log.Error().Err(err).Str("operation", "reimage_volume_metadata").Str("volume_id", volumeID).Msg("failed to store image metadata")
+			common.SendError(c, common.NewInternalServerError("failed to store image metadata"))
 			return
 		}
 
@@ -793,7 +803,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, "available", time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "force_detach_volume").Str("volume_id", volumeID).Msg("failed to force detach volume")
+			common.SendError(c, common.NewInternalServerError("failed to force detach volume"))
 			return
 		}
 
@@ -806,10 +817,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		// Verify admin role
 		roles, exists := c.Get("roles")
 		if !exists {
-			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-				"message": "Policy doesn't allow os-reset_status to be performed.",
-				"code":    403,
-			}})
+			common.SendError(c, common.NewForbiddenError("Policy doesn't allow os-reset_status to be performed."))
 			return
 		}
 
@@ -823,10 +831,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		}
 
 		if !isAdmin {
-			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
-				"message": "Policy doesn't allow os-reset_status to be performed.",
-				"code":    403,
-			}})
+			common.SendError(c, common.NewForbiddenError("Policy doesn't allow os-reset_status to be performed."))
 			return
 		}
 
@@ -841,7 +846,8 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		`, newStatus, time.Now(), volumeID, projectID)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "reset_volume_status").Str("volume_id", volumeID).Msg("failed to reset volume status")
+			common.SendError(c, common.NewInternalServerError("failed to reset volume status"))
 			return
 		}
 
@@ -849,7 +855,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+	common.SendError(c, common.NewBadRequestError("unknown action"))
 }
 
 // Snapshot operations
@@ -868,7 +874,7 @@ type CreateSnapshotRequest struct {
 func (svc *Service) CreateSnapshot(c *gin.Context) {
 	var req CreateSnapshotRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -888,13 +894,14 @@ func (svc *Service) CreateSnapshot(c *gin.Context) {
 	).Scan(&volumeID, &size)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
 	// Create snapshot in Ceph
 	if err := svc.cephClient.CreateSnapshot(c.Request.Context(), volumeID, snapshotID); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("failed to create snapshot: %v", err)})
+		log.Error().Err(err).Str("operation", "create_snapshot_ceph").Str("volume_id", volumeID).Msg("failed to create snapshot in Ceph")
+		common.SendError(c, common.NewServiceUnavailableError("failed to create snapshot"))
 		return
 	}
 
@@ -907,7 +914,8 @@ func (svc *Service) CreateSnapshot(c *gin.Context) {
 
 	if err != nil {
 		svc.cephClient.DeleteSnapshot(c.Request.Context(), volumeID, snapshotID)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "create_snapshot_db").Msg("failed to insert snapshot into database")
+		common.SendError(c, common.NewInternalServerError("failed to create snapshot"))
 		return
 	}
 
@@ -947,7 +955,8 @@ func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_snapshots_detail").Msg("failed to query snapshots")
+		common.SendError(c, common.NewInternalServerError("failed to list snapshots"))
 		return
 	}
 	defer rows.Close()
@@ -1008,7 +1017,8 @@ func (svc *Service) ListSnapshots(c *gin.Context) {
 	`, projectID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_snapshots").Msg("failed to query snapshots")
+		common.SendError(c, common.NewInternalServerError("failed to list snapshots"))
 		return
 	}
 	defer rows.Close()
@@ -1060,11 +1070,12 @@ func (svc *Service) GetSnapshot(c *gin.Context) {
 	`, snapshotID, projectID).Scan(&id, &name, &volumeID, &size, &status, &createdAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_snapshot").Str("snapshot_id", snapshotID).Msg("failed to query snapshot")
+		common.SendError(c, common.NewInternalServerError("failed to get snapshot"))
 		return
 	}
 
@@ -1097,13 +1108,14 @@ func (svc *Service) DeleteSnapshot(c *gin.Context) {
 	).Scan(&volumeID)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 
 	// Delete from Ceph
 	if err := svc.cephClient.DeleteSnapshot(c.Request.Context(), volumeID, snapshotID); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("failed to delete snapshot: %v", err)})
+		log.Error().Err(err).Str("operation", "delete_snapshot_ceph").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot from Ceph")
+		common.SendError(c, common.NewServiceUnavailableError("failed to delete snapshot"))
 		return
 	}
 
@@ -1113,7 +1125,8 @@ func (svc *Service) DeleteSnapshot(c *gin.Context) {
 		snapshotID, projectID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_snapshot_db").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot from database")
+		common.SendError(c, common.NewInternalServerError("failed to delete snapshot"))
 		return
 	}
 
@@ -1131,7 +1144,8 @@ func (svc *Service) ListVolumeTypes(c *gin.Context) {
 	`)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "list_volume_types").Msg("failed to query volume types")
+		common.SendError(c, common.NewInternalServerError("failed to list volume types"))
 		return
 	}
 	defer rows.Close()
@@ -1175,11 +1189,12 @@ func (svc *Service) GetVolumeType(c *gin.Context) {
 	`, typeID).Scan(&id, &name, &description, &isPublic)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume type not found"})
+		common.SendError(c, common.NewNotFoundError("volume type"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_volume_type").Str("type_id", typeID).Msg("failed to query volume type")
+		common.SendError(c, common.NewInternalServerError("failed to get volume type"))
 		return
 	}
 
@@ -1205,7 +1220,7 @@ func (svc *Service) UpdateVolume(c *gin.Context) {
 		} `json:"volume"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1220,11 +1235,12 @@ func (svc *Service) UpdateVolume(c *gin.Context) {
 	).Scan(&currentName, &currentDesc, &sizeGB, &status, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_volume_check").Str("volume_id", volumeID).Msg("failed to query volume")
+		common.SendError(c, common.NewInternalServerError("failed to update volume"))
 		return
 	}
 
@@ -1242,7 +1258,8 @@ func (svc *Service) UpdateVolume(c *gin.Context) {
 		currentName, currentDesc, now, volumeID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_volume").Str("volume_id", volumeID).Msg("failed to update volume")
+		common.SendError(c, common.NewInternalServerError("failed to update volume"))
 		return
 	}
 
@@ -1271,7 +1288,7 @@ func (svc *Service) UpdateSnapshot(c *gin.Context) {
 		} `json:"snapshot"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1287,11 +1304,12 @@ func (svc *Service) UpdateSnapshot(c *gin.Context) {
 	).Scan(&currentName, &currentDesc, &volumeID, &sizeGB, &status, &createdAt)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_snapshot_check").Str("snapshot_id", snapshotID).Msg("failed to query snapshot")
+		common.SendError(c, common.NewInternalServerError("failed to update snapshot"))
 		return
 	}
 
@@ -1308,7 +1326,8 @@ func (svc *Service) UpdateSnapshot(c *gin.Context) {
 		currentName, currentDesc, snapshotID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_snapshot").Str("snapshot_id", snapshotID).Msg("failed to update snapshot")
+		common.SendError(c, common.NewInternalServerError("failed to update snapshot"))
 		return
 	}
 
@@ -1338,7 +1357,7 @@ func (svc *Service) GetVolumeMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
@@ -1347,7 +1366,8 @@ func (svc *Service) GetVolumeMetadata(c *gin.Context) {
 		volumeID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_volume_metadata").Str("volume_id", volumeID).Msg("failed to query volume metadata")
+		common.SendError(c, common.NewInternalServerError("failed to get volume metadata"))
 		return
 	}
 	defer rows.Close()
@@ -1373,7 +1393,7 @@ func (svc *Service) SetVolumeMetadata(c *gin.Context) {
 		Metadata map[string]string `json:"metadata"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1385,7 +1405,7 @@ func (svc *Service) SetVolumeMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
@@ -1395,7 +1415,8 @@ func (svc *Service) SetVolumeMetadata(c *gin.Context) {
 		volumeID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "set_volume_metadata_delete").Str("volume_id", volumeID).Msg("failed to delete volume metadata")
+		common.SendError(c, common.NewInternalServerError("failed to set volume metadata"))
 		return
 	}
 
@@ -1406,7 +1427,8 @@ func (svc *Service) SetVolumeMetadata(c *gin.Context) {
 			VALUES ($1, $2, $3)
 		`, volumeID, key, value)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "set_volume_metadata_insert").Str("volume_id", volumeID).Msg("failed to insert volume metadata")
+			common.SendError(c, common.NewInternalServerError("failed to set volume metadata"))
 			return
 		}
 	}
@@ -1428,7 +1450,7 @@ func (svc *Service) GetVolumeMetadataKey(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
@@ -1439,11 +1461,12 @@ func (svc *Service) GetVolumeMetadataKey(c *gin.Context) {
 	).Scan(&value)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "metadata key not found"})
+		common.SendError(c, common.NewNotFoundError("metadata key"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_volume_metadata_key").Str("volume_id", volumeID).Msg("failed to query volume metadata key")
+		common.SendError(c, common.NewInternalServerError("failed to get metadata key"))
 		return
 	}
 
@@ -1460,13 +1483,13 @@ func (svc *Service) UpdateVolumeMetadataKey(c *gin.Context) {
 		Meta map[string]string `json:"meta"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
 	value, ok := req.Meta[key]
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "key not found in request body"})
+		common.SendError(c, common.NewBadRequestError("key not found in request body"))
 		return
 	}
 
@@ -1478,7 +1501,7 @@ func (svc *Service) UpdateVolumeMetadataKey(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
@@ -1491,7 +1514,8 @@ func (svc *Service) UpdateVolumeMetadataKey(c *gin.Context) {
 	`, volumeID, key, value)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_volume_metadata_key").Str("volume_id", volumeID).Msg("failed to update volume metadata key")
+		common.SendError(c, common.NewInternalServerError("failed to update metadata key"))
 		return
 	}
 
@@ -1512,7 +1536,7 @@ func (svc *Service) DeleteVolumeMetadataKey(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
 
@@ -1521,7 +1545,8 @@ func (svc *Service) DeleteVolumeMetadataKey(c *gin.Context) {
 		volumeID, key,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_volume_metadata_key").Str("volume_id", volumeID).Msg("failed to delete volume metadata key")
+		common.SendError(c, common.NewInternalServerError("failed to delete metadata key"))
 		return
 	}
 
@@ -1541,7 +1566,7 @@ func (svc *Service) GetSnapshotMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 
@@ -1550,7 +1575,8 @@ func (svc *Service) GetSnapshotMetadata(c *gin.Context) {
 		snapshotID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_snapshot_metadata").Str("snapshot_id", snapshotID).Msg("failed to query snapshot metadata")
+		common.SendError(c, common.NewInternalServerError("failed to get snapshot metadata"))
 		return
 	}
 	defer rows.Close()
@@ -1576,7 +1602,7 @@ func (svc *Service) SetSnapshotMetadata(c *gin.Context) {
 		Metadata map[string]string `json:"metadata"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -1588,7 +1614,7 @@ func (svc *Service) SetSnapshotMetadata(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 
@@ -1598,7 +1624,8 @@ func (svc *Service) SetSnapshotMetadata(c *gin.Context) {
 		snapshotID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "set_snapshot_metadata_delete").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot metadata")
+		common.SendError(c, common.NewInternalServerError("failed to set snapshot metadata"))
 		return
 	}
 
@@ -1609,7 +1636,8 @@ func (svc *Service) SetSnapshotMetadata(c *gin.Context) {
 			VALUES ($1, $2, $3)
 		`, snapshotID, key, value)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error().Err(err).Str("operation", "set_snapshot_metadata_insert").Str("snapshot_id", snapshotID).Msg("failed to insert snapshot metadata")
+			common.SendError(c, common.NewInternalServerError("failed to set snapshot metadata"))
 			return
 		}
 	}
@@ -1631,7 +1659,7 @@ func (svc *Service) GetSnapshotMetadataKey(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 
@@ -1642,11 +1670,12 @@ func (svc *Service) GetSnapshotMetadataKey(c *gin.Context) {
 	).Scan(&value)
 
 	if err == pgx.ErrNoRows {
-		c.JSON(http.StatusNotFound, gin.H{"error": "metadata key not found"})
+		common.SendError(c, common.NewNotFoundError("metadata key"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "get_snapshot_metadata_key").Str("snapshot_id", snapshotID).Msg("failed to query snapshot metadata key")
+		common.SendError(c, common.NewInternalServerError("failed to get metadata key"))
 		return
 	}
 
@@ -1663,13 +1692,13 @@ func (svc *Service) UpdateSnapshotMetadataKey(c *gin.Context) {
 		Meta map[string]string `json:"meta"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
 	value, ok := req.Meta[key]
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "key not found in request body"})
+		common.SendError(c, common.NewBadRequestError("key not found in request body"))
 		return
 	}
 
@@ -1681,7 +1710,7 @@ func (svc *Service) UpdateSnapshotMetadataKey(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 
@@ -1694,7 +1723,8 @@ func (svc *Service) UpdateSnapshotMetadataKey(c *gin.Context) {
 	`, snapshotID, key, value)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "update_snapshot_metadata_key").Str("snapshot_id", snapshotID).Msg("failed to update snapshot metadata key")
+		common.SendError(c, common.NewInternalServerError("failed to update metadata key"))
 		return
 	}
 
@@ -1715,7 +1745,7 @@ func (svc *Service) DeleteSnapshotMetadataKey(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+		common.SendError(c, common.NewNotFoundError("snapshot"))
 		return
 	}
 
@@ -1724,7 +1754,8 @@ func (svc *Service) DeleteSnapshotMetadataKey(c *gin.Context) {
 		snapshotID, key,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Error().Err(err).Str("operation", "delete_snapshot_metadata_key").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot metadata key")
+		common.SendError(c, common.NewInternalServerError("failed to delete metadata key"))
 		return
 	}
 
