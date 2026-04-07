@@ -30,6 +30,11 @@ type Service struct {
 	neutronSvc    NeutronService // For port allocation
 }
 
+const (
+	novaMinVersion     = "2.1"
+	novaCurrentVersion = "2.90"
+)
+
 // NeutronService defines the interface for Neutron operations Nova needs
 type NeutronService interface {
 	AllocatePortForInstance(ctx context.Context, networkID, projectID, instanceID string) (interface{}, error)
@@ -188,8 +193,8 @@ func (svc *Service) ListVersions(c *gin.Context) {
 			{
 				"id":          "v2.1",
 				"status":      "CURRENT",
-				"version":     "2.79",
-				"min_version": "2.1",
+				"version":     novaCurrentVersion,
+				"min_version": novaMinVersion,
 				"links": []gin.H{
 					{"rel": "self", "href": "http://localhost:8774/v2.1"},
 				},
@@ -200,14 +205,14 @@ func (svc *Service) ListVersions(c *gin.Context) {
 
 // GetVersion returns version details
 func (svc *Service) GetVersion(c *gin.Context) {
-	c.Header("OpenStack-API-Version", "compute 2.90")
-	c.Header("OpenStack-API-Minimum-Version", "compute 2.1")
+	c.Header("OpenStack-API-Version", "compute "+novaCurrentVersion)
+	c.Header("OpenStack-API-Minimum-Version", "compute "+novaMinVersion)
 	c.JSON(200, gin.H{
 		"version": gin.H{
 			"id":          "v2.1",
 			"status":      "CURRENT",
-			"version":     "2.90",
-			"min_version": "2.1",
+			"version":     novaCurrentVersion,
+			"min_version": novaMinVersion,
 		},
 	})
 }
