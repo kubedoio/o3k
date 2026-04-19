@@ -3,7 +3,7 @@
 **Date**: 2026-04-10
 **Status**: Approved
 **Author**: senol.colak
-**Version**: 1.0.0
+**Version**: 1.1.0
 
 ---
 
@@ -78,6 +78,12 @@ o3k server [--config path]
 o3k agent  --server https://<host>:6385 --token-file /etc/o3k/token [--node-id <id>]
 ```
 
+**Implementation prerequisites** — add to `go.mod` before writing any code:
+```bash
+go get google.golang.org/grpc@latest
+go get modernc.org/sqlite@latest
+```
+
 **Token input** (priority order):
 1. `--token-file /path/to/file` (preferred — no process list exposure)
 2. `O3K_TOKEN` environment variable
@@ -92,6 +98,20 @@ Placement, Metadata) plus the TunnelHub gRPC server on `:6385`.
 - Local netlink/VXLAN executor (network namespaces, bridges, security groups)
 
 No OpenStack API ports open on agent nodes.
+
+**`async_compute` flag** — gates the 202 behavior. Single-node deployments (no
+`o3k agent` nodes) use synchronous mode by default. Set this in `config/o3k.yaml`
+to enable async dispatch:
+
+```yaml
+nova:
+  async_compute: false   # default — synchronous, original behavior
+                         # set true when running o3k agent nodes
+```
+
+When `async_compute: false` (default), `POST /servers` returns the existing
+synchronous response. When `async_compute: true` and no eligible agent is found,
+`POST /servers` returns 503 (not 202 + silent hang).
 
 **Backward compatibility**: running `o3k` with no subcommand defaults to `o3k server`
 behaviour so existing deployments are unaffected. Subcommand dispatch uses
@@ -136,7 +156,8 @@ The `O3K` prefix distinguishes from k3s tokens. Version field enables future rot
 **Cluster-secret requirements**:
 - Generated with 256 bits of CSPRNG entropy at first server start
 - Stored at `/var/lib/o3k/server/node-token` with mode `0600`, owned by o3k service user
-- `o3k token get` requires root or o3k service user
+- `o3k token get` requires root or o3k service user — enforced via `os.Getuid()` check
+  in the binary; exits with error: "permission denied — run as root or o3k service user"
 - `o3k token rotate` generates a new secret with a configurable grace period
   (both old and new secrets validate during grace window, then old is invalidated)
 
@@ -160,6 +181,22 @@ verifications increment a per-IP counter; after 10 failures, IP blocked for 5 mi
 - `o3k node deregister <node-id>` writes to revocation table and marks node `down`.
 - Agent attempting to join with a revoked cert gets connection refused.
 
+**Graceful drain on deregister**: `o3k node deregister <node-id>` follows a drain
+sequence before revoking the cert:
+1. Set node `status = 'maintenance'` in `compute_nodes` — suppresses new dispatch
+2. Wait up to `drain_timeout` (default: `60s`) for in-flight tasks to complete
+3. After drain or timeout: mark node `down`, write revocation record,
+   terminate the agent's gRPC stream with `UNAVAILABLE`
+
+```yaml
+server:
+  deregister_drain_timeout: 60s  # default
+```
+
+Tasks still dispatched at drain start are allowed to complete normally. Tasks that
+do not complete within `drain_timeout` are requeued by the reconciler after the
+node goes `down`. No tasks are silently dropped.
+
 **Node identity**: UUID auto-generated on first run, persisted to
 `/var/lib/o3k/agent/node-id`. On HELLO, server checks for existing rows matching
 the agent's `hostname` even if `node_id` differs (handles lost node-id file).
@@ -169,6 +206,25 @@ the agent's `hostname` even if `node_id` differs (handles lost node-id file).
 be distributed to all server nodes via operator tooling (Vault, k8s Secret, or
 manual `scp`). All server nodes must share the same CA to accept each other's
 agent certificates.
+
+**TunnelHub bind address**: The gRPC server must bind to an internal interface only.
+Configure `server.tunnel_bind_addr` (default `0.0.0.0` with a warning in startup
+logs). Production deployments must set this to the internal network interface IP.
+A misconfigured `0.0.0.0` binding on a public-facing host exposes the join endpoint
+to the internet — this is a critical security misconfiguration.
+
+```yaml
+server:
+  tunnel_bind_addr: "10.0.0.1"   # REQUIRED in production — internal interface only
+  tunnel_port: 6385
+```
+
+**CertRenew — CA key unavailable**: If a server node does not have the CA key
+(common if the operator distributed it to only some nodes), `CertRenew` must return
+gRPC status `FAILED_PRECONDITION` with message "CA key not available on this server
+— retry on a different server node". The agent retries via VIP (which may route to
+a node that has the CA key). Agents must log this error and the impending cert expiry
+prominently.
 
 ---
 
@@ -199,7 +255,7 @@ message Hello {
   string node_id   = 1;
   string hostname  = 2;
   repeated string cached_images = 3;
-  repeated OrphanReport orphans = 4;
+  repeated OrphanReport orphans = 4;  // max 10 entries; server rejects excess
 }
 
 message HelloAck {
@@ -276,6 +332,26 @@ writing to the `tasks` table. Invalid payloads are rejected with `ERROR_PERMANEN
 Maximum payload size: 64KB (configurable). Typed payload structs for each TaskType
 are defined in a companion file (`proto/payloads.proto`).
 
+**Agent-side payload size enforcement**: Agents enforce the same 64KB limit on
+received `Task.payload` independently — they do not trust the server's enforcement.
+Tasks exceeding the limit are rejected with `ERROR_PERMANENT` and logged.
+
+**Register error handling**: If `TunnelHub.Register()` cannot reach the database
+(e.g., connection pool exhausted, DB unavailable), it must return gRPC status
+`UNAVAILABLE` immediately — never leave the agent hanging. The agent retries with
+exponential backoff (1s, 2s, 4s, 8s, cap 60s).
+
+**OrphanReport deduplication**: Server processes OrphanReports via upsert on
+`task_id`. If the agent reconnects repeatedly (crash loop) and sends the same
+OrphanReport multiple times, each is idempotent. The `current_task` table in agent
+SQLite is only cleared after the server's `HelloAck` confirms receipt.
+
+**OrphanReport validation**: For `VM_CREATE` OrphanReports, the server must validate
+that the reported `task_id` corresponds to a known `VM_CREATE` task in the `tasks`
+table before reconciling the instance row. A fabricated `task_id` that does not exist
+in `tasks` is rejected with a structured error log — no instance row is created.
+This prevents a compromised agent from inserting arbitrary instance records.
+
 **Liveness**: HeartbeatStream drops -> server marks agent `offline`. Agent `offline`
 status suppresses new dispatch only. In-flight `TaskResult` messages from offline
 agents MUST be accepted and processed. Task requeueing happens only after
@@ -296,7 +372,9 @@ type agentConn struct {
 
 ### 4. Async Task Queue — API Contract
 
-Nova/Neutron APIs return **202 Accepted** immediately. Client polls for status.
+Nova/Neutron APIs return **202 Accepted** immediately when `async_compute: true`.
+Client polls for status. When `async_compute: false` (default), existing synchronous
+behavior is preserved.
 
 **Note**: Cinder is not modified in v1 — volume operations remain synchronous.
 Only Nova and Neutron operations that execute on remote agents use the task queue.
@@ -332,7 +410,39 @@ pending -> dispatched -> completed
                |
                +-> pending (retries < 3, with next_retry_at delay, agent_id cleared)
                +-> failed  (retries exhausted, terminal)
+
+pending -> failed  (max_pending_age exceeded with no eligible agent)
 ```
+
+**max_pending_age**: Configurable (default `30m`). A background scan checks for
+tasks in `pending` state where `now() > created_at + max_pending_age`. These tasks
+are set to `failed` with `error = 'no eligible agent found within max_pending_age'`.
+The associated instance is set to `ERROR` status. This prevents silent indefinite
+hangs for API consumers.
+
+```yaml
+task_timeouts:
+  max_pending_age: 30m   # auto-fail if no agent picks up within this window
+```
+
+**Instance ERROR state**: When a task transitions to `failed` (either via retry
+exhaustion or `max_pending_age`), the associated instance must be set to `ERROR`
+in the same transaction:
+
+```sql
+-- In Tx2 on final failure, or in max_pending_age scan:
+UPDATE tasks SET status='failed', error=$err, error_history=..., completed_at=now();
+UPDATE instances SET status='ERROR', task_state=NULL WHERE id=$resource_id;
+```
+
+This ensures `GET /servers/{id}` returns `{ "status": "ERROR" }` rather than
+staying in `BUILD` indefinitely.
+
+**inflight semaphore on reconnect**: When an agent reconnects, the server checks the
+`tasks` table for any tasks in `dispatched` state with `agent_id = $node_id`. The
+inflight semaphore for the reconnected agent is initialized to the count of such
+tasks. This prevents the worker from dispatching a second task to an agent that is
+still executing a task from before the reconnect.
 
 New `tasks` table:
 
@@ -371,6 +481,9 @@ CREATE INDEX idx_tasks_pending_retry
 
 CREATE INDEX idx_tasks_dispatched_timeout
   ON tasks (dispatched_at) WHERE status = 'dispatched';
+
+-- For GET /servers/{id} → task status join
+CREATE INDEX idx_tasks_resource_id ON tasks (resource_id);
 ```
 
 **Background worker** (runs on every server node):
@@ -419,7 +532,13 @@ loop (woken by pg_notify('new_task') or 500ms fallback poll):
   if SELECT fails: log ERROR, increment consecutive_failures counter,
     expose /healthz as unhealthy after 5 consecutive failures,
     backoff before next poll.
+  -- Note: if Tx2 DB write fails, the task stays 'dispatched'. The reconciler
+  -- detects this after 2 * timeout_sec and requeues. This is acceptable — the
+  -- reservation is temporarily leaked but recovered automatically.
 ```
+
+**Implementation note**: Both Tx1 and Tx2 must use the existing `database.WithTx`
+helper (`internal/database/`). Do not open raw pgx transactions.
 
 **Immediate task wakeup**: Nova handler calls `pg_notify('new_task', task_id)` after
 INSERT. Worker listens via pgx `WaitForNotification`, waking immediately. The 500ms
@@ -455,6 +574,11 @@ ALTER TABLE compute_nodes ADD CONSTRAINT chk_reservation_within_capacity
 CREATE INDEX idx_compute_nodes_scheduling
   ON compute_nodes (total_vcpu, total_ram_mb)
   WHERE status = 'active';
+
+-- Note: the chk_reservation_within_capacity constraint means any UPDATE that sets
+-- reserved_vcpu > 0 while total_vcpu = 0 will fail. After migration, existing nodes
+-- have total_vcpu = 0 and cannot accept reservations until they reconnect and report
+-- stats via StatsStream. This is expected behavior during rolling upgrades.
 ```
 
 **Note**: After migration, existing nodes have `total_vcpu = 0` and are invisible to
@@ -502,6 +626,33 @@ call.
 `SELECT FOR UPDATE` on the task row, re-checks status after acquiring lock,
 then releases reservation with `GREATEST(0, reserved - req)` as a safety floor.
 Adds a `reconciled_at` column to prevent double-reconciliation.
+
+**Reconciler requeue — clearing the server binding**: When the reconciler requeues a
+task, it must clear both `agent_id` and `agent_stream_server_id` on the task row:
+
+```sql
+UPDATE tasks
+SET status='pending', agent_id=NULL, dispatched_at=NULL, next_retry_at=now()+backoff,
+    error_history = error_history || $reconcile_entry, retries=retries+1
+WHERE id=$task_id AND status='dispatched';
+
+UPDATE compute_nodes
+SET reserved_vcpu    = GREATEST(0, reserved_vcpu    - $req_vcpu),
+    reserved_ram_mb  = GREATEST(0, reserved_ram_mb  - $req_ram_mb),
+    reserved_disk_gb = GREATEST(0, reserved_disk_gb - $req_disk_gb)
+WHERE id=$agent_id;
+```
+
+The `agent_stream_server_id` constraint on workers (`WHERE agent_stream_server_id =
+$this_server_id`) applies only to the scheduler SELECT — the reconciler must check
+tasks by `dispatched_at` timeout regardless of which server originally dispatched
+them. Once the task is back in `pending`, any server's worker can claim it through
+the normal scheduling flow.
+
+**Race — reconciler vs reconnect result delivery**: If an agent reconnects and sends
+a `TaskResult` at the same moment the reconciler fires, both paths do
+`UPDATE tasks WHERE id=$task_id AND status='dispatched'`. One will get 0 rows
+returned and back off cleanly. The `RETURNING id` guard makes this idempotent.
 
 **Image-aware placement**: Scheduler prefers agents that already have the requested
 image cached (from `cached_images` in AgentStats) when resources are otherwise equal.
@@ -639,14 +790,25 @@ partitions.
 | Failure | Detection | Outcome |
 |---------|-----------|---------|
 | Agent HeartbeatStream drops | 5s timeout, stream EOF, or TCP close | Agent marked `offline`, new dispatch suppressed. In-flight tasks accepted until `task.timeout` expires, then retried. |
-| Server crashes mid-dispatch | Task stays `dispatched` in DB | Reconciler detects after 2x `timeout_sec`, releases reservation, requeues to any eligible agent |
+| Server crashes mid-dispatch | Task stays `dispatched` in DB | Reconciler detects after 2x `timeout_sec`, clears `agent_id` and `dispatched_at`, releases reservation, requeues to any eligible agent |
 | Agent crashes mid-execution | Agent local SQLite records state | On restart/reconnect: sends result or OrphanReport. Server reconciles. |
 | Double-booking race | `SELECT FOR UPDATE SKIP LOCKED` on compute_nodes | One scheduler wins, other selects next-best node |
 | Image pull timeout | `IMAGE_PREFETCH` retried up to 3x with backoff | `VM_CREATE` queued only after successful prefetch (atomic) |
-| All agents offline | Scheduler finds no eligible agent | Task stays `pending`. No 503 returned. Structured WARN log after 60s with no eligible agent. |
+| All agents offline | Scheduler finds no eligible agent | Task stays `pending`. `max_pending_age` auto-fails after 30m (configurable). Instance set to `ERROR`. |
 | Worker DB unavailable | Consecutive query failures | /healthz returns 503 after 5 failures, LB stops routing |
 | Agent reconnect with stale result | Task already completed by another agent | Server rejects stale result (UPDATE returns 0 rows), sends cleanup task |
 | Image deleted between prefetch and vm.create | Image row missing at vm.create dispatch | Instance set to ERROR, task set to failed immediately (no retry) |
+| Reconciler vs reconnect race | Both attempt `UPDATE WHERE status='dispatched'` | `RETURNING id` guard: one wins, other gets 0 rows and backs off cleanly. Idempotent. |
+| OrphanReport with fabricated task_id | `task_id` not found in `tasks` table | Rejected with structured error log. No instance row created. |
+| Server node missing CA key for CertRenew | CA key not at `/var/lib/o3k/server/ca.key` | Returns gRPC `FAILED_PRECONDITION`. Agent retries via VIP to a node with CA key. |
+
+**Post-deploy verification checklist**:
+- [ ] `o3k node list` shows all expected agents with `status=active`
+- [ ] `o3k task list --status=pending` shows queue depth is zero (or expected value)
+- [ ] `/metrics` endpoint responds on each server node
+- [ ] `o3k_cert_expiry_days` gauge is > 30 for all agents
+- [ ] One test task dispatched end-to-end: `openstack server create ... && openstack server show ...` returns `ACTIVE`
+- [ ] HA failover tested: kill Server 1, verify agent reconnects to Server 2, pending tasks complete
 
 ---
 
@@ -666,6 +828,12 @@ partitions.
 | `task.failed` | task_id, node_id, error, retry_count, timestamp |
 | `reconciler.fired` | task_id, old_agent, action, timestamp |
 
+**Table retention**: `audit_events` and `tasks` (completed/failed rows) grow
+unboundedly. Archival strategy is a follow-on spec, but implementors must:
+- Partition `audit_events` by month from the start (cheaper than retrofitting)
+- Provide a `o3k task prune --older-than 90d` command for operator-initiated cleanup
+- Document this in the deployment guide before v1.0 release
+
 **Structured log events**: Every task lifecycle state transition emits a structured
 log entry with fields: `task_id`, `node_id`, `task_type`, `status`, `error` (if any).
 
@@ -674,6 +842,43 @@ log entry with fields: `task_id`, `node_id`, `task_type`, `status`, `error` (if 
 - `o3k node status <node-id>` — detailed agent info including in-flight tasks
 - `o3k task list --status=pending` — query task queue state
 - `o3k node reconcile` — scan for orphaned resources across all agents
+
+**Prometheus metrics** (exposed at `/metrics` on each server node):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `o3k_task_pending_duration_seconds` | Histogram | `task_type` | Time tasks spend in `pending` state |
+| `o3k_task_dispatch_duration_seconds` | Histogram | `task_type`, `agent_id` | Time from dispatch to completion/failure |
+| `o3k_agent_reconnects_total` | Counter | `node_id` | Agent reconnect events |
+| `o3k_scheduler_no_eligible_agent_total` | Counter | `task_type` | Scheduling attempts with no eligible agent |
+| `o3k_worker_consecutive_db_failures` | Gauge | — | Current consecutive DB failure count |
+| `o3k_cert_expiry_days` | Gauge | `node_id` | Days until agent cert expires |
+
+**Alerting rules** (add to Prometheus rules or equivalent):
+
+```yaml
+- alert: TaskPendingTooLong
+  expr: histogram_quantile(0.95, rate(o3k_task_pending_duration_seconds_bucket[5m])) > 300
+  for: 2m
+  annotations:
+    summary: "Tasks pending >5 minutes at p95 — check agent availability"
+
+- alert: AgentOffline
+  expr: time() - o3k_agent_last_heartbeat_timestamp > 600
+  for: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Agent {{ $labels.node_id }} offline for >10 minutes"
+
+- alert: AgentCertExpiryImminent
+  expr: o3k_cert_expiry_days < 30
+  for: 1h
+  labels:
+    severity: warning
+  annotations:
+    summary: "Agent {{ $labels.node_id }} cert expires in {{ $value }} days"
+```
 
 ---
 
@@ -694,7 +899,8 @@ log entry with fields: `task_id`, `node_id`, `task_type`, `status`, `error` (if 
   `OS-EXT-STS:task_state` to response, extract `X-Idempotency-Key` header
 - `internal/neutron/` — same pattern for port/network operations that touch compute
 - `internal/placement/` — update resource provider inventory from `compute_nodes`
-  reservation columns to keep Placement in sync with scheduler state
+  reservation columns to keep Placement in sync with scheduler state (see
+  Placement Sync section below)
 - `internal/compute/node_registry.go` — remove DB-polling heartbeat loop. Liveness
   now detected via HeartbeatStream drop. `last_heartbeat` column retained but
   updated by gRPC heartbeat handler, not the old ticker goroutine.
@@ -702,11 +908,56 @@ log entry with fields: `task_id`, `node_id`, `task_type`, `status`, `error` (if 
 **New DB migrations**:
 - `tasks` table (with CHECK constraints, indexes, FK)
 - `compute_nodes` additions (resource columns, CHECK constraints, indexes)
-- `revoked_agent_certs` table
-- `audit_events` table
+- `revoked_agent_certs` table (`CREATE INDEX ON revoked_agent_certs(serial_number)` —
+  looked up on every agent connection)
+- `audit_events` table (`CREATE INDEX ON audit_events(created_at)` —
+  required for time-range audit queries)
 
 **Unchanged**: Keystone, Cinder, Glance, Metadata, middleware, existing config
 structure (new `agent` and `server` sections added to `Config`).
+
+---
+
+### 11b. Placement Sync
+
+`internal/placement/placement.go` is currently a full stub. When the scheduler
+feature lands, Placement must serve real inventory data so Nova's flavor scheduling
+(and any external Placement consumers) reflect actual cluster capacity.
+
+**What to read**: Each time Placement receives a GET `/resource_providers/{uuid}/inventories`
+or GET `/resource_providers` request, it reads the current row from `compute_nodes`:
+
+```go
+// Read for each connected agent
+SELECT id, total_vcpu, reserved_vcpu,
+       total_ram_mb, reserved_ram_mb,
+       total_disk_gb, reserved_disk_gb
+FROM compute_nodes
+WHERE status = 'active'
+  AND stats_updated_at > now() - interval '30 seconds';
+```
+
+**Mapping to Placement resource classes**:
+
+| compute_nodes column | Placement resource class |
+|----------------------|--------------------------|
+| `total_vcpu - reserved_vcpu` | `VCPU` (available) |
+| `total_ram_mb - reserved_ram_mb` | `MEMORY_MB` (available) |
+| `total_disk_gb - reserved_disk_gb` | `DISK_GB` (available) |
+
+**One resource provider per agent node**: Each `compute_nodes.id` maps to one
+Placement resource provider UUID. The UUID is stable — it is the agent's `node_id`.
+
+**No write-back**: Placement is read-only relative to `compute_nodes`. The scheduler
+owns all reservation writes. Placement never writes to `compute_nodes`.
+
+**Staleness**: Placement reads `stats_updated_at > now() - 30s` (same threshold as
+the scheduler). Stale nodes are excluded from resource provider responses and do not
+appear in allocation candidates.
+
+**Caching**: Placement may cache the `compute_nodes` read for up to 5 seconds to
+reduce DB load on frequent Nova scheduling calls. Cache invalidation on
+`pg_notify('compute_nodes_updated', node_id)` is optional but recommended.
 
 ---
 
@@ -717,8 +968,10 @@ New sections in `config/o3k.yaml`:
 ```yaml
 server:
   state_dir: "/var/lib/o3k/server"
+  tunnel_bind_addr: "10.0.0.1"    # REQUIRED in production — internal interface only
   tunnel_port: 6385
   max_agent_inflight: 1
+  deregister_drain_timeout: 60s
 
 agent:
   server_url: "https://10.0.0.1:6385"    # required
@@ -733,6 +986,17 @@ agent:
 task_timeouts:
   default: 30s
   IMAGE_PREFETCH: 5m
+  max_pending_age: 30m   # auto-fail if no agent picks up within this window
+```
+
+**DB connection pool sizing**: Server nodes running TunnelHub + Worker + Reconciler
+concurrently require more DB connections than single-node deployments. Increase
+`database.max_connections` proportionally to agent count:
+
+```yaml
+database:
+  max_connections: 50   # default 20 — increase to 50+ when running >5 agents
+  # Rule of thumb: 20 + (4 * num_agents)
 ```
 
 **Config validation**: Agent config `Validate()` checks at startup (fail-fast):
@@ -816,6 +1080,15 @@ confirmed RED before any implementation begins.
 - `TestBinaryBackwardCompat` — `o3k` with no args starts all services on correct ports
 - `TestIdempotentServerCreate` — same key returns same server ID
 - `TestHATaskPickup_CrossServer` — Server 1 crashes, Server 2 picks up task
+- `TestNodeList_ShowsConnectedAgents` — `o3k node list` output includes all active agents
+- `TestTokenGet_RequiresPrivilege` — `o3k token get` exits non-zero when run as unprivileged user
+- `TestNova_POST_Returns202_NotBlocking` — `POST /servers` returns in <100ms with a mock scheduler
+- `TestNova_GETServer_Returns_ERROR_OnTaskFailed` — after task transitions to `failed`,
+  `GET /servers/{id}` returns `{ "status": "ERROR" }`
+- `TestAgent_LibvirtIdempotency_DomainAlreadyExists` — `VM_CREATE` when domain already
+  exists returns `completed` (not `ERROR_PERMANENT`)
+- `TestTunnelHub_RejectsOrphanReportFabrication` — `OrphanReport` with unknown `task_id`
+  is rejected; no instance row is created
 
 ---
 
