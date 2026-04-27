@@ -50,6 +50,14 @@ From the codebase review, 10 items are deferred to v0.7.0:
 
 ## Completion Status
 
+### compat-check (v0.7.0)
+- [x] CLI skeleton with flags
+- [x] Report struct (JSON + text)
+- [x] Recorder middleware
+- [x] Embedded stub server
+- [ ] Full OpenStack provider route wiring (all 5 services)
+- [ ] Terraform provider smoke test in CI
+
 ### ✅ COMPLETE (100%)
 
 **🔴 HIGH Priority** - All production-critical features

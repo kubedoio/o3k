@@ -1,4 +1,4 @@
-.PHONY: build run test clean install-deps migrate db-up db-down build-ebpf bench bench-quick build-compat-check
+.PHONY: build run test clean install-deps migrate db-up db-down build-ebpf bench bench-quick build-compat-check compat-check-smoke
 
 # Build variables
 BINARY_NAME=o3k
@@ -30,6 +30,11 @@ build-compat-check:
 	@echo "Building compat-check..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(LDFLAGS) -o $(BUILD_DIR)/compat-check ./cmd/compat-check
+
+# Smoke test compat-check binary (no terraform required)
+compat-check-smoke:
+	@echo "Smoke testing compat-check..."
+	@./bin/compat-check --help > /dev/null && echo "OK: compat-check built and runs"
 
 # Build with eBPF support
 build-with-ebpf: build-ebpf build
