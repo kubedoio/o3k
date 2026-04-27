@@ -23,6 +23,7 @@ import (
 
 // Service handles Nova API endpoints
 type Service struct {
+	db            database.DBIF
 	libvirtURI    string
 	libvirtMode   string
 	vmManager     *hypervisor.VMManager
@@ -54,6 +55,25 @@ func NewService(libvirtURI, libvirtMode string, cacheInstance *cache.Cache) *Ser
 		ctx:         ctx,
 		cancel:      cancel,
 	}
+}
+
+// NewServiceWithDB creates a Nova service with an injected DB for testing.
+func NewServiceWithDB(db database.DBIF, libvirtMode string) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Service{
+		db:          db,
+		libvirtMode: libvirtMode,
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+}
+
+// activeDB returns the injected DB or falls back to the global.
+func (svc *Service) activeDB() database.DBIF {
+	if svc.db != nil {
+		return svc.db
+	}
+	return database.DB
 }
 
 // Shutdown signals all background goroutines to stop and waits for them.
@@ -1075,7 +1095,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 
 // ListFlavors lists all flavors (brief)
 func (svc *Service) ListFlavors(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		"SELECT id, name FROM flavors WHERE is_public = true ORDER BY ram_mb",
 	)
 	if err != nil {
