@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
@@ -155,6 +157,51 @@ func (nr *NodeRegistry) GetNodeID() string {
 // GetHostname returns the hostname
 func (nr *NodeRegistry) GetHostname() string {
 	return nr.hostname
+}
+
+// NewNodeRegistryWithIDPath creates a NodeRegistry with UUID persistence.
+// The UUID is read from idFilePath on startup and written there on first creation,
+// giving agents a stable identity across restarts.
+func NewNodeRegistryWithIDPath(nodeID, tunnelIP string, heartbeatInterval time.Duration, idFilePath string) (*NodeRegistry, error) {
+	if idFilePath == "" {
+		idFilePath = "/var/lib/o3k/agent/node-id"
+	}
+
+	if nodeID == "" || nodeID == "auto" {
+		if data, err := os.ReadFile(idFilePath); err == nil {
+			nodeID = strings.TrimSpace(string(data))
+		}
+		if nodeID == "" || nodeID == "auto" {
+			nodeID = uuid.New().String()
+			if err := os.MkdirAll(filepath.Dir(idFilePath), 0o750); err == nil {
+				_ = os.WriteFile(idFilePath, []byte(nodeID), 0o640)
+			}
+		}
+	}
+
+	if tunnelIP == "" || tunnelIP == "auto" {
+		detectedIP, err := detectTunnelIP()
+		if err != nil {
+			return nil, fmt.Errorf("failed to auto-detect tunnel IP: %w", err)
+		}
+		tunnelIP = detectedIP
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hostname: %w", err)
+	}
+	if heartbeatInterval == 0 {
+		heartbeatInterval = 30 * time.Second
+	}
+
+	return &NodeRegistry{
+		nodeID:            nodeID,
+		hostname:          hostname,
+		tunnelIP:          tunnelIP,
+		heartbeatInterval: heartbeatInterval,
+		stopChan:          make(chan struct{}),
+	}, nil
 }
 
 // ComputeNode represents a compute node
