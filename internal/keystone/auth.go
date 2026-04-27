@@ -30,6 +30,7 @@ type AuthService struct {
 	jwtSecret []byte
 	tokenTTL  time.Duration
 	cache     *cache.Cache
+	db        database.DBIF
 }
 
 // NewAuthService creates a new auth service
@@ -39,6 +40,21 @@ func NewAuthService(jwtSecret string, tokenTTL time.Duration, cacheInstance *cac
 		tokenTTL:  tokenTTL,
 		cache:     cacheInstance,
 	}
+}
+
+// NewAuthServiceWithDB creates an AuthService with an injected DB for testing.
+func NewAuthServiceWithDB(db database.DBIF, jwtSecret string, tokenTTL time.Duration, cacheInstance *cache.Cache) *AuthService {
+	svc := NewAuthService(jwtSecret, tokenTTL, cacheInstance)
+	svc.db = db
+	return svc
+}
+
+// activeDB returns the injected DB or falls back to the global.
+func (s *AuthService) activeDB() database.DBIF {
+	if s.db != nil {
+		return s.db
+	}
+	return database.DB
 }
 
 // AuthRequest represents an authentication request
@@ -149,7 +165,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 
 	// Look up domain ID
 	var domainID string
-	err := database.DB.QueryRow(ctx,
+	err := s.activeDB().QueryRow(ctx,
 		"SELECT id FROM domains WHERE name = $1",
 		domainName,
 	).Scan(&domainID)
@@ -163,7 +179,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 
 	// Fetch user from database (with domain filter)
 	var user database.User
-	err = database.DB.QueryRow(ctx,
+	err = s.activeDB().QueryRow(ctx,
 		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE name = $1 AND domain_id = $2",
 		username, domainID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
@@ -207,7 +223,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 			params = []interface{}{projectName, domainID}
 		}
 
-		err := database.DB.QueryRow(ctx, query, params...).Scan(
+		err := s.activeDB().QueryRow(ctx, query, params...).Scan(
 			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
 		if err == pgx.ErrNoRows {
@@ -225,7 +241,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		project = &proj
 
 		// Fetch roles
-		rows, err := database.DB.Query(ctx, `
+		rows, err := s.activeDB().Query(ctx, `
 			SELECT r.name
 			FROM role_assignments ra
 			JOIN roles r ON ra.role_id = r.id
@@ -279,7 +295,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 
 	// Query user's domain name
 	var userDomainName string
-	err = database.DB.QueryRow(ctx,
+	err = s.activeDB().QueryRow(ctx,
 		"SELECT name FROM domains WHERE id = $1",
 		user.DomainID,
 	).Scan(&userDomainName)
@@ -300,7 +316,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 	if projectID != "" {
 		// Query project's domain name
 		var projectDomainName string
-		err = database.DB.QueryRow(ctx,
+		err = s.activeDB().QueryRow(ctx,
 			"SELECT name FROM domains WHERE id = $1",
 			project.DomainID,
 		).Scan(&projectDomainName)
@@ -346,7 +362,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 
 	// Fetch user from database
 	var user database.User
-	err = database.DB.QueryRow(ctx,
+	err = s.activeDB().QueryRow(ctx,
 		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1",
 		claims.UserID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
@@ -387,7 +403,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 			params = []interface{}{projectName, user.DomainID}
 		}
 
-		err := database.DB.QueryRow(ctx, query, params...).Scan(
+		err := s.activeDB().QueryRow(ctx, query, params...).Scan(
 			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
 		if err == pgx.ErrNoRows {
@@ -405,7 +421,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 		project = &proj
 
 		// Fetch roles
-		rows, err := database.DB.Query(ctx, `
+		rows, err := s.activeDB().Query(ctx, `
 			SELECT r.name
 			FROM role_assignments ra
 			JOIN roles r ON ra.role_id = r.id
@@ -458,7 +474,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 
 	// Query user's domain name
 	var userDomainName string
-	err = database.DB.QueryRow(ctx,
+	err = s.activeDB().QueryRow(ctx,
 		"SELECT name FROM domains WHERE id = $1",
 		user.DomainID,
 	).Scan(&userDomainName)
@@ -479,7 +495,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 	if projectID != "" {
 		// Query project's domain name
 		var projectDomainName string
-		err = database.DB.QueryRow(ctx,
+		err = s.activeDB().QueryRow(ctx,
 			"SELECT name FROM domains WHERE id = $1",
 			project.DomainID,
 		).Scan(&projectDomainName)
