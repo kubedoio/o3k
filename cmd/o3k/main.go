@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/neutron"
 	"github.com/cobaltcore-dev/o3k/internal/nova"
 	"github.com/cobaltcore-dev/o3k/internal/placement"
+	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
@@ -110,6 +112,23 @@ func runServer(args []string) {
 	log.Println("Running database migrations...")
 	if err := database.MigrateUp(cfg.Database.URL, *migrationsPath); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	// Start TunnelHub gRPC server if configured
+	if cfg.Tunnel.Port > 0 {
+		tokenSecret := cfg.Tunnel.TokenSecret
+		if cfg.Tunnel.TokenFile != "" {
+			if data, err := os.ReadFile(cfg.Tunnel.TokenFile); err == nil {
+				tokenSecret = strings.TrimSpace(string(data))
+			}
+		}
+		hub := tunnel.NewHub(tokenSecret)
+		go func() {
+			addr := fmt.Sprintf(":%d", cfg.Tunnel.Port)
+			if err := hub.ListenAndServe(addr); err != nil {
+				log.Printf("TunnelHub exited: %v", err)
+			}
+		}()
 	}
 
 	// Initialize cache

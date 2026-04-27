@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"fmt"
+	"net"
 	"sync"
 
 	pb "github.com/cobaltcore-dev/o3k/proto/tunnel"
@@ -17,6 +19,7 @@ type AgentInfo struct {
 
 // Hub tracks connected tunnel agents and provides agent selection.
 type Hub struct {
+	pb.UnimplementedTunnelHubServer
 	tokenSecret string
 	mu          sync.RWMutex
 	agents      map[string]*AgentInfo
@@ -63,4 +66,41 @@ func (h *Hub) PickAgent() *AgentInfo {
 		return a
 	}
 	return nil
+}
+
+// ListenAndServe starts the gRPC server on addr and blocks until it exits.
+func (h *Hub) ListenAndServe(addr string) error {
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("tunnel listen %s: %w", addr, err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterTunnelHubServer(s, h)
+	fmt.Printf("TunnelHub listening on %s\n", addr)
+	return s.Serve(lis)
+}
+
+// AgentStream handles a bidirectional gRPC stream from a tunnel agent.
+func (h *Hub) AgentStream(stream grpc.BidiStreamingServer[pb.AgentMessage, pb.ServerMessage]) error {
+	msg, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	join := msg.GetJoin()
+	if join == nil {
+		return fmt.Errorf("first message must be JoinMsg")
+	}
+	h.RegisterAgent(AgentInfo{
+		NodeID:   join.GetNodeId(),
+		Hostname: join.GetHostname(),
+		TunnelIP: join.GetTunnelIp(),
+		Stream:   stream,
+	})
+	defer h.RemoveAgent(join.GetNodeId())
+
+	for {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+	}
 }

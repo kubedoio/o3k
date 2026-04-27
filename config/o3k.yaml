@@ -82,3 +82,7 @@ cache:
     images: 1h          # Images change occasionally
     networks: 30m       # Networks change more frequently
     service_catalog: 24h # Service catalog is static
+
+tunnel:
+  port: 6385
+  token_secret: ""
