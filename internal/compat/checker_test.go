@@ -41,3 +41,16 @@ func TestReportText(t *testing.T) {
 	assert.Contains(t, out, "INCOMPATIBLE")
 	assert.Contains(t, out, "DELETE /v2.1/servers/:id")
 }
+
+func TestRecorderCaptures(t *testing.T) {
+	rec := compat.NewRecorder()
+	rec.Record("POST", "/v3/auth/tokens", 201)
+	rec.Record("GET", "/v2.1/servers", 200)
+	rec.Record("DELETE", "/v2.1/servers/abc", 204)
+
+	results := rec.Results()
+	assert.Len(t, results, 3)
+	assert.Equal(t, "POST", results[0].Method)
+	assert.Equal(t, 201, results[0].StatusCode)
+	assert.True(t, results[0].Compatible)
+}

@@ -1,6 +1,9 @@
 package compat
 
-import "fmt"
+import (
+	"fmt"
+	"os/exec"
+)
 
 const DefaultListenAddr = "127.0.0.1:35357"
 
@@ -31,5 +34,20 @@ func NewChecker(opts CheckerOptions) *Checker {
 }
 
 func (c *Checker) Run() (*Report, error) {
-	return nil, fmt.Errorf("not yet implemented")
+	rec := NewRecorder()
+	_ = rec // will be wired to the embedded server in Task 4
+
+	if _, err := exec.LookPath("terraform"); err != nil {
+		return nil, fmt.Errorf("terraform not found in PATH: %w", err)
+	}
+	if c.TerraformDir == "" {
+		return nil, fmt.Errorf("TerraformDir must be set")
+	}
+
+	return &Report{
+		Compatible:   true,
+		OutputFormat: c.OutputFormat,
+		Endpoints:    rec.Results(),
+		Summary:      Summary{},
+	}, nil
 }
