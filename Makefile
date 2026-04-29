@@ -1,4 +1,4 @@
-.PHONY: build run test clean install-deps migrate db-up db-down build-ebpf bench bench-quick build-compat-check compat-check-smoke
+.PHONY: build run test clean install-deps migrate db-up db-down build-ebpf bench bench-quick build-compat-check compat-check-smoke test-vm-networking
 
 # Build variables
 BINARY_NAME=o3k
@@ -85,6 +85,11 @@ test-performance:
 	@echo "Checking O3K is running..."
 	@curl -s http://localhost:35357/v3 > /dev/null || (echo "ERROR: O3K not running." && exit 1)
 	@bash test/performance_test.sh
+
+# Run VM networking integration test (requires Linux + KVM + real mode)
+test-vm-networking:
+	@echo "Running VM networking integration test..."
+	@bash test/vm_networking_test.sh
 
 # Run error handling tests
 test-errors:
