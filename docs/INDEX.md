@@ -263,11 +263,13 @@ Analysis of dashboard compatibility and integration options.
 
 ## 🆕 Recently Added (April 2026)
 
-1. **[superpowers/specs/2026-04-10-o3k-server-agent-scaling-design](superpowers/specs/2026-04-10-o3k-server-agent-scaling-design.md)** ⭐ **NEW** - Server/agent scaling spec v1.4.0 (approved)
-2. **[KUBERNETES_DEPLOYMENT](KUBERNETES_DEPLOYMENT.md)** - Kubernetes deployment with manifests and Helm guide
-3. **v0.6.0 Code Quality Release** - 39 commits fixing 32 codebase review findings
-4. **[testing/](testing/)** - Organized test reports directory
-5. **[review/](review/)** - Codebase review report directory
+1. **v0.7.0 Implementation Release** ⭐ **NEW**
+   - `o3k compat-check` — Terraform compatibility validator (embedded stub server, init+plan, JSON/text reports)
+   - gRPC server/agent architecture (`o3k server`, `o3k agent`, `o3k token`)
+   - Database DI migration — 660+ call sites, all services unit-testable with MockDB
+2. **[superpowers/specs/2026-04-10-o3k-server-agent-scaling-design](superpowers/specs/2026-04-10-o3k-server-agent-scaling-design.md)** - Server/agent scaling spec v1.4.0 (approved)
+3. **[KUBERNETES_DEPLOYMENT](KUBERNETES_DEPLOYMENT.md)** - Kubernetes deployment with manifests and Helm guide
+4. **v0.6.0 Code Quality Release** - 39 commits fixing 32 codebase review findings
 
 ---
 
@@ -293,7 +295,7 @@ Analysis of dashboard compatibility and integration options.
 **O3K Project**:
 - GitHub: https://github.com/cobaltcore-dev/o3k
 - License: Apache 2.0
-- Current Version: v0.6.0 (Production Ready)
+- Current Version: v0.7.0 (Implementation Release)
 - API Coverage: 104% (342/330 endpoints)
 
 ---

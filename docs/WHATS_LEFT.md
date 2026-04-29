@@ -55,8 +55,28 @@ From the codebase review, 10 items are deferred to v0.7.0:
 - [x] Report struct (JSON + text)
 - [x] Recorder middleware
 - [x] Embedded stub server
-- [ ] Full OpenStack provider route wiring (all 5 services)
+- [x] Full OpenStack provider route wiring (all 5 services)
+- [x] Terraform init+plan execution with timeout
 - [ ] Terraform provider smoke test in CI
+- [ ] Behavioral fidelity hardening (error codes, pagination)
+
+### gRPC Server/Agent (v0.7.0)
+- [x] Proto definition (bidirectional streaming)
+- [x] Hub with agent registration/removal/selection
+- [x] AgentClient with reconnect loop
+- [x] Task dispatch (Dispatcher → Hub → Agent)
+- [x] Token generation and verification (HMAC-SHA256)
+- [x] `o3k server`/`agent`/`token` subcommands
+- [x] Join tokens migration
+- [ ] mTLS certificate generation
+- [ ] Agent-side real task execution (libvirt/netlink)
+- [ ] HA-aware scheduling (capacity-based agent selection)
+
+### Database DI (v0.7.0)
+- [x] DBIF interface + MockDB
+- [x] Global DB migrated to interface
+- [x] All services migrated (660+ call sites)
+- [x] Unit tests with MockDB (Nova, Keystone)
 
 ### ✅ COMPLETE (100%)
 
