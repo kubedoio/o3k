@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
@@ -14,7 +13,7 @@ func (svc *Service) ListNetworkIPAvailabilities(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Query networks with subnet information
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT n.id, n.name, n.project_id,
 		       COALESCE(COUNT(DISTINCT s.id), 0) as subnet_count
 		FROM networks n
@@ -71,7 +70,7 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 
 	// Verify network exists and belongs to project
 	var name string
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT name FROM networks WHERE id = $1 AND project_id = $2",
 		networkID, projectID,
 	).Scan(&name)
@@ -82,7 +81,7 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 	}
 
 	// Query subnets for this network
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, cidr
 		FROM subnets
 		WHERE network_id = $1

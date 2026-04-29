@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
 // CreateFloatingIPRequest represents a floating IP creation request
@@ -64,7 +63,7 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 
 	if marker := c.Query("marker"); marker != "" {
 		var markerCreatedAt time.Time
-		err := database.DB.QueryRow(c.Request.Context(),
+		err := svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT created_at FROM floating_ips WHERE id = $1 AND project_id = $2",
 			marker, projectID,
 		).Scan(&markerCreatedAt)
@@ -77,7 +76,7 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit, offset)
 
-	rows, err := database.DB.Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, project_id, floating_network_id, floating_ip_address,
 		       fixed_ip_address, port_id, router_id, status, description,
 		       created_at, updated_at
@@ -162,7 +161,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 	// Get external network subnet to allocate IP from
 	var subnetCIDR string
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT cidr FROM subnets WHERE network_id = $1 LIMIT 1",
 		req.FloatingIP.FloatingNetworkID,
 	).Scan(&subnetCIDR)
@@ -195,7 +194,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 		// Get fixed IP from port
 		var fixedIPsJSON string
-		err := database.DB.QueryRow(c.Request.Context(),
+		err := svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT fixed_ips FROM ports WHERE id = $1 AND project_id = $2",
 			req.FloatingIP.PortID, projectID,
 		).Scan(&fixedIPsJSON)
@@ -236,14 +235,14 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 		// Get router ID from port's network
 		var networkID string
-		database.DB.QueryRow(c.Request.Context(),
+		svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT network_id FROM ports WHERE id = $1",
 			req.FloatingIP.PortID,
 		).Scan(&networkID)
 
 		// Find router with external gateway and interface to this network
 		var rID string
-		err = database.DB.QueryRow(c.Request.Context(), `
+		err = svc.activeDB().QueryRow(c.Request.Context(), `
 			SELECT DISTINCT r.id
 			FROM routers r
 			JOIN router_interfaces ri ON ri.router_id = r.id
@@ -265,7 +264,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
-	_, err = database.DB.Exec(c.Request.Context(), `
+	_, err = svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO floating_ips (id, project_id, floating_network_id, floating_ip_address, fixed_ip_address, port_id, router_id, status, description, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, floatingIPID, projectID, req.FloatingIP.FloatingNetworkID, floatingIP, fixedIP, portID, routerID, status, req.FloatingIP.Description, now, now)
@@ -317,7 +316,7 @@ func (svc *Service) GetFloatingIP(c *gin.Context) {
 	var fip FloatingIP
 	var fixedIP, portID, routerID, description sql.NullString
 
-	err := database.DB.QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, project_id, floating_network_id, floating_ip_address,
 		       fixed_ip_address, port_id, router_id, status, description,
 		       created_at, updated_at
@@ -389,7 +388,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	// Get current floating IP details
 	var currentFloatingIP, currentFixedIP, currentRouterID sql.NullString
 	var currentPortID sql.NullString
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT floating_ip_address, fixed_ip_address, port_id, router_id FROM floating_ips WHERE id = $1 AND project_id = $2",
 		floatingIPID, projectID,
 	).Scan(&currentFloatingIP, &currentFixedIP, &currentPortID, &currentRouterID)
@@ -441,14 +440,14 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 				}
 			// Associate with new port
 			var networkID string
-			database.DB.QueryRow(c.Request.Context(),
+			svc.activeDB().QueryRow(c.Request.Context(),
 				"SELECT network_id FROM ports WHERE id = $1",
 				newPortID,
 			).Scan(&networkID)
 
 			// Find router
 			var routerID string
-			err = database.DB.QueryRow(c.Request.Context(), `
+			err = svc.activeDB().QueryRow(c.Request.Context(), `
 				SELECT DISTINCT r.id
 				FROM routers r
 				JOIN router_interfaces ri ON ri.router_id = r.id
@@ -521,7 +520,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE floating_ips SET %s WHERE id = $%d AND project_id = $%d",
 		updateString(updates), argID, argID+1)
 
-	_, err = database.DB.Exec(c.Request.Context(), query, args...)
+	_, err = svc.activeDB().Exec(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_floatingip").Str("floatingip_id", floatingIPID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to update floating IP"))
@@ -540,7 +539,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 	// Get floating IP details before deletion
 	var floatingIP, fixedIP, routerID sql.NullString
 	var portID sql.NullString
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT floating_ip_address, fixed_ip_address, port_id, router_id FROM floating_ips WHERE id = $1 AND project_id = $2",
 		floatingIPID, projectID,
 	).Scan(&floatingIP, &fixedIP, &portID, &routerID)
@@ -559,7 +558,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 	}
 
 	// Delete from database
-	_, err = database.DB.Exec(c.Request.Context(),
+	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM floating_ips WHERE id = $1 AND project_id = $2",
 		floatingIPID, projectID,
 	)
@@ -580,7 +579,7 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, subnetCIDR string) (
 	}
 
 	// Get all allocated floating IPs in this subnet
-	rows, err := database.DB.Query(ctx,
+	rows, err := svc.activeDB().Query(ctx,
 		"SELECT floating_ip_address FROM floating_ips",
 	)
 	if err != nil {

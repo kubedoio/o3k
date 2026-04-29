@@ -21,6 +21,7 @@ import (
 // Service handles Neutron API endpoints
 type Service struct {
 	mode             string
+	db               database.DBIF
 	nsManager        *networking.NetworkNamespaceManager
 	brManager        *networking.BridgeManager
 	tapManager       *networking.TAPDeviceManager
@@ -47,6 +48,21 @@ func NewService(mode string, cacheInstance *cache.Cache) *Service {
 		routerManager: networking.NewRouterManager(mode),
 		cache:         cacheInstance,
 	}
+}
+
+// NewServiceWithDB creates a new Neutron service with a specific database implementation
+func NewServiceWithDB(db database.DBIF, mode string, cacheInstance *cache.Cache) *Service {
+	svc := NewService(mode, cacheInstance)
+	svc.db = db
+	return svc
+}
+
+// activeDB returns the injected DB or falls back to the global database.DB
+func (svc *Service) activeDB() database.DBIF {
+	if svc.db != nil {
+		return svc.db
+	}
+	return database.DB
 }
 
 // RegisterRoutes registers Neutron routes
@@ -299,32 +315,32 @@ func (svc *Service) GetQuota(c *gin.Context) {
 	// Query current usage from database
 	var networksUsed, subnetsUsed, portsUsed, routersUsed, floatingIPsUsed, securityGroupsUsed int
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM networks WHERE project_id = $1",
 		projectID,
 	).Scan(&networksUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM subnets WHERE project_id = $1",
 		projectID,
 	).Scan(&subnetsUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM ports WHERE project_id = $1",
 		projectID,
 	).Scan(&portsUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM routers WHERE project_id = $1",
 		projectID,
 	).Scan(&routersUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM floating_ips WHERE project_id = $1",
 		projectID,
 	).Scan(&floatingIPsUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM security_groups WHERE project_id = $1",
 		projectID,
 	).Scan(&securityGroupsUsed)
@@ -350,32 +366,32 @@ func (svc *Service) GetQuotaDetails(c *gin.Context) {
 	// Query current usage
 	var networksUsed, subnetsUsed, portsUsed, routersUsed, floatingIPsUsed, securityGroupsUsed int
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM networks WHERE project_id = $1",
 		projectID,
 	).Scan(&networksUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM subnets WHERE project_id = $1",
 		projectID,
 	).Scan(&subnetsUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM ports WHERE project_id = $1",
 		projectID,
 	).Scan(&portsUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM routers WHERE project_id = $1",
 		projectID,
 	).Scan(&routersUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM floating_ips WHERE project_id = $1",
 		projectID,
 	).Scan(&floatingIPsUsed)
 
-	database.DB.QueryRow(c.Request.Context(),
+	svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM security_groups WHERE project_id = $1",
 		projectID,
 	).Scan(&securityGroupsUsed)
@@ -469,7 +485,7 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 		mtu = 1450 // Account for VXLAN overhead
 	}
 
-	_, err := database.DB.Exec(c.Request.Context(), `
+	_, err := svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO networks (id, name, project_id, admin_state_up, status, shared, network_type, mtu, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, networkID, req.Network.Name, projectID, adminStateUp, "ACTIVE", shared, networkType, mtu, now, now)
@@ -521,7 +537,7 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 
 	if marker := c.Query("marker"); marker != "" {
 		var markerCreatedAt time.Time
-		err := database.DB.QueryRow(c.Request.Context(),
+		err := svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT created_at FROM networks WHERE id = $1",
 			marker,
 		).Scan(&markerCreatedAt)
@@ -534,7 +550,7 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit, offset)
 
-	rows, err := database.DB.Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, name, admin_state_up, status, shared, mtu, created_at, updated_at
 		FROM networks
 		WHERE (project_id = $1 OR shared = true)%s
@@ -602,7 +618,7 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	var mtu int
 	var createdAt, updatedAt time.Time
 
-	err := database.DB.QueryRow(ctx, `
+	err := svc.activeDB().QueryRow(ctx, `
 		SELECT id, name, admin_state_up, status, shared, mtu, created_at, updated_at
 		FROM networks
 		WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)
@@ -652,7 +668,7 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 	svc.brManager.DeleteBridge(bridgeName, true, nsName)
 
 	// Delete from database
-	_, err := database.DB.Exec(ctx,
+	_, err := svc.activeDB().Exec(ctx,
 		"DELETE FROM networks WHERE id = $1 AND project_id = $2",
 		networkID, projectID,
 	)
@@ -718,7 +734,7 @@ func (svc *Service) UpdateNetwork(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE networks SET %s WHERE id = $%d AND project_id = $%d",
 		updateString(updates), argID, argID+1)
 
-	_, err := database.DB.Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_network").Str("network_id", networkID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to update network"))
@@ -778,7 +794,7 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
-	_, err = database.DB.Exec(c.Request.Context(), `
+	_, err = svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, ip_version, enable_dhcp, dns_nameservers, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, subnetID, req.Subnet.Name, req.Subnet.NetworkID, projectID, req.Subnet.CIDR, gatewayIP, ipVersion, enableDHCP, req.Subnet.DNSNameservers, now, now)
@@ -860,7 +876,7 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 
 	if marker := c.Query("marker"); marker != "" {
 		var markerCreatedAt time.Time
-		err := database.DB.QueryRow(c.Request.Context(),
+		err := svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT created_at FROM subnets WHERE id = $1",
 			marker,
 		).Scan(&markerCreatedAt)
@@ -873,7 +889,7 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit, offset)
 
-	rows, err := database.DB.Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
@@ -934,7 +950,7 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 	var dnsNameservers []string
 	var createdAt, updatedAt time.Time
 
-	err := database.DB.QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
@@ -975,7 +991,7 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 
 	// Get network ID to stop DHCP
 	var networkID string
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT network_id FROM subnets WHERE id = $1 AND project_id = $2",
 		subnetID, projectID,
 	).Scan(&networkID)
@@ -986,7 +1002,7 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 	}
 
 	// Delete from database
-	_, err = database.DB.Exec(c.Request.Context(),
+	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM subnets WHERE id = $1 AND project_id = $2",
 		subnetID, projectID,
 	)
@@ -1016,7 +1032,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 
 	// Check subnet exists
 	var currentName string
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT name FROM subnets WHERE id = $1 AND project_id = $2",
 		subnetID, projectID,
 	).Scan(&currentName)
@@ -1036,7 +1052,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 		currentName = *req.Subnet.Name
 	}
 
-	_, err = database.DB.Exec(c.Request.Context(),
+	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"UPDATE subnets SET name = $1 WHERE id = $2",
 		currentName, subnetID,
 	)
@@ -1049,7 +1065,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 	// Return updated subnet
 	var networkID, cidr, gatewayIP string
 	var ipVersion int
-	err = database.DB.QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT network_id, cidr, gateway_ip, ip_version FROM subnets WHERE id = $1",
 		subnetID,
 	).Scan(&networkID, &cidr, &gatewayIP, &ipVersion)

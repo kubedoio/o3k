@@ -5,14 +5,13 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
 // ListAgents returns all network agents
 func (svc *Service) ListAgents(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, agent_type, "binary", host, description, admin_state_up, alive, started_at, created_at, configurations
 		FROM neutron_agents
 		ORDER BY created_at DESC
@@ -69,7 +68,7 @@ func (svc *Service) GetAgent(c *gin.Context) {
 	var startedAt, createdAt time.Time
 	var configurations map[string]interface{}
 
-	err := database.DB.QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, agent_type, "binary", host, description, admin_state_up, alive, started_at, created_at, configurations
 		FROM neutron_agents
 		WHERE id = $1
@@ -105,7 +104,7 @@ func (svc *Service) ListL3AgentsOnRouter(c *gin.Context) {
 
 	// Verify router exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1)",
 		routerID).Scan(&exists)
 	if err != nil || !exists {
@@ -113,7 +112,7 @@ func (svc *Service) ListL3AgentsOnRouter(c *gin.Context) {
 		return
 	}
 
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT a.id, a.agent_type, a."binary", a.host, a.description, a.admin_state_up, a.alive, a.started_at, a.created_at, a.configurations
 		FROM neutron_agents a
 		JOIN router_l3_agents r ON a.id = r.agent_id
@@ -176,7 +175,7 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 
 	// Verify router exists
 	var routerExists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1)",
 		routerID).Scan(&routerExists)
 	if err != nil || !routerExists {
@@ -186,7 +185,7 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 
 	// Verify agent exists
 	var agentExists bool
-	err = database.DB.QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM neutron_agents WHERE id = $1)",
 		req.AgentID).Scan(&agentExists)
 	if err != nil || !agentExists {
@@ -195,7 +194,7 @@ func (svc *Service) AddL3AgentToRouter(c *gin.Context) {
 	}
 
 	// Add association
-	_, err = database.DB.Exec(c.Request.Context(), `
+	_, err = svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO router_l3_agents (router_id, agent_id, created_at)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (router_id, agent_id) DO NOTHING

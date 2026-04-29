@@ -15,6 +15,7 @@ type VXLANCoordinator struct {
 	vxlanManager  *networking.VXLANManager
 	nodeRegistry  *compute.NodeRegistry
 	nsManager     *networking.NetworkNamespaceManager
+	db            database.DBIF
 	pollInterval  time.Duration
 	vniRangeStart int
 	vniRangeEnd   int
@@ -42,6 +43,14 @@ func NewVXLANCoordinator(
 		vniRangeEnd:   vniRangeEnd,
 		stopChan:      make(chan struct{}),
 	}
+}
+
+// activeDB returns the injected DB or falls back to the global database.DB
+func (vc *VXLANCoordinator) activeDB() database.DBIF {
+	if vc.db != nil {
+		return vc.db
+	}
+	return database.DB
 }
 
 // Start begins the coordination loop
@@ -74,7 +83,7 @@ func (vc *VXLANCoordinator) Stop() {
 // syncNetworks ensures all VXLAN networks exist on this node
 func (vc *VXLANCoordinator) syncNetworks(ctx context.Context) {
 	// Get all networks that need VXLAN
-	rows, err := database.DB.Query(ctx, `
+	rows, err := vc.activeDB().Query(ctx, `
 		SELECT n.id, n.name, n.project_id, v.vni
 		FROM networks n
 		LEFT JOIN network_vni_allocations v ON n.id = v.network_id
@@ -132,7 +141,7 @@ func (vc *VXLANCoordinator) syncPorts(ctx context.Context) {
 	}
 
 	// Get all FDB entries from database
-	rows, err := database.DB.Query(ctx, `
+	rows, err := vc.activeDB().Query(ctx, `
 		SELECT network_id, mac_address, vtep_ip
 		FROM vxlan_fdb_entries
 	`)
@@ -183,7 +192,7 @@ func (vc *VXLANCoordinator) syncPorts(ctx context.Context) {
 func (vc *VXLANCoordinator) allocateVNI(ctx context.Context, networkID string) (int, error) {
 	// Try to allocate a VNI atomically using ON CONFLICT
 	for vni := vc.vniRangeStart; vni <= vc.vniRangeEnd; vni++ {
-		result, err := database.DB.Exec(ctx, `
+		result, err := vc.activeDB().Exec(ctx, `
 			INSERT INTO network_vni_allocations (network_id, vni)
 			VALUES ($1, $2)
 			ON CONFLICT (vni) DO NOTHING
@@ -208,7 +217,7 @@ func (vc *VXLANCoordinator) DistributeFDBEntry(ctx context.Context, networkID, p
 	localIP := vc.nodeRegistry.GetTunnelIP()
 	now := time.Now()
 
-	_, err := database.DB.Exec(ctx, `
+	_, err := vc.activeDB().Exec(ctx, `
 		INSERT INTO vxlan_fdb_entries (network_id, mac_address, vtep_ip, port_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (network_id, mac_address)
@@ -224,7 +233,7 @@ func (vc *VXLANCoordinator) DistributeFDBEntry(ctx context.Context, networkID, p
 // RemoveFDBEntry removes an FDB entry from the database
 // This should be called when a port is deleted
 func (vc *VXLANCoordinator) RemoveFDBEntry(ctx context.Context, portID string) error {
-	_, err := database.DB.Exec(ctx, `
+	_, err := vc.activeDB().Exec(ctx, `
 		DELETE FROM vxlan_fdb_entries
 		WHERE port_id = $1
 	`, portID)
@@ -236,7 +245,7 @@ func (vc *VXLANCoordinator) RemoveFDBEntry(ctx context.Context, portID string) e
 func (vc *VXLANCoordinator) GetVNI(ctx context.Context, networkID string) (int, error) {
 	// Try to get existing VNI
 	var vni int
-	err := database.DB.QueryRow(ctx, `
+	err := vc.activeDB().QueryRow(ctx, `
 		SELECT vni FROM network_vni_allocations WHERE network_id = $1
 	`, networkID).Scan(&vni)
 
