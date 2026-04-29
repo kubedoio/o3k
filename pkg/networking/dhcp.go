@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"text/template"
 )
@@ -173,6 +174,48 @@ pid-file={{ .PIDFile }}
 	defer func() { _ = f.Close() }()
 
 	return t.Execute(f, config)
+}
+
+// AddStaticLease appends a MAC→IP mapping to a dnsmasq hostsfile.
+func (m *DHCPManager) AddStaticLease(hostsFile, mac, ip, hostname string) error {
+	f, err := os.OpenFile(hostsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open hosts file: %w", err)
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s,%s,%s\n", mac, ip, hostname)
+	return err
+}
+
+// RemoveStaticLease removes a MAC's entry from a dnsmasq hostsfile.
+func (m *DHCPManager) RemoveStaticLease(hostsFile, mac string) error {
+	data, err := os.ReadFile(hostsFile)
+	if err != nil {
+		return fmt.Errorf("read hosts file: %w", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	var kept []string
+	for _, line := range lines {
+		if line != "" && !strings.HasPrefix(line, mac+",") {
+			kept = append(kept, line)
+		}
+	}
+	return os.WriteFile(hostsFile, []byte(strings.Join(kept, "\n")+"\n"), 0644)
+}
+
+// ReloadConfig sends SIGHUP to the dnsmasq process for a network.
+func (m *DHCPManager) ReloadConfig(networkID string) error {
+	if m.mode == "stub" {
+		return nil
+	}
+	pidFile := filepath.Join(m.pidPath, networkID+".pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return fmt.Errorf("read pid file: %w", err)
+	}
+	pid := strings.TrimSpace(string(data))
+	cmd := exec.Command("kill", "-HUP", pid)
+	return cmd.Run()
 }
 
 // IsRunning checks if DHCP server is running for a network
