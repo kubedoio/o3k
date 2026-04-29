@@ -54,3 +54,16 @@ func TestHubVerifiesToken(t *testing.T) {
 	assert.False(t, hub.VerifyJoin("node-1", "bad-hash"))
 	assert.False(t, hub.VerifyJoin("node-2", validHash))
 }
+
+func TestHubSetTLSConfig(t *testing.T) {
+	ca, err := tunnel.GenerateCA()
+	assert.NoError(t, err)
+	serverCert, err := tunnel.SignCert(ca, "o3k-server")
+	assert.NoError(t, err)
+	tlsCfg, err := tunnel.ServerTLSConfig(ca, serverCert)
+	assert.NoError(t, err)
+
+	hub := tunnel.NewHub("secret")
+	hub.SetTLSConfig(tlsCfg)
+	// Verify it doesn't panic — full E2E in Task 7.
+}

@@ -1,12 +1,14 @@
 package tunnel
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
 
 	pb "github.com/cobaltcore-dev/o3k/proto/tunnel"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // AgentInfo holds metadata and the active stream for a connected tunnel agent.
@@ -21,6 +23,7 @@ type AgentInfo struct {
 type Hub struct {
 	pb.UnimplementedTunnelHubServer
 	tokenSecret string
+	tlsConfig   *tls.Config
 	mu          sync.RWMutex
 	agents      map[string]*AgentInfo
 }
@@ -77,15 +80,28 @@ func (h *Hub) VerifyJoin(nodeID, tokenHash string) bool {
 	return VerifyTokenHash(h.tokenSecret, nodeID, tokenHash)
 }
 
+// SetTLSConfig configures the Hub to use TLS when ListenAndServe is called.
+// When cfg is nil the server starts without TLS (plain gRPC).
+func (h *Hub) SetTLSConfig(cfg *tls.Config) {
+	h.tlsConfig = cfg
+}
+
 // ListenAndServe starts the gRPC server on addr and blocks until it exits.
+// When a TLS config has been set via SetTLSConfig the server uses mutual TLS.
 func (h *Hub) ListenAndServe(addr string) error {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("tunnel listen %s: %w", addr, err)
 	}
-	s := grpc.NewServer()
+
+	var opts []grpc.ServerOption
+	if h.tlsConfig != nil {
+		opts = append(opts, grpc.Creds(credentials.NewTLS(h.tlsConfig)))
+	}
+
+	s := grpc.NewServer(opts...)
 	pb.RegisterTunnelHubServer(s, h)
-	fmt.Printf("TunnelHub listening on %s\n", addr)
+	fmt.Printf("TunnelHub listening on %s (tls=%v)\n", addr, h.tlsConfig != nil)
 	return s.Serve(lis)
 }
 
