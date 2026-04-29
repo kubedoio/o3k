@@ -115,6 +115,7 @@ func runServer(args []string) {
 	}
 
 	// Start TunnelHub gRPC server if configured
+	var hub *tunnel.Hub
 	if cfg.Tunnel.Port > 0 {
 		tokenSecret := cfg.Tunnel.TokenSecret
 		if cfg.Tunnel.TokenFile != "" {
@@ -122,7 +123,7 @@ func runServer(args []string) {
 				tokenSecret = strings.TrimSpace(string(data))
 			}
 		}
-		hub := tunnel.NewHub(tokenSecret)
+		hub = tunnel.NewHub(tokenSecret)
 		go func() {
 			addr := fmt.Sprintf(":%d", cfg.Tunnel.Port)
 			if err := hub.ListenAndServe(addr); err != nil {
@@ -177,6 +178,13 @@ func runServer(args []string) {
 
 	// Wire up Nova-Neutron integration (so Nova can allocate ports)
 	novaService.SetNeutronService(neutronService)
+
+	// Wire async dispatcher when AsyncCompute is enabled and Hub is running
+	if cfg.Nova.AsyncCompute && hub != nil {
+		dispatcher := tunnel.NewDispatcher(hub)
+		novaService.SetDispatcher(dispatcher)
+		log.Printf("Nova async compute enabled — dispatching to agents via tunnel")
+	}
 
 	// Initialize VXLAN if enabled
 	var vxlanCoordinator *neutron.VXLANCoordinator

@@ -17,6 +17,7 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/middleware"
 	"github.com/cobaltcore-dev/o3k/internal/neutron"
+	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/hypervisor"
 )
@@ -29,6 +30,7 @@ type Service struct {
 	vmManager     *hypervisor.VMManager
 	cache         *cache.Cache
 	neutronSvc    NeutronService // For port allocation
+	dispatcher    *tunnel.Dispatcher
 	wg            sync.WaitGroup
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -85,6 +87,11 @@ func (svc *Service) Shutdown() {
 // SetNeutronService sets the Neutron service reference (called after both services are created)
 func (svc *Service) SetNeutronService(neutron NeutronService) {
 	svc.neutronSvc = neutron
+}
+
+// SetDispatcher wires the tunnel Dispatcher for async task dispatch.
+func (svc *Service) SetDispatcher(d *tunnel.Dispatcher) {
+	svc.dispatcher = d
 }
 
 // InitHypervisor initializes the hypervisor connection
@@ -373,6 +380,24 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, instanceID, "create", requestID, userID, projectID, now, "Instance created"); err != nil {
 		log.Debug().Err(err).Str("instance_id", instanceID).Msg("failed to log instance action (non-critical)")
+	}
+
+	// Dispatch async create_vm task when dispatcher is wired
+	if svc.dispatcher != nil {
+		payload, _ := json.Marshal(map[string]string{
+			"instance_id": instanceID,
+			"flavor":      req.Server.FlavorRef,
+			"image":       req.Server.ImageRef,
+		})
+		task := tunnel.Task{
+			Type:    tunnel.TaskCreateVM,
+			Payload: payload,
+		}
+		if err := svc.dispatcher.Dispatch(task); err != nil {
+			// Fire-and-forget: log but don't fail the API response.
+			// The instance is in "building" state; the reconciler will retry.
+			fmt.Printf("async dispatch failed: %v\n", err)
+		}
 	}
 
 	// Create VM asynchronously (or synchronously if libvirt is available)

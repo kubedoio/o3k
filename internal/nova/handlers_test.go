@@ -8,6 +8,7 @@ import (
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/nova"
+	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -28,4 +29,14 @@ func TestListFlavorsReturnsJSON(t *testing.T) {
 	var resp map[string]interface{}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp, "flavors")
+}
+
+func TestSetDispatcher(t *testing.T) {
+	mock := database.NewMockDB()
+	svc := nova.NewServiceWithDB(mock, "stub")
+
+	hub := tunnel.NewHub("secret")
+	dispatcher := tunnel.NewDispatcher(hub)
+	svc.SetDispatcher(dispatcher)
+	// No panic — dispatcher is wired
 }
