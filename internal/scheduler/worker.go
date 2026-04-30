@@ -41,6 +41,12 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+// ProcessOne claims and dispatches one pending task, if any.
+// Exported for testing.
+func (w *Worker) ProcessOne(ctx context.Context) {
+	w.processOne(ctx)
+}
+
 func (w *Worker) processOne(ctx context.Context) {
 	taskID, agentID, taskType, payload, timeoutSec, reqVcpu, reqRam, reqDisk, resourceID, retries, err := w.claimTask(ctx)
 	if err != nil || taskID == "" {
@@ -54,11 +60,28 @@ func (w *Worker) processOne(ctx context.Context) {
 	w.recordResult(ctx, taskID, agentID, resourceID, retries, reqVcpu, reqRam, reqDisk, result, errMsg, dispatchErr)
 }
 
-// claimTask selects the oldest pending task and a matching compute node in a
-// single polling pass.  Both rows are locked with FOR UPDATE SKIP LOCKED so
-// concurrent workers never pick the same pair.
+// claimTask selects the oldest pending task and a matching compute node inside
+// an explicit transaction so that the SELECT … FOR UPDATE SKIP LOCKED and the
+// subsequent UPDATEs are atomic.  Both rows are locked with FOR UPDATE SKIP
+// LOCKED so concurrent workers never pick the same pair.
 func (w *Worker) claimTask(ctx context.Context) (taskID, agentID, taskType string, payload []byte, timeoutSec, reqVcpu int, reqRam, reqDisk int64, resourceID string, retries int, err error) {
-	row := w.db.QueryRow(ctx, `
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return
+	}
+	// Guard against MockDB which returns (nil, nil).
+	if tx == nil {
+		return
+	}
+
+	// Rollback on any failure path; a no-op after a successful Commit.
+	defer func() {
+		if err != nil || taskID == "" {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	row := tx.QueryRow(ctx, `
 		SELECT id, type, payload, timeout_sec, req_vcpu, req_ram_mb, req_disk_gb, resource_id, retries
 		FROM tasks
 		WHERE status = 'pending'
@@ -75,7 +98,7 @@ func (w *Worker) claimTask(ctx context.Context) (taskID, agentID, taskType strin
 		return
 	}
 
-	agentRow := w.db.QueryRow(ctx, `
+	agentRow := tx.QueryRow(ctx, `
 		SELECT id FROM compute_nodes
 		WHERE status = 'active'
 		  AND stats_updated_at > now() - interval '30 seconds'
@@ -95,12 +118,21 @@ func (w *Worker) claimTask(ctx context.Context) (taskID, agentID, taskType strin
 		return
 	}
 
-	_, err = w.db.Exec(ctx, `UPDATE tasks SET status='dispatched', agent_id=$1, dispatched_at=now() WHERE id=$2`, agentID, taskID)
+	_, err = tx.Exec(ctx, `UPDATE tasks SET status='dispatched', agent_id=$1, dispatched_at=now() WHERE id=$2`, agentID, taskID)
 	if err != nil {
 		taskID = ""
 		return
 	}
-	_, _ = w.db.Exec(ctx, `UPDATE compute_nodes SET reserved_vcpu=reserved_vcpu+$1, reserved_ram_mb=reserved_ram_mb+$2, reserved_disk_gb=reserved_disk_gb+$3 WHERE id=$4`, reqVcpu, reqRam, reqDisk, agentID)
+	_, err = tx.Exec(ctx, `UPDATE compute_nodes SET reserved_vcpu=reserved_vcpu+$1, reserved_ram_mb=reserved_ram_mb+$2, reserved_disk_gb=reserved_disk_gb+$3 WHERE id=$4`, reqVcpu, reqRam, reqDisk, agentID)
+	if err != nil {
+		taskID = ""
+		return
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		taskID = ""
+	}
 	return
 }
 

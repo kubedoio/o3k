@@ -26,16 +26,13 @@ func TestNewWorker(t *testing.T) {
 }
 
 func TestWorker_ProcessOne_NoTasks(t *testing.T) {
-	// MockDB.QueryRow always returns pgx.ErrNoRows — processOne should return cleanly.
+	// MockDB.BeginTx returns (nil, nil) — claimTask exits early and the
+	// dispatcher must not be called.
 	mock := database.NewMockDB()
 	d := &mockDispatcher{}
 	w := scheduler.NewWorker(mock, d)
 
-	ctx := t.Context()
-	// processOne is unexported; exercise it indirectly via a very short Run loop.
-	runCtx, cancel := context.WithCancel(ctx)
-	cancel() // cancel immediately so Run exits after the first tick is skipped
-	w.Run(runCtx)
+	w.ProcessOne(t.Context())
 
 	assert.False(t, d.called, "dispatcher should not be called when no tasks are available")
 }
