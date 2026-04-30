@@ -26,6 +26,8 @@ type Hub struct {
 	tlsConfig   *tls.Config
 	mu          sync.RWMutex
 	agents      map[string]*AgentInfo
+	inflight    map[string]int
+	maxInflight int
 }
 
 // NewHub creates a new Hub with the given JWT token secret.
@@ -33,6 +35,29 @@ func NewHub(tokenSecret string) *Hub {
 	return &Hub{
 		tokenSecret: tokenSecret,
 		agents:      make(map[string]*AgentInfo),
+		inflight:    make(map[string]int),
+		maxInflight: 1,
+	}
+}
+
+// TryAcquireInflight increments the inflight counter for nodeID and returns true.
+// Returns false without modifying the counter if the node is already at maxInflight.
+func (h *Hub) TryAcquireInflight(nodeID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight[nodeID] >= h.maxInflight {
+		return false
+	}
+	h.inflight[nodeID]++
+	return true
+}
+
+// ReleaseInflight decrements the inflight counter for nodeID.
+func (h *Hub) ReleaseInflight(nodeID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight[nodeID] > 0 {
+		h.inflight[nodeID]--
 	}
 }
 

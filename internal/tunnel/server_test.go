@@ -80,3 +80,14 @@ func TestAgentClientSetTLSConfig(t *testing.T) {
 	client.SetTLSConfig(tlsCfg)
 	// No panic — full E2E would require running server.
 }
+
+func TestHubInflightTracking(t *testing.T) {
+	hub := tunnel.NewHub("secret")
+	hub.RegisterAgent(tunnel.AgentInfo{NodeID: "node-1", Hostname: "w1", TunnelIP: "10.0.0.2"})
+
+	assert.True(t, hub.TryAcquireInflight("node-1"))
+	assert.False(t, hub.TryAcquireInflight("node-1"))
+
+	hub.ReleaseInflight("node-1")
+	assert.True(t, hub.TryAcquireInflight("node-1"))
+}
