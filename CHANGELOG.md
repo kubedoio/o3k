@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-04-27
+
+### 🚀 New Features
+
+#### `o3k compat-check` — Terraform Compatibility Validator
+- **CLI binary**: `bin/compat-check --dir <terraform-dir> --output json|text`
+- **Report struct**: JSON and text output with endpoint-level compatibility results
+- **Recorder middleware**: Captures all API calls made during Terraform execution
+- **Embedded stub server**: Mounts all 5 OpenStack services (Keystone, Nova, Neutron, Cinder, Glance) in stub mode on random ports
+- **Terraform init+plan**: Runs full `terraform init` followed by `terraform plan` against embedded server with 5-minute timeout
+- **Makefile targets**: `build-compat-check`, `compat-check-smoke`
+
+#### gRPC Server/Agent Architecture
+- **Proto definition**: Bidirectional streaming `TunnelHub` service with `AgentStream` RPC
+- **Hub**: Agent registration, removal, selection (`PickAgent`)
+- **AgentClient**: Reconnect loop with 5-second backoff on stream errors
+- **Task dispatch**: `Dispatcher` struct bridges API handlers to Hub for async execution
+- **Token auth**: HMAC-SHA256 token generation (`o3k token --node-id <id>`), verification enforced on agent join
+- **Subcommands**: `o3k server`, `o3k agent --server <addr>`, `o3k token --node-id <id>`
+- **Migration**: `060_tunnel_tokens` table for join token storage
+
+#### Database DI Foundation
+- **`DBIF` interface**: Minimal interface (`Exec`, `QueryRow`, `Query`, `BeginTx`) satisfied by `*pgxpool.Pool`
+- **`MockDB`**: Test double with `OnExec` rule registration, `ExecCalled` assertion helper
+- **Global migrated**: `database.DB` changed from `*pgxpool.Pool` to `DBIF` interface
+- **All services migrated**: 660+ `database.DB.` call sites across 53 files replaced with `svc.activeDB()`
+  - Keystone: 84 sites (7 files)
+  - Nova: 211 sites (15 files)
+  - Neutron: ~160 sites (15 files)
+  - Cinder: ~116 sites (9 files)
+  - Glance: 53 sites (5 files)
+  - Metadata + Compute: 11 sites (2 files)
+- **Unit tests**: `TestListFlavorsReturnsJSON` (Nova), `TestListProjectsWithMockDB` (Keystone)
+
+### 🐛 Bug Fixes
+- **NodeRegistry UUID persistence**: `NewNodeRegistryWithIDPath` reads/writes UUID to disk — agents maintain stable identity across restarts
+- **PostgreSQL 18.3 → 17**: Fixed CI Docker image tag (18.3-alpine doesn't exist)
+
+### 🏗️ Architecture
+- **`activeDB()` pattern**: Every service struct has `db database.DBIF` field + `activeDB()` fallback to global — enables unit testing without database
+- **`NewServiceWithDB()`**: Every service has a constructor accepting injected DB for tests
+- **Embedded compat-check server**: URL-prefix dispatch (`embeddedMux`) routes to per-service Gin engines
+
+---
+
 ## [Spec v1.4.0] - 2026-04-22
 
 ### 📐 Architecture Spec: Server/Agent Scaling (CEO Review #2 — HOLD SCOPE)

@@ -1,4 +1,4 @@
-.PHONY: build run test clean install-deps migrate db-up db-down build-ebpf bench bench-quick
+.PHONY: build run test clean install-deps migrate db-up db-down build-ebpf bench bench-quick build-compat-check compat-check-smoke test-vm-networking
 
 # Build variables
 BINARY_NAME=o3k
@@ -24,6 +24,17 @@ build-ebpf:
 	@which clang > /dev/null || (echo "ERROR: clang not found. Install with: apt-get install clang llvm libbpf-dev" && exit 1)
 	clang -O2 -target bpf -c pkg/networking/ebpf/secgroup.c -o pkg/networking/ebpf/secgroup.o
 	@echo "eBPF program compiled: pkg/networking/ebpf/secgroup.o"
+
+# Build compat-check tool
+build-compat-check:
+	@echo "Building compat-check..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(LDFLAGS) -o $(BUILD_DIR)/compat-check ./cmd/compat-check
+
+# Smoke test compat-check binary (no terraform required)
+compat-check-smoke:
+	@echo "Smoke testing compat-check..."
+	@./bin/compat-check --help > /dev/null && echo "OK: compat-check built and runs"
 
 # Build with eBPF support
 build-with-ebpf: build-ebpf build
@@ -74,6 +85,11 @@ test-performance:
 	@echo "Checking O3K is running..."
 	@curl -s http://localhost:35357/v3 > /dev/null || (echo "ERROR: O3K not running." && exit 1)
 	@bash test/performance_test.sh
+
+# Run VM networking integration test (requires Linux + KVM + real mode)
+test-vm-networking:
+	@echo "Running VM networking integration test..."
+	@bash test/vm_networking_test.sh
 
 # Run error handling tests
 test-errors:

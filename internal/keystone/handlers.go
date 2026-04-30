@@ -20,6 +20,7 @@ import (
 type Service struct {
 	authService *AuthService
 	cache       *cache.Cache
+	db          database.DBIF
 }
 
 // NewService creates a new Keystone service
@@ -28,6 +29,21 @@ func NewService(authService *AuthService, cacheInstance *cache.Cache) *Service {
 		authService: authService,
 		cache:       cacheInstance,
 	}
+}
+
+// NewServiceWithDB creates a Keystone service with an injected DB for testing.
+func NewServiceWithDB(db database.DBIF, authService *AuthService, cacheInstance *cache.Cache) *Service {
+	svc := NewService(authService, cacheInstance)
+	svc.db = db
+	return svc
+}
+
+// activeDB returns the injected DB or falls back to the global.
+func (svc *Service) activeDB() database.DBIF {
+	if svc.db != nil {
+		return svc.db
+	}
+	return database.DB
 }
 
 // RegisterRoutes registers Keystone routes
@@ -244,7 +260,7 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 	}
 
 	// Query projects the user has access to
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id, d.name as domain_name
 		FROM projects p
 		JOIN role_assignments ra ON ra.project_id = p.id
@@ -290,7 +306,7 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 
 // ListUsers lists all users
 func (svc *Service) ListUsers(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		"SELECT id, name, enabled, domain_id FROM users ORDER BY name",
 	)
 	if err != nil {
@@ -326,7 +342,7 @@ func (svc *Service) GetUser(c *gin.Context) {
 
 	var id, name, domainID string
 	var enabled bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT id, name, enabled, domain_id FROM users WHERE id = $1",
 		userID,
 	).Scan(&id, &name, &enabled, &domainID)
@@ -346,7 +362,7 @@ func (svc *Service) GetUser(c *gin.Context) {
 
 // ListProjects lists all projects
 func (svc *Service) ListProjects(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		"SELECT id, name, description, enabled, domain_id FROM projects ORDER BY name",
 	)
 	if err != nil {
@@ -383,7 +399,7 @@ func (svc *Service) GetProject(c *gin.Context) {
 
 	var id, name, description, domainID string
 	var enabled bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT id, name, description, enabled, domain_id FROM projects WHERE id = $1",
 		projectID,
 	).Scan(&id, &name, &description, &enabled, &domainID)
@@ -435,7 +451,7 @@ func (svc *Service) CreateProject(c *gin.Context) {
 	now := time.Now()
 
 	// Insert into database
-	_, err := database.DB.Exec(c.Request.Context(),
+	_, err := svc.activeDB().Exec(c.Request.Context(),
 		`INSERT INTO projects (id, name, description, domain_id, enabled, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		projectID, req.Project.Name, req.Project.Description, domainID, enabled, now, now,
@@ -505,7 +521,7 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 	args = append(args, projectID)
 
 	query := fmt.Sprintf("UPDATE projects SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
-	_, err := database.DB.Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_project").Str("project_id", projectID).Msg("Failed to update project")
 		common.SendError(c, common.NewInternalServerError("failed to update project"))
@@ -515,7 +531,7 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 	// Fetch updated project
 	var name, description, domainID string
 	var enabled bool
-	err = database.DB.QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT name, description, domain_id, enabled FROM projects WHERE id = $1",
 		projectID,
 	).Scan(&name, &description, &domainID, &enabled)
@@ -541,7 +557,7 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 func (svc *Service) DeleteProject(c *gin.Context) {
 	projectID := c.Param("id")
 
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM projects WHERE id = $1",
 		projectID,
 	)
@@ -562,7 +578,7 @@ func (svc *Service) DeleteProject(c *gin.Context) {
 
 // ListRoles lists all roles
 func (svc *Service) ListRoles(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		"SELECT id, name FROM roles ORDER BY name",
 	)
 	if err != nil {
@@ -594,7 +610,7 @@ func (svc *Service) GetRole(c *gin.Context) {
 	roleID := c.Param("id")
 
 	var id, name string
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT id, name FROM roles WHERE id = $1",
 		roleID,
 	).Scan(&id, &name)
@@ -632,7 +648,7 @@ func (svc *Service) CreateRole(c *gin.Context) {
 	now := time.Now()
 
 	// Insert into database (domain_id support can be added later via migration)
-	_, err := database.DB.Exec(c.Request.Context(),
+	_, err := svc.activeDB().Exec(c.Request.Context(),
 		`INSERT INTO roles (id, name, created_at)
 		 VALUES ($1, $2, $3)`,
 		roleID, req.Role.Name, now,
@@ -686,7 +702,7 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 	args = append(args, roleID)
 
 	query := fmt.Sprintf("UPDATE roles SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
-	_, err := database.DB.Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_role").Str("role_id", roleID).Msg("Failed to update role")
 		common.SendError(c, common.NewInternalServerError("failed to update role"))
@@ -695,7 +711,7 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 
 	// Fetch updated role
 	var name string
-	err = database.DB.QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT name FROM roles WHERE id = $1",
 		roleID,
 	).Scan(&name)
@@ -718,7 +734,7 @@ func (svc *Service) UpdateRole(c *gin.Context) {
 func (svc *Service) DeleteRole(c *gin.Context) {
 	roleID := c.Param("id")
 
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM roles WHERE id = $1",
 		roleID,
 	)
@@ -744,7 +760,7 @@ func (svc *Service) AssignRole(c *gin.Context) {
 	roleID := c.Param("role_id")
 
 	// Insert role assignment (idempotent)
-	_, err := database.DB.Exec(c.Request.Context(),
+	_, err := svc.activeDB().Exec(c.Request.Context(),
 		`INSERT INTO role_assignments (id, user_id, project_id, role_id, created_at)
 		 VALUES (gen_random_uuid(), $1, $2, $3, NOW())
 		 ON CONFLICT (user_id, project_id, role_id) DO NOTHING`,
@@ -765,7 +781,7 @@ func (svc *Service) UnassignRole(c *gin.Context) {
 	userID := c.Param("user_id")
 	roleID := c.Param("role_id")
 
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM role_assignments WHERE user_id = $1 AND project_id = $2 AND role_id = $3",
 		userID, projectID, roleID,
 	)
@@ -789,7 +805,7 @@ func (svc *Service) ListUserProjectRoles(c *gin.Context) {
 	projectID := c.Param("id")
 	userID := c.Param("user_id")
 
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		`SELECT r.id, r.name
 		 FROM roles r
 		 INNER JOIN role_assignments ra ON r.id = ra.role_id
@@ -829,7 +845,7 @@ func (svc *Service) CheckRoleAssignment(c *gin.Context) {
 	roleID := c.Param("role_id")
 
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		`SELECT EXISTS(
 			SELECT 1 FROM role_assignments
 			WHERE user_id = $1 AND project_id = $2 AND role_id = $3
@@ -882,7 +898,7 @@ func (svc *Service) ListRoleAssignments(c *gin.Context) {
 		argIdx++
 	}
 
-	rows, err := database.DB.Query(c.Request.Context(), query, args...)
+	rows, err := svc.activeDB().Query(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_role_assignments").Msg("Failed to query role assignments")
 		common.SendError(c, common.NewInternalServerError("failed to query role assignments"))
@@ -948,7 +964,7 @@ func (svc *Service) CreateUser(c *gin.Context) {
 	var domainID string
 	if req.User.DomainID != "" {
 		// User specified domain by ID - verify it exists and is enabled
-		domainErr := database.DB.QueryRow(c.Request.Context(),
+		domainErr := svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT id FROM domains WHERE id = $1 AND enabled = true",
 			req.User.DomainID,
 		).Scan(&domainID)
@@ -958,7 +974,7 @@ func (svc *Service) CreateUser(c *gin.Context) {
 		}
 	} else {
 		// Default to "Default" domain
-		domainErr := database.DB.QueryRow(c.Request.Context(),
+		domainErr := svc.activeDB().QueryRow(c.Request.Context(),
 			"SELECT id FROM domains WHERE name = $1 AND enabled = true",
 			"Default",
 		).Scan(&domainID)
@@ -986,7 +1002,7 @@ func (svc *Service) CreateUser(c *gin.Context) {
 	var userEnabled bool
 	var userDomainID *string
 
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		`INSERT INTO users (name, password_hash, email, description, enabled, domain_id)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, name, email, description, enabled, domain_id`,
@@ -1042,7 +1058,7 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 
 	// Check if user exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
 		userID,
 	).Scan(&exists)
@@ -1099,7 +1115,7 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 
 	// Execute update
 	query := "UPDATE users SET " + strings.Join(updates, ", ") + " WHERE id = $1"
-	_, err = database.DB.Exec(c.Request.Context(), query, args...)
+	_, err = svc.activeDB().Exec(c.Request.Context(), query, args...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_user").Str("user_id", userID).Msg("Failed to update user")
@@ -1112,7 +1128,7 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 	var enabled bool
 	var domainID *string
 
-	err = database.DB.QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT id, name, email, description, enabled, domain_id FROM users WHERE id = $1",
 		userID,
 	).Scan(&id, &name, &email, &description, &enabled, &domainID)
@@ -1145,7 +1161,7 @@ func (svc *Service) DeleteUser(c *gin.Context) {
 	userID := c.Param("id")
 
 	// Execute delete
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM users WHERE id = $1",
 		userID,
 	)
@@ -1184,7 +1200,7 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 
 	// Fetch current password hash
 	var currentPasswordHash string
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT password_hash FROM users WHERE id = $1",
 		userID,
 	).Scan(&currentPasswordHash)
@@ -1209,7 +1225,7 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 	}
 
 	// Update password
-	_, err = database.DB.Exec(c.Request.Context(),
+	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
 		string(hashedBytes), userID,
 	)
@@ -1229,7 +1245,7 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 
 	// Check if user exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
 		userID,
 	).Scan(&exists)
@@ -1240,7 +1256,7 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 	}
 
 	// Fetch projects via role_assignments
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		`SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id
 		 FROM projects p
 		 INNER JOIN role_assignments ra ON ra.project_id = p.id
@@ -1283,7 +1299,7 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 
 	// Check if user exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
 		userID,
 	).Scan(&exists)
@@ -1294,7 +1310,7 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 	}
 
 	// Fetch groups via group_members
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		`SELECT g.id, g.name, g.description, g.domain_id
 		 FROM groups g
 		 INNER JOIN group_members gm ON gm.group_id = g.id

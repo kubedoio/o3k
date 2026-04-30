@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/cobaltcore-dev/o3k/internal/cinder"
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/compute"
@@ -23,17 +23,43 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/neutron"
 	"github.com/cobaltcore-dev/o3k/internal/nova"
 	"github.com/cobaltcore-dev/o3k/internal/placement"
+	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
+	"github.com/gin-gonic/gin"
 )
 
-var (
-	configPath     = flag.String("config", "config/o3k.yaml", "Path to configuration file")
-	migrationsPath = flag.String("migrations", "migrations", "Path to migrations directory")
-)
+// isSubcommand reports whether s is a recognised o3k subcommand.
+func isSubcommand(s string) bool {
+	switch s {
+	case "server", "agent", "token":
+		return true
+	}
+	return false
+}
 
 func main() {
-	flag.Parse()
+	if len(os.Args) >= 2 && isSubcommand(os.Args[1]) {
+		switch os.Args[1] {
+		case "server":
+			runServer(os.Args[2:])
+		case "agent":
+			runAgent(os.Args[2:])
+		case "token":
+			runTokenCmd(os.Args[2:])
+		}
+		return
+	}
+	// Default: behave as "server" with full arg list so that
+	// `o3k --config config/o3k.yaml` keeps working unchanged.
+	runServer(os.Args[1:])
+}
+
+func runServer(args []string) {
+	fs := flag.NewFlagSet("server", flag.ExitOnError)
+	configPath := fs.String("config", "config/o3k.yaml", "Path to configuration file")
+	migrationsPath := fs.String("migrations", "migrations", "Path to migrations directory")
+	_ = fs.Parse(args)
 
 	// Load configuration
 	cfg, err := common.LoadConfig(*configPath)
@@ -88,6 +114,24 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
+	// Start TunnelHub gRPC server if configured
+	var hub *tunnel.Hub
+	if cfg.Tunnel.Port > 0 {
+		tokenSecret := cfg.Tunnel.TokenSecret
+		if cfg.Tunnel.TokenFile != "" {
+			if data, err := os.ReadFile(cfg.Tunnel.TokenFile); err == nil {
+				tokenSecret = strings.TrimSpace(string(data))
+			}
+		}
+		hub = tunnel.NewHub(tokenSecret)
+		go func() {
+			addr := fmt.Sprintf(":%d", cfg.Tunnel.Port)
+			if err := hub.ListenAndServe(addr); err != nil {
+				log.Printf("TunnelHub exited: %v", err)
+			}
+		}()
+	}
+
 	// Initialize cache
 	var cacheInstance *cache.Cache
 	if cfg.Cache.Enabled {
@@ -134,6 +178,13 @@ func main() {
 
 	// Wire up Nova-Neutron integration (so Nova can allocate ports)
 	novaService.SetNeutronService(neutronService)
+
+	// Wire async dispatcher when AsyncCompute is enabled and Hub is running
+	if cfg.Nova.AsyncCompute && hub != nil {
+		dispatcher := tunnel.NewDispatcher(hub)
+		novaService.SetDispatcher(dispatcher)
+		log.Printf("Nova async compute enabled — dispatching to agents via tunnel")
+	}
 
 	// Initialize VXLAN if enabled
 	var vxlanCoordinator *neutron.VXLANCoordinator
@@ -277,6 +328,54 @@ func main() {
 	}
 
 	log.Println("O3K stopped")
+}
+
+func runAgent(args []string) {
+	fs := flag.NewFlagSet("agent", flag.ExitOnError)
+	serverAddr := fs.String("server", "", "o3k server address (required)")
+	tokenFile := fs.String("token-file", "", "path to join token file")
+	nodeIDFile := fs.String("node-id-file", "/var/lib/o3k/agent/node-id", "path to persist node UUID")
+	_ = fs.Parse(args)
+
+	if *serverAddr == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: --server is required for agent mode")
+		os.Exit(1)
+	}
+	fmt.Printf("o3k agent starting — connecting to %s (node-id-file: %s, token-file: %s)\n",
+		*serverAddr, *nodeIDFile, *tokenFile)
+	select {}
+}
+
+func runTokenCmd(args []string) {
+	fs := flag.NewFlagSet("token", flag.ExitOnError)
+	configPath := fs.String("config", "config/o3k.yaml", "path to config")
+	nodeID := fs.String("node-id", "", "node ID to generate token for (required)")
+	_ = fs.Parse(args)
+
+	if *nodeID == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: --node-id is required")
+		os.Exit(1)
+	}
+
+	cfg, err := common.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	secret := cfg.Tunnel.TokenSecret
+	if cfg.Tunnel.TokenFile != "" {
+		if data, err := os.ReadFile(cfg.Tunnel.TokenFile); err == nil {
+			secret = strings.TrimSpace(string(data))
+		}
+	}
+	if secret == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: tunnel.token_secret not set in config")
+		os.Exit(1)
+	}
+
+	hash := tunnel.GenerateTokenHash(secret, *nodeID)
+	fmt.Println(hash)
 }
 
 func createKeystoneServer(cfg *common.Config, svc *keystone.Service) *http.Server {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
@@ -18,6 +20,15 @@ type NodeRegistry struct {
 	tunnelIP          string
 	heartbeatInterval time.Duration
 	stopChan          chan struct{}
+	db                database.DBIF
+}
+
+// activeDB returns the injected DB or falls back to the global.
+func (nr *NodeRegistry) activeDB() database.DBIF {
+	if nr.db != nil {
+		return nr.db
+	}
+	return database.DB
 }
 
 // NewNodeRegistry creates a new node registry
@@ -60,7 +71,7 @@ func (nr *NodeRegistry) RegisterNode(ctx context.Context) error {
 	now := time.Now()
 
 	// Upsert node registration
-	_, err := database.DB.Exec(ctx, `
+	_, err := nr.activeDB().Exec(ctx, `
 		INSERT INTO compute_nodes (id, hostname, tunnel_ip, status, last_heartbeat, created_at, updated_at)
 		VALUES ($1, $2, $3, 'active', $4, $5, $6)
 		ON CONFLICT (hostname)
@@ -100,7 +111,7 @@ func (nr *NodeRegistry) StartHeartbeat(ctx context.Context) {
 
 // sendHeartbeat updates the last_heartbeat timestamp
 func (nr *NodeRegistry) sendHeartbeat(ctx context.Context) error {
-	_, err := database.DB.Exec(ctx, `
+	_, err := nr.activeDB().Exec(ctx, `
 		UPDATE compute_nodes
 		SET last_heartbeat = $1, updated_at = $1
 		WHERE hostname = $2
@@ -118,7 +129,7 @@ func (nr *NodeRegistry) StopHeartbeat() {
 func (nr *NodeRegistry) ListActiveNodes(ctx context.Context) ([]ComputeNode, error) {
 	threshold := time.Now().Add(-2 * nr.heartbeatInterval)
 
-	rows, err := database.DB.Query(ctx, `
+	rows, err := nr.activeDB().Query(ctx, `
 		SELECT id, hostname, tunnel_ip, status, last_heartbeat, created_at
 		FROM compute_nodes
 		WHERE last_heartbeat > $1 AND status = 'active'
@@ -155,6 +166,51 @@ func (nr *NodeRegistry) GetNodeID() string {
 // GetHostname returns the hostname
 func (nr *NodeRegistry) GetHostname() string {
 	return nr.hostname
+}
+
+// NewNodeRegistryWithIDPath creates a NodeRegistry with UUID persistence.
+// The UUID is read from idFilePath on startup and written there on first creation,
+// giving agents a stable identity across restarts.
+func NewNodeRegistryWithIDPath(nodeID, tunnelIP string, heartbeatInterval time.Duration, idFilePath string) (*NodeRegistry, error) {
+	if idFilePath == "" {
+		idFilePath = "/var/lib/o3k/agent/node-id"
+	}
+
+	if nodeID == "" || nodeID == "auto" {
+		if data, err := os.ReadFile(idFilePath); err == nil {
+			nodeID = strings.TrimSpace(string(data))
+		}
+		if nodeID == "" || nodeID == "auto" {
+			nodeID = uuid.New().String()
+			if err := os.MkdirAll(filepath.Dir(idFilePath), 0o750); err == nil {
+				_ = os.WriteFile(idFilePath, []byte(nodeID), 0o640)
+			}
+		}
+	}
+
+	if tunnelIP == "" || tunnelIP == "auto" {
+		detectedIP, err := detectTunnelIP()
+		if err != nil {
+			return nil, fmt.Errorf("failed to auto-detect tunnel IP: %w", err)
+		}
+		tunnelIP = detectedIP
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hostname: %w", err)
+	}
+	if heartbeatInterval == 0 {
+		heartbeatInterval = 30 * time.Second
+	}
+
+	return &NodeRegistry{
+		nodeID:            nodeID,
+		hostname:          hostname,
+		tunnelIP:          tunnelIP,
+		heartbeatInterval: heartbeatInterval,
+		stopChan:          make(chan struct{}),
+	}, nil
 }
 
 // ComputeNode represents a compute node

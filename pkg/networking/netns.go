@@ -262,6 +262,17 @@ func (m *BridgeManager) createBridgeReal(bridgeName string, inNamespace bool, ns
 	return nil
 }
 
+// BridgeExists reports whether a bridge with the given name exists.
+func (m *BridgeManager) BridgeExists(name string) bool {
+	if m.mode == "stub" {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.stubBridges[name]
+	}
+	_, err := netlink.LinkByName(name)
+	return err == nil
+}
+
 // DeleteBridge deletes a bridge
 func (m *BridgeManager) DeleteBridge(bridgeName string, inNamespace bool, nsName string) error {
 	if m.mode == "stub" {

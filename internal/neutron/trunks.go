@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -15,7 +14,7 @@ import (
 func (svc *Service) ListTrunks(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
 		WHERE project_id = $1
@@ -41,7 +40,7 @@ func (svc *Service) ListTrunks(c *gin.Context) {
 		}
 
 		// Get subports
-		subPortRows, _ := database.DB.Query(c.Request.Context(), `
+		subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
 			SELECT port_id, segmentation_type, segmentation_id
 			FROM trunk_subports
 			WHERE trunk_id = $1
@@ -113,7 +112,7 @@ func (svc *Service) CreateTrunk(c *gin.Context) {
 		return
 	}
 
-	_, err = database.DB.Exec(c.Request.Context(), `
+	_, err = svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO trunks (id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, trunkID, req.Trunk.Name, req.Trunk.Description, projectID, portID, adminStateUp, "ACTIVE", time.Now(), time.Now())
@@ -152,7 +151,7 @@ func (svc *Service) GetTrunk(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err := database.DB.QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
 		WHERE id = $1 AND project_id = $2
@@ -164,7 +163,7 @@ func (svc *Service) GetTrunk(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := database.DB.Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1
@@ -220,7 +219,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 
 	// Verify trunk exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
 		trunkID, projectID,
 	).Scan(&exists)
@@ -266,7 +265,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 		}
 		query += " WHERE id = $" + string(rune(argPos+'0')) + " AND project_id = $" + string(rune(argPos+'1'))
 
-		_, err = database.DB.Exec(c.Request.Context(), query, args...)
+		_, err = svc.activeDB().Exec(c.Request.Context(), query, args...)
 		if err != nil {
 			log.Error().Err(err).Str("operation", "update_trunk").Msg("failed to update trunk")
 			common.SendError(c, common.NewInternalServerError("failed to update trunk"))
@@ -281,7 +280,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = database.DB.QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
 		WHERE id = $1 AND project_id = $2
@@ -294,7 +293,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := database.DB.Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1
@@ -339,7 +338,7 @@ func (svc *Service) DeleteTrunk(c *gin.Context) {
 	trunkID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM trunks WHERE id = $1 AND project_id = $2",
 		trunkID, projectID,
 	)
@@ -379,7 +378,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 
 	// Verify trunk exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
 		trunkID, projectID,
 	).Scan(&exists)
@@ -396,7 +395,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 			continue
 		}
 
-		_, err = database.DB.Exec(c.Request.Context(), `
+		_, err = svc.activeDB().Exec(c.Request.Context(), `
 			INSERT INTO trunk_subports (trunk_id, port_id, segmentation_type, segmentation_id, created_at)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (trunk_id, port_id) DO NOTHING
@@ -410,7 +409,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	}
 
 	// Update trunk updated_at
-	_, err = database.DB.Exec(c.Request.Context(),
+	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"UPDATE trunks SET updated_at = $1 WHERE id = $2",
 		time.Now(), trunkID,
 	)
@@ -422,7 +421,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = database.DB.QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
 		WHERE id = $1 AND project_id = $2
@@ -435,7 +434,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := database.DB.Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1
@@ -493,7 +492,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 
 	// Verify trunk exists
 	var exists bool
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
 		trunkID, projectID,
 	).Scan(&exists)
@@ -505,7 +504,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 
 	// Remove subports
 	for _, subPort := range req.SubPorts {
-		_, err = database.DB.Exec(c.Request.Context(),
+		_, err = svc.activeDB().Exec(c.Request.Context(),
 			"DELETE FROM trunk_subports WHERE trunk_id = $1 AND port_id = $2",
 			trunkID, subPort.PortID,
 		)
@@ -518,7 +517,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	}
 
 	// Update trunk updated_at
-	_, err = database.DB.Exec(c.Request.Context(),
+	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"UPDATE trunks SET updated_at = $1 WHERE id = $2",
 		time.Now(), trunkID,
 	)
@@ -530,7 +529,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = database.DB.QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
 		WHERE id = $1 AND project_id = $2
@@ -543,7 +542,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := database.DB.Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1

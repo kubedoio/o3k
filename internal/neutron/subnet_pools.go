@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,7 +16,7 @@ import (
 func (svc *Service) ListSubnetPools(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := database.DB.Query(c.Request.Context(), `
+	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, name, prefixes, min_prefixlen, max_prefixlen, default_prefixlen,
 		       shared, is_default, ip_version, created_at, updated_at
 		FROM subnet_pools
@@ -121,7 +120,7 @@ func (svc *Service) CreateSubnetPool(c *gin.Context) {
 
 	now := time.Now()
 
-	_, err := database.DB.Exec(c.Request.Context(), `
+	_, err := svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO subnet_pools (id, project_id, name, prefixes, min_prefixlen, max_prefixlen,
 		                          default_prefixlen, shared, is_default, ip_version, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -167,7 +166,7 @@ func (svc *Service) GetSubnetPool(c *gin.Context) {
 	var shared, isDefault bool
 	var createdAt, updatedAt time.Time
 
-	err := database.DB.QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT id, name, prefixes, min_prefixlen, max_prefixlen, default_prefixlen,
 		       shared, is_default, ip_version, created_at, updated_at
 		FROM subnet_pools
@@ -274,7 +273,7 @@ func (svc *Service) UpdateSubnetPool(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE subnet_pools SET %s WHERE id = $%d AND project_id = $%d",
 		updateString(updates), argID, argID+1)
 
-	result, err := database.DB.Exec(c.Request.Context(), query, args...)
+	result, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_subnet_pool").Msg("failed to update subnet pool")
 		common.SendError(c, common.NewInternalServerError("failed to update subnet pool"))
@@ -295,7 +294,7 @@ func (svc *Service) DeleteSubnetPool(c *gin.Context) {
 	poolID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := database.DB.Exec(c.Request.Context(), `
+	result, err := svc.activeDB().Exec(c.Request.Context(), `
 		DELETE FROM subnet_pools
 		WHERE id = $1 AND project_id = $2
 	`, poolID, projectID)

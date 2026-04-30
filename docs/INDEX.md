@@ -111,18 +111,19 @@ Understand O3K's design, implementation, and OpenStack compatibility.
 
 #### Architecture
 - **[ARCHITECTURE](ARCHITECTURE.md)** - System design and component overview
+- **[COMPONENT_STATUS](COMPONENT_STATUS.md)** ⭐ **NEW** - Per-component real vs stub status matrix
 - **[KEYSTONE_AUTH_FLOW](KEYSTONE_AUTH_FLOW.md)** - JWT authentication flow
 
 #### Design Specs
-- **[superpowers/specs/2026-04-10-o3k-server-agent-scaling-design](superpowers/specs/2026-04-10-o3k-server-agent-scaling-design.md)** ⭐ **NEW**
+- **[superpowers/specs/2026-04-10-o3k-server-agent-scaling-design](superpowers/specs/2026-04-10-o3k-server-agent-scaling-design.md)**
   - Server/agent scaling architecture (k3s-style `o3k server` + `o3k agent`)
   - gRPC back-channel, mTLS join tokens, HA-aware task dispatcher
-  - Spec v1.4.0 — CEO review #2 complete, approved for implementation
+  - Spec v1.4.0 — approved for implementation
 
 #### API Compatibility
 - **[API_COVERAGE_REPORT](API_COVERAGE_REPORT.md)** - 104% coverage analysis (342/330 endpoints)
 - **[API](API.md)** - OpenStack API compatibility details
-- **[WHATS_LEFT](WHATS_LEFT.md)** - Optional enterprise features not implemented
+- **[WHATS_LEFT](WHATS_LEFT.md)** - Implementation gaps and remaining work
 
 **Key Stats**: O3K implements 342 endpoints across 5 core services, exceeding the OpenStack baseline by 12 endpoints.
 
@@ -263,11 +264,13 @@ Analysis of dashboard compatibility and integration options.
 
 ## 🆕 Recently Added (April 2026)
 
-1. **[superpowers/specs/2026-04-10-o3k-server-agent-scaling-design](superpowers/specs/2026-04-10-o3k-server-agent-scaling-design.md)** ⭐ **NEW** - Server/agent scaling spec v1.4.0 (approved)
-2. **[KUBERNETES_DEPLOYMENT](KUBERNETES_DEPLOYMENT.md)** - Kubernetes deployment with manifests and Helm guide
-3. **v0.6.0 Code Quality Release** - 39 commits fixing 32 codebase review findings
-4. **[testing/](testing/)** - Organized test reports directory
-5. **[review/](review/)** - Codebase review report directory
+1. **v0.7.0 Implementation Release** ⭐ **NEW**
+   - `o3k compat-check` — Terraform compatibility validator (embedded stub server, init+plan, JSON/text reports)
+   - gRPC server/agent architecture (`o3k server`, `o3k agent`, `o3k token`)
+   - Database DI migration — 660+ call sites, all services unit-testable with MockDB
+2. **[superpowers/specs/2026-04-10-o3k-server-agent-scaling-design](superpowers/specs/2026-04-10-o3k-server-agent-scaling-design.md)** - Server/agent scaling spec v1.4.0 (approved)
+3. **[KUBERNETES_DEPLOYMENT](KUBERNETES_DEPLOYMENT.md)** - Kubernetes deployment with manifests and Helm guide
+4. **v0.6.0 Code Quality Release** - 39 commits fixing 32 codebase review findings
 
 ---
 
@@ -293,7 +296,7 @@ Analysis of dashboard compatibility and integration options.
 **O3K Project**:
 - GitHub: https://github.com/cobaltcore-dev/o3k
 - License: Apache 2.0
-- Current Version: v0.6.0 (Production Ready)
+- Current Version: v0.7.0 (Implementation Release)
 - API Coverage: 104% (342/330 endpoints)
 
 ---

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -14,7 +13,7 @@ import (
 
 // ListGroups handles GET /v3/groups
 func (svc *Service) ListGroups(c *gin.Context) {
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		"SELECT id, name, domain_id, description, created_at FROM groups ORDER BY created_at DESC",
 	)
 	if err != nil {
@@ -75,7 +74,7 @@ func (svc *Service) CreateGroup(c *gin.Context) {
 	groupID := uuid.New().String()
 	now := time.Now()
 
-	_, err := database.DB.Exec(c.Request.Context(),
+	_, err := svc.activeDB().Exec(c.Request.Context(),
 		`INSERT INTO groups (id, name, domain_id, description, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		groupID, req.Group.Name, domainID, req.Group.Description, now, now,
@@ -106,7 +105,7 @@ func (svc *Service) GetGroup(c *gin.Context) {
 	var name, domainID, description string
 	var createdAt time.Time
 
-	err := database.DB.QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT name, domain_id, description, created_at FROM groups WHERE id = $1",
 		groupID,
 	).Scan(&name, &domainID, &description, &createdAt)
@@ -175,7 +174,7 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 	args = append(args, groupID)
 
 	query := fmt.Sprintf("UPDATE groups SET %s WHERE id = $%d", joinUpdates(updates), argIdx)
-	_, err := database.DB.Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_group").Str("group_id", groupID).Msg("Failed to update group")
 		common.SendError(c, common.NewInternalServerError("failed to update group"))
@@ -184,7 +183,7 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 
 	// Fetch updated group
 	var name, domainID, description string
-	err = database.DB.QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT name, domain_id, description FROM groups WHERE id = $1",
 		groupID,
 	).Scan(&name, &domainID, &description)
@@ -212,7 +211,7 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 func (svc *Service) DeleteGroup(c *gin.Context) {
 	groupID := c.Param("id")
 
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM groups WHERE id = $1",
 		groupID,
 	)
@@ -235,7 +234,7 @@ func (svc *Service) DeleteGroup(c *gin.Context) {
 func (svc *Service) ListGroupUsers(c *gin.Context) {
 	groupID := c.Param("id")
 
-	rows, err := database.DB.Query(c.Request.Context(),
+	rows, err := svc.activeDB().Query(c.Request.Context(),
 		`SELECT u.id, u.name, u.domain_id, u.enabled
 		 FROM users u
 		 INNER JOIN group_members gu ON u.id = gu.user_id
@@ -278,7 +277,7 @@ func (svc *Service) AddUserToGroup(c *gin.Context) {
 	groupID := c.Param("id")
 	userID := c.Param("user_id")
 
-	_, err := database.DB.Exec(c.Request.Context(),
+	_, err := svc.activeDB().Exec(c.Request.Context(),
 		`INSERT INTO group_members (group_id, user_id)
 		 VALUES ($1, $2)
 		 ON CONFLICT (group_id, user_id) DO NOTHING`,
@@ -298,7 +297,7 @@ func (svc *Service) RemoveUserFromGroup(c *gin.Context) {
 	groupID := c.Param("id")
 	userID := c.Param("user_id")
 
-	result, err := database.DB.Exec(c.Request.Context(),
+	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM group_members WHERE group_id = $1 AND user_id = $2",
 		groupID, userID,
 	)
