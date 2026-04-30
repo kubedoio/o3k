@@ -2,6 +2,7 @@ package tunnel_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/stretchr/testify/assert"
@@ -90,4 +91,23 @@ func TestHubInflightTracking(t *testing.T) {
 
 	hub.ReleaseInflight("node-1")
 	assert.True(t, hub.TryAcquireInflight("node-1"))
+}
+
+func TestHubResultChannelDelivery(t *testing.T) {
+	hub := tunnel.NewHub("secret")
+
+	ch := hub.RegisterResultChan("task-123")
+	hub.DeliverResult(tunnel.ResultMsg{
+		TaskID:  "task-123",
+		Success: true,
+		Result:  []byte(`{"ok":true}`),
+	})
+
+	select {
+	case msg := <-ch:
+		assert.True(t, msg.Success)
+		assert.Equal(t, "task-123", msg.TaskID)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for result")
+	}
 }
