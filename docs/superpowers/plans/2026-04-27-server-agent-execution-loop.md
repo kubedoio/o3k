@@ -4,7 +4,7 @@
 
 **Goal:** A single `o3k server` + single `o3k agent` can dispatch and execute VM lifecycle tasks (create, delete, start, stop) end-to-end: Nova inserts a task row, the worker picks it up, dispatches to the agent via gRPC, the agent executes via libvirt, and the result updates the instance status.
 
-**Architecture:** The spec (v1.4.0) defines a PostgreSQL-coordinated task queue with atomic reservation, gRPC dispatch, and a reconciler for stalled tasks. This plan implements the single-server, single-agent path first. Multi-server HA (dispatch ownership check, cross-server fallback) and image prefetch are deferred to a follow-on plan. The worker loop uses `pg_notify` for immediate wakeup with a 500ms fallback poll.
+**Architecture:** The spec (v1.4.0) defines a PostgreSQL-coordinated task queue with atomic reservation, gRPC dispatch, and a reconciler for stalled tasks. This plan implements the single-server, single-agent path first. Multi-server scaling requires no special dispatch logic — PostgreSQL is the coordination layer (k3s model: run multiple servers behind a load balancer, all sharing the same DB). Image prefetch is deferred to a follow-on plan. The worker loop uses `pg_notify` for immediate wakeup with a 500ms fallback poll.
 
 **Tech Stack:** Go 1.26, pgx/v5, google.golang.org/grpc, go-libvirt, vishvananda/netlink, testify
 
@@ -12,7 +12,7 @@
 
 ## Deferred (follow-on plan)
 
-- Multi-server dispatch ownership check (`agent_stream_server_id`)
+- Image prefetch
 - Image prefetch (IMAGE_PREFETCH task type)
 - CertRenew RPC (certificate rotation)
 - Token rotation + grace period

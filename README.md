@@ -18,8 +18,7 @@ O3K is a lightweight OpenStack implementation in Go. Single binary, 5 services, 
 | Terraform Compatibility | Production | `o3k compat-check` validates E2E |
 | Stub Mode (any OS) | Production | Full API without KVM/libvirt |
 | KVM Real Mode (Linux) | Beta | VM lifecycle works, networking wiring in progress |
-| Server/Agent (multi-node) | Alpha | Task queue + executor functional, single-server only |
-| Multi-server HA | Not implemented | Deferred to v0.9.0 |
+| Server/Agent (multi-node) | Alpha | Task queue + executor functional, HA via load balancer + PostgreSQL |
 
 ### What's in v0.8.0
 
@@ -108,6 +107,14 @@ Just as K3s removed heavyweight components from Kubernetes:
 - Direct libvirt/Ceph/netlink calls
 - Fail-fast design (1-second timeouts)
 - Horizontal scaling via load balancer
+
+### High Availability (k3s model)
+- PostgreSQL is the single source of truth (like etcd/SQLite in k3s)
+- Run multiple `o3k server` instances behind a load balancer
+- All servers share the same PostgreSQL — `FOR UPDATE SKIP LOCKED` prevents conflicts
+- Agents connect to any server via the load balancer VIP
+- No special HA configuration needed — the database IS the coordination layer
+- For PostgreSQL HA: use Patroni, pg_auto_failover, or managed PostgreSQL
 
 ### Multi-Tenancy
 - Network namespace per project
@@ -477,7 +484,6 @@ The seed data creates:
 
 **Current Focus (v0.9.0):**
 - Behavioral fidelity (error codes, pagination matching real OpenStack)
-- Multi-server HA (dispatch ownership check, cross-server fallback)
 - Image prefetch (download images to agent before VM create)
 - Agent-side real networking (netlink calls for NET_* tasks)
 
@@ -500,10 +506,9 @@ Contributions welcome! See `docs/CONTRIBUTING.md` for guidelines.
 - Community feedback integration
 
 **Future expansion areas (on-demand):**
-- Optional enterprise features (Federation/SAML, DVR) - if user demand exists
-- Additional services (Barbican, Designate, Octavia) - based on requests
+- Optional enterprise features (Federation/SAML, DVR) — if user demand exists
+- Additional services (Barbican, Designate, Octavia) — based on requests
 - eBPF security groups
-- High availability features
 
 ## 📚 Additional Documentation
 

@@ -160,7 +160,7 @@ Functional with configured backends.
 | Agent stats reporting | Real | Periodic heartbeat with vcpu/ram totals |
 | Task worker | Real | BeginTx claim, capacity-based scheduling, retry logic |
 | Reconciler | Real | Detects stalled tasks, requeues or fails |
-| HA scheduling | NOT IMPLEMENTED | Single-server only (multi-server dispatch deferred) |
+| HA (multi-server) | By design | PostgreSQL is the coordination layer; add servers behind a load balancer |
 | StatsStream (separate RPC) | NOT IMPLEMENTED | Stats sent via heartbeat on main stream |
 
 ---
