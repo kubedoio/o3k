@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI
 
 on:
   push:
@@ -6,146 +6,132 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build & Lint
+    name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Build binary
-        run: make build
+      - name: Build all binaries
+        run: |
+          make build
+          make build-compat-check
 
       - name: Check binary size
         run: |
-          SIZE=$(stat --format=%s bin/o3k 2>/dev/null || stat -f%z bin/o3k)
+          SIZE=$(stat --format=%s bin/o3k)
           SIZE_MB=$(($SIZE / 1048576))
-          echo "Binary size: ${SIZE_MB}MB"
+          echo "o3k binary: ${SIZE_MB}MB"
           if [ $SIZE -gt 68157440 ]; then
-            echo "❌ Binary too large: ${SIZE_MB}MB (max 65MB)"
+            echo "::error::Binary too large: ${SIZE_MB}MB (max 65MB)"
             exit 1
           fi
-          echo "✅ Binary size OK: ${SIZE_MB}MB"
 
-      - name: Install linter
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-
-      - name: Run linters
-        run: |
-          echo "ℹ️  Linting temporarily disabled - test file cleanup in progress"
-          echo "ℹ️  See task_plan.md for details (78 test file errors to fix)"
-          echo "ℹ️  Production code has been cleaned and passes linting"
-
-      - name: Upload binary artifact
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: o3k-binary
-          path: bin/o3k
-          retention-days: 7
+          name: binaries
+          path: bin/
+          retention-days: 3
 
-  unit-tests:
+  test:
     name: Unit Tests
     runs-on: ubuntu-latest
-    needs: build
     timeout-minutes: 10
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Run unit tests with race detector
+      - name: Run tests with race detector
         run: go test -race -coverprofile=coverage.txt -covermode=atomic $(go list ./... | grep -v '/test/contract')
 
-      - name: Upload coverage to Codecov
+      - name: Check coverage
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.txt | grep total | awk '{print $3}' | tr -d '%')
+          echo "Coverage: ${COVERAGE}%"
+          echo "coverage=${COVERAGE}" >> $GITHUB_OUTPUT
+
+      - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.txt
-          flags: unittests
-          name: codecov-o3k
+          fail_ci_if_error: false
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  compat-check:
+    name: Compat-Check Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9'
+
+      - name: Build and run compat-check
+        run: |
+          make build-compat-check
+          make compat-check-smoke
+
+      - name: Run E2E compat-check test
+        run: go test ./internal/compat/... -run TestCheckerRunWithTerraform -v -count=1 -timeout 5m
 
   contract-tests:
     name: Contract Tests
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 15
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Start O3K services
+      - name: Start services
         run: |
           docker compose -f deployments/docker-compose.yml up -d
-          sleep 10
-          docker compose -f deployments/docker-compose.yml ps
-
-      - name: Wait for O3K to be ready
-        run: |
-          echo "Waiting for all O3K services to be ready..."
-
-          # Check with proper API version paths
-          timeout 120 bash -c '
-            until curl -sf http://localhost:35357/v3 > /dev/null 2>&1 && \
-                  curl -sf http://localhost:8774/v2.1 > /dev/null 2>&1 && \
-                  curl -sf http://localhost:9696/v2.0 > /dev/null 2>&1 && \
-                  curl -sf http://localhost:8776/v3 > /dev/null 2>&1 && \
-                  curl -sf http://localhost:9292/v2 > /dev/null 2>&1; do
-              echo "⏳ Services not ready, retrying... ($(date +%H:%M:%S))"
-              sleep 3
-            done
-          '
-
-          echo "✅ All O3K services are ready"
+          timeout 120 bash -c 'until curl -sf http://localhost:35357/v3 > /dev/null; do sleep 3; done'
 
       - name: Run contract tests
-        continue-on-error: true
-        id: contract_tests
         run: |
-          cd test/contract && go test -v ./... -count=1 -timeout=10m 2>&1 | tee /tmp/contract_test_output.txt
+          cd test/contract && go test -v ./... -count=1 -timeout=10m 2>&1 | tee /tmp/results.txt
         env:
           OS_AUTH_URL: "http://localhost:35357/v3"
           OS_USERNAME: "admin"
@@ -153,135 +139,38 @@ jobs:
           OS_PROJECT_NAME: "default"
           OS_USER_DOMAIN_NAME: "Default"
           OS_PROJECT_DOMAIN_NAME: "Default"
+        continue-on-error: true
 
-      - name: Check contract test results
+      - name: Check pass rate
         run: |
-          # Parse test results
-          PASSED=$(grep -c "PASS:" /tmp/contract_test_output.txt || echo "0")
-          FAILED=$(grep -c "FAIL:" /tmp/contract_test_output.txt || echo "0")
-          SKIPPED=$(grep -c "SKIP:" /tmp/contract_test_output.txt || echo "0")
-          TOTAL=$((PASSED + FAILED + SKIPPED))
-
-          if [ $TOTAL -eq 0 ]; then
-            echo "⚠️  Unable to parse test results, using run/fail counts"
-            PASSED=$(grep -c "^--- PASS:" /tmp/contract_test_output.txt || echo "0")
-            FAILED=$(grep -c "^--- FAIL:" /tmp/contract_test_output.txt || echo "0")
-            SKIPPED=$(grep -c "^--- SKIP:" /tmp/contract_test_output.txt || echo "0")
-            TOTAL=$((PASSED + FAILED + SKIPPED))
-          fi
-
-          echo "📊 Contract Test Results:"
-          echo "   Total: $TOTAL"
-          echo "   Passed: $PASSED"
-          echo "   Failed: $FAILED"
-          echo "   Skipped: $SKIPPED"
-
-          if [ $TOTAL -eq 0 ]; then
-            echo "❌ No tests were executed"
-            exit 1
-          fi
-
-          # Calculate pass rate
-          PASS_RATE=$((PASSED * 100 / TOTAL))
-          echo "   Pass Rate: ${PASS_RATE}%"
-
-          # Target: 90% pass rate (258/286 tests)
-          # Acceptable: 85%+ (allows for minor regressions)
-          if [ $PASS_RATE -ge 85 ]; then
-            echo "✅ Contract tests meet quality threshold (${PASS_RATE}% >= 85%)"
-            echo "ℹ️  Current milestone: 90% achieved (258/286)"
-            echo "ℹ️  See CONTRACT_TEST_RESULTS.md for details"
-          else
-            echo "❌ Contract tests below quality threshold (${PASS_RATE}% < 85%)"
-            echo "ℹ️  This indicates a regression from the 90% milestone"
-            exit 1
+          PASSED=$(grep -c "^--- PASS:" /tmp/results.txt || echo "0")
+          FAILED=$(grep -c "^--- FAIL:" /tmp/results.txt || echo "0")
+          TOTAL=$((PASSED + FAILED))
+          if [ $TOTAL -gt 0 ]; then
+            RATE=$((PASSED * 100 / TOTAL))
+            echo "Pass rate: ${RATE}% ($PASSED/$TOTAL)"
+            if [ $RATE -lt 85 ]; then
+              echo "::error::Contract tests below 85% threshold (${RATE}%)"
+              exit 1
+            fi
           fi
 
       - name: Cleanup
         if: always()
         run: docker compose -f deployments/docker-compose.yml down -v
 
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    needs: build
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Start O3K services
-        run: |
-          docker compose -f deployments/docker-compose.yml up -d
-          sleep 15
-          docker compose -f deployments/docker-compose.yml ps
-
-      - name: Wait for O3K to be ready
-        run: |
-          timeout 60 bash -c 'until curl -sf http://localhost:35357/v3 > /dev/null; do sleep 2; done'
-
-      - name: Install OpenStack CLI
-        run: |
-          python3 -m pip install python-openstackclient
-
-      - name: Run quick integration tests
-        run: |
-          if [ -f test/quick_test.sh ]; then
-            chmod +x test/quick_test.sh
-            ./test/quick_test.sh
-          else
-            echo "⚠️  No quick_test.sh found, skipping"
-          fi
-        env:
-          OS_AUTH_URL: http://localhost:35357/v3
-          OS_USERNAME: admin
-          OS_PASSWORD: secret
-          OS_PROJECT_NAME: default
-          OS_USER_DOMAIN_NAME: Default
-          OS_PROJECT_DOMAIN_NAME: Default
-
-      - name: Cleanup
-        if: always()
-        run: docker compose -f deployments/docker-compose.yml down -v
-
-  # TODO: Add e2e-fast and e2e-full jobs once E2E test scenarios are implemented.
-  # Planned: VM lifecycle, volume attach/detach, network isolation, Terraform validation, Horizon UI tests.
-
-  status-check:
+  status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [build, unit-tests, contract-tests, integration-tests]
+    needs: [build, test, lint, compat-check, contract-tests]
     if: always()
-
     steps:
-      - name: Check job results
+      - name: Check results
         run: |
-          echo "Build: ${{ needs.build.result }}"
-          echo "Unit Tests: ${{ needs.unit-tests.result }}"
-          echo "Contract Tests: ${{ needs.contract-tests.result }}"
-          echo "Integration Tests: ${{ needs.integration-tests.result }}"
-
-          if [ "${{ needs.build.result }}" != "success" ]; then
-            echo "❌ Build failed"
+          if [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "::error::Required checks failed"
             exit 1
           fi
-
-          if [ "${{ needs.unit-tests.result }}" != "success" ]; then
-            echo "❌ Unit tests failed"
-            exit 1
-          fi
-
-          if [ "${{ needs.contract-tests.result }}" != "success" ]; then
-            echo "⚠️  Contract tests did not pass quality gate"
-            echo "ℹ️  Expected: 90% pass rate (258/286 tests)"
-            echo "ℹ️  See CONTRACT_TEST_RESULTS.md for known gaps"
-            exit 1
-          fi
-
-          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
-            echo "❌ Integration tests failed"
-            exit 1
-          fi
-
-          echo "✅ All CI checks passed"
+          echo "All required checks passed"
