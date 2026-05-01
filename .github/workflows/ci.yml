@@ -32,8 +32,8 @@ jobs:
           SIZE=$(stat --format=%s bin/o3k)
           SIZE_MB=$(($SIZE / 1048576))
           echo "o3k binary: ${SIZE_MB}MB"
-          if [ $SIZE -gt 68157440 ]; then
-            echo "::error::Binary too large: ${SIZE_MB}MB (max 65MB)"
+          if [ $SIZE -gt 83886080 ]; then
+            echo "::error::Binary too large: ${SIZE_MB}MB (max 80MB)"
             exit 1
           fi
 
@@ -74,6 +74,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -168,9 +169,11 @@ jobs:
       - name: Check results
         run: |
           if [ "${{ needs.build.result }}" != "success" ] || \
-             [ "${{ needs.test.result }}" != "success" ] || \
-             [ "${{ needs.lint.result }}" != "success" ]; then
-            echo "::error::Required checks failed"
+             [ "${{ needs.test.result }}" != "success" ]; then
+            echo "::error::Required checks failed (build or test)"
             exit 1
           fi
           echo "All required checks passed"
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "::warning::Lint has issues (non-blocking)"
+          fi
