@@ -6,12 +6,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/cobaltcore-dev/o3k/internal/common"
 )
 
 // GetConsoleRequest represents a console access request
@@ -46,6 +47,11 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// If VNC not configured yet, set it up
 	if vncPort == 0 || vncPassword == "" {
@@ -58,19 +64,20 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 	}
 
 	// Build console URL based on protocol/type
+	consoleHost := strings.Split(c.Request.Host, ":")[0]
 	var consoleURL string
 	switch req.RemoteConsole.Type {
 	case "novnc":
 		// noVNC is a web-based VNC client
 		// Format: http://nova-novncproxy:6080/vnc_auto.html?token=<token>
 		token := generateConsoleToken(instanceID)
-		consoleURL = fmt.Sprintf("http://localhost:6080/vnc_auto.html?token=%s", token)
+		consoleURL = fmt.Sprintf("http://%s:6080/vnc_auto.html?token=%s", consoleHost, token)
 	case "xvpvnc":
 		// XVP VNC (legacy)
-		consoleURL = fmt.Sprintf("http://localhost:6081/console?token=%s", generateConsoleToken(instanceID))
+		consoleURL = fmt.Sprintf("http://%s:6081/console?token=%s", consoleHost, generateConsoleToken(instanceID))
 	case "serial":
 		// Serial console
-		consoleURL = fmt.Sprintf("ws://localhost:6083/?token=%s", generateConsoleToken(instanceID))
+		consoleURL = fmt.Sprintf("ws://%s:6083/?token=%s", consoleHost, generateConsoleToken(instanceID))
 	default:
 		common.SendError(c, common.NewBadRequestError(fmt.Sprintf("unsupported console type: %s", req.RemoteConsole.Type)))
 		return
@@ -140,6 +147,11 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_vnc_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// If VNC not configured yet, set it up
 	if vncPort == 0 || vncPassword == "" {
@@ -152,8 +164,9 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 	}
 
 	// Generate console URL
+	consoleHost := strings.Split(c.Request.Host, ":")[0]
 	token := generateConsoleToken(instanceID)
-	consoleURL := fmt.Sprintf("http://localhost:6080/vnc_auto.html?token=%s", token)
+	consoleURL := fmt.Sprintf("http://%s:6080/vnc_auto.html?token=%s", consoleHost, token)
 
 	c.JSON(http.StatusOK, gin.H{
 		"console": gin.H{
@@ -231,6 +244,11 @@ func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interfa
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_console_output").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse length parameter
 	length := 0
@@ -273,6 +291,11 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_serial_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse console type
 	consoleType := "serial"
@@ -283,8 +306,9 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 	}
 
 	// Generate serial console URL
+	consoleHost := strings.Split(c.Request.Host, ":")[0]
 	token := generateConsoleToken(instanceID)
-	consoleURL := fmt.Sprintf("ws://localhost:6083/?token=%s", token)
+	consoleURL := fmt.Sprintf("ws://%s:6083/?token=%s", consoleHost, token)
 
 	c.JSON(http.StatusOK, gin.H{
 		"console": gin.H{
@@ -310,6 +334,11 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_spice_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse console type
 	consoleType := "spice-html5"
@@ -320,8 +349,9 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 	}
 
 	// Generate SPICE console URL
+	consoleHost := strings.Split(c.Request.Host, ":")[0]
 	token := generateConsoleToken(instanceID)
-	consoleURL := fmt.Sprintf("http://localhost:6082/spice_auto.html?token=%s", token)
+	consoleURL := fmt.Sprintf("http://%s:6082/spice_auto.html?token=%s", consoleHost, token)
 
 	c.JSON(http.StatusOK, gin.H{
 		"console": gin.H{
@@ -347,6 +377,11 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_rdp_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse console type
 	consoleType := "rdp-html5"
@@ -357,8 +392,9 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 	}
 
 	// Generate RDP console URL
+	consoleHost := strings.Split(c.Request.Host, ":")[0]
 	token := generateConsoleToken(instanceID)
-	consoleURL := fmt.Sprintf("http://localhost:6084/rdp.html?token=%s", token)
+	consoleURL := fmt.Sprintf("http://%s:6084/rdp.html?token=%s", consoleHost, token)
 
 	c.JSON(http.StatusOK, gin.H{
 		"console": gin.H{

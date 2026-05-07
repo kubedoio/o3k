@@ -325,8 +325,16 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 		return
 	}
 
-	// Update instance with new flavor
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	// Update instance flavor and store old flavor atomically
+	tx, err := svc.activeDB().BeginTx(c.Request.Context(), pgx.TxOptions{})
+	if err != nil {
+		log.Error().Err(err).Str("operation", "resize_instance").Msg("failed to begin transaction")
+		common.SendError(c, common.NewInternalServerError("failed to resize instance"))
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+
+	_, err = tx.Exec(c.Request.Context(), `
 		UPDATE instances
 		SET flavor_id = $1, status = $2, task_state = $3, updated_at = $4
 		WHERE id = $5
@@ -334,6 +342,24 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "resize_instance").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to resize instance"))
+		return
+	}
+
+	_, err = tx.Exec(c.Request.Context(),
+		`INSERT INTO instance_metadata (instance_id, meta_key, meta_value)
+		 VALUES ($1, '_old_flavor_id', $2)
+		 ON CONFLICT (instance_id, meta_key) DO UPDATE SET meta_value = $2`,
+		instanceID, currentFlavorID,
+	)
+	if err != nil {
+		log.Error().Err(err).Str("operation", "store_old_flavor").Msg("failed to store old flavor id")
+		common.SendError(c, common.NewInternalServerError("failed to resize instance"))
+		return
+	}
+
+	if err = tx.Commit(c.Request.Context()); err != nil {
+		log.Error().Err(err).Str("operation", "resize_instance_commit").Msg("failed to commit resize")
 		common.SendError(c, common.NewInternalServerError("failed to resize instance"))
 		return
 	}
@@ -382,6 +408,12 @@ func (svc *Service) ConfirmResizeInstance(c *gin.Context) {
 		return
 	}
 
+	// Clean up old flavor metadata
+	svc.activeDB().Exec(c.Request.Context(),
+		"DELETE FROM instance_metadata WHERE instance_id = $1 AND meta_key = '_old_flavor_id'",
+		instanceID,
+	)
+
 	c.Status(http.StatusNoContent)
 }
 
@@ -407,18 +439,40 @@ func (svc *Service) RevertResizeInstance(c *gin.Context) {
 		return
 	}
 
-	// In real mode, would revert to old flavor
-	// For stub mode, just set back to ACTIVE
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
-		UPDATE instances
-		SET status = $1, task_state = $2, updated_at = $3
-		WHERE id = $4
-	`, "ACTIVE", "", time.Now(), instanceID)
+	// Restore old flavor if available
+	var oldFlavorID string
+	err = svc.activeDB().QueryRow(c.Request.Context(),
+		"SELECT meta_value FROM instance_metadata WHERE instance_id = $1 AND meta_key = '_old_flavor_id'",
+		instanceID,
+	).Scan(&oldFlavorID)
 
-	if err != nil {
-		log.Error().Err(err).Str("operation", "revert_resize").Msg("database error")
-		common.SendError(c, common.NewInternalServerError("failed to revert resize"))
-		return
+	if err == nil && oldFlavorID != "" {
+		if _, err = svc.activeDB().Exec(c.Request.Context(),
+			"UPDATE instances SET flavor_id = $1, status = $2, task_state = $3, updated_at = $4 WHERE id = $5",
+			oldFlavorID, "ACTIVE", "", time.Now(), instanceID,
+		); err != nil {
+			log.Error().Err(err).Str("operation", "revert_resize_flavor").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to revert resize"))
+			return
+		}
+		// Clean up the metadata
+		if _, err = svc.activeDB().Exec(c.Request.Context(),
+			"DELETE FROM instance_metadata WHERE instance_id = $1 AND meta_key = '_old_flavor_id'",
+			instanceID,
+		); err != nil {
+			log.Error().Err(err).Str("operation", "cleanup_old_flavor_metadata").Msg("failed to clean up old flavor metadata")
+		}
+	} else {
+		// Fallback: just set ACTIVE without flavor change
+		if _, err = svc.activeDB().Exec(c.Request.Context(), `
+			UPDATE instances
+			SET status = $1, task_state = $2, updated_at = $3
+			WHERE id = $4
+		`, "ACTIVE", "", time.Now(), instanceID); err != nil {
+			log.Error().Err(err).Str("operation", "revert_resize").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to revert resize"))
+			return
+		}
 	}
 
 	c.Status(http.StatusAccepted)
@@ -975,6 +1029,9 @@ func (svc *Service) CreateBackupAction(c *gin.Context) {
 			var createdAt time.Time
 			rows.Scan(&id, &createdAt)
 			backupIDs = append(backupIDs, id)
+		}
+		if err := rows.Err(); err != nil {
+			log.Error().Err(err).Str("operation", "list_backup_images").Msg("rows iteration error")
 		}
 
 		// Delete backups beyond rotation limit

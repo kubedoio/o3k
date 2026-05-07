@@ -71,48 +71,36 @@ func (svc *Service) ListRouters(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Parse pagination parameters
-	limit := 1000
-	offset := 0
+	limit := common.DefaultPaginationLimit
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
-	if offsetParam := c.Query("offset"); offsetParam != "" {
-		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
-			offset = parsedOffset
-		}
-	}
+	limit = common.CapLimit(limit)
 
-	// Marker-based pagination
+	// Marker-based pagination using (created_at, id) for deterministic ordering.
 	var markerCondition string
 	var queryArgs []interface{}
 	queryArgs = append(queryArgs, projectID)
 	argIdx := 2
 
 	if marker := c.Query("marker"); marker != "" {
-		var markerCreatedAt time.Time
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT created_at FROM routers WHERE id = $1 AND project_id = $2",
-			marker, projectID,
-		).Scan(&markerCreatedAt)
-		if err == nil {
-			markerCondition = fmt.Sprintf(" AND created_at < $%d", argIdx)
-			queryArgs = append(queryArgs, markerCreatedAt)
-			argIdx++
-		}
+		markerCondition = fmt.Sprintf(` AND (created_at, id) > (SELECT created_at, id FROM routers WHERE id = $%d)`, argIdx)
+		queryArgs = append(queryArgs, marker)
+		argIdx++
 	}
 
-	queryArgs = append(queryArgs, limit, offset)
+	queryArgs = append(queryArgs, limit+1)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, name, project_id, admin_state_up, status, external_gateway_info,
 		       distributed, ha, created_at, updated_at
 		FROM routers
 		WHERE project_id = $1%s
-		ORDER BY created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, markerCondition, argIdx, argIdx+1), queryArgs...)
+		ORDER BY created_at ASC, id ASC
+		LIMIT $%d
+	`, markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_routers").Msg("database error")
@@ -150,12 +138,28 @@ func (svc *Service) ListRouters(c *gin.Context) {
 			"updated_at":            r.UpdatedAt.Format(time.RFC3339),
 		})
 	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_routers").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list routers"))
+		return
+	}
 
 	if routers == nil {
 		routers = []gin.H{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"routers": routers})
+	// Check if there are more results
+	resp := gin.H{"routers": routers}
+	if len(routers) > limit {
+		routers = routers[:limit]
+		lastID := routers[limit-1]["id"].(string)
+		resp = gin.H{
+			"routers":       routers,
+			"routers_links": []gin.H{{"rel": "next", "href": fmt.Sprintf("?marker=%s&limit=%d", lastID, limit)}},
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // CreateRouter creates a new L3 router
@@ -486,8 +490,11 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"subnet_id": subnetID,
-		"port_id":   portID,
+		"id":         routerID,
+		"subnet_id":  subnetID,
+		"network_id": networkID,
+		"port_id":    portID,
+		"tenant_id":  projectID,
 	})
 }
 
@@ -607,6 +614,9 @@ func (svc *Service) configureExternalGateway(ctx context.Context, routerID strin
 			if err := svc.routerManager.EnableSNAT(routerID, externalInterface, internalCIDR); err != nil {
 				fmt.Printf("Warning: failed to enable SNAT for %s: %v\n", internalCIDR, err)
 			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating internal subnets: %w", err)
 		}
 	}
 

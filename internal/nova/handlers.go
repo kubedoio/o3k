@@ -10,10 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/rs/zerolog/log"
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/middleware"
@@ -21,25 +17,31 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/hypervisor"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 // Service handles Nova API endpoints
 type Service struct {
-	db            database.DBIF
-	libvirtURI    string
-	libvirtMode   string
-	vmManager     *hypervisor.VMManager
-	cache         *cache.Cache
-	neutronSvc    NeutronService // For port allocation
-	dispatcher    *tunnel.Dispatcher
-	wg            sync.WaitGroup
-	ctx           context.Context
-	cancel        context.CancelFunc
+	db          database.DBIF
+	libvirtURI  string
+	libvirtMode string
+	vmManager   *hypervisor.VMManager
+	cache       *cache.Cache
+	neutronSvc  NeutronService // For port allocation
+	dispatcher  *tunnel.Dispatcher
+	wg          sync.WaitGroup
+	ctx         context.Context
+	cancel      context.CancelFunc
+	// quotaMu serialises quota check + INSERT per project to prevent TOCTOU races.
+	quotaMu sync.Map // map[projectID]*sync.Mutex
 }
 
 const (
 	novaMinVersion     = "2.1"
-	novaCurrentVersion = "2.90"
+	novaCurrentVersion = "2.93"
 )
 
 // NeutronService defines the interface for Neutron operations Nova needs
@@ -79,6 +81,13 @@ func (svc *Service) activeDB() database.DBIF {
 		return svc.db
 	}
 	return database.DB
+}
+
+// projectQuotaMu returns (or lazily creates) the per-project mutex used to
+// serialise quota check + resource INSERT and prevent TOCTOU races.
+func (svc *Service) projectQuotaMu(projectID string) *sync.Mutex {
+	v, _ := svc.quotaMu.LoadOrStore(projectID, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 // Shutdown signals all background goroutines to stop and waits for them.
@@ -312,8 +321,15 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		return
 	}
 
+	// Serialise quota check + INSERT per project to prevent TOCTOU races.
+	// The mutex is held until the instance row is committed, so concurrent
+	// requests for the same project cannot both pass the quota check.
+	mu := svc.projectQuotaMu(projectID)
+	mu.Lock()
+
 	// Check quotas before creating instance
 	if err := svc.CheckQuota(c, "instances", 1); err != nil {
+		mu.Unlock()
 		if _, ok := err.(*QuotaExceededError); ok {
 			common.SendError(c, common.NewQuotaExceededError("instances"))
 			return
@@ -325,6 +341,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Check cores quota
 	if err := svc.CheckQuota(c, "cores", flavor.VCPUs); err != nil {
+		mu.Unlock()
 		if _, ok := err.(*QuotaExceededError); ok {
 			common.SendError(c, common.NewQuotaExceededError("cores"))
 			return
@@ -336,6 +353,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Check RAM quota
 	if err := svc.CheckQuota(c, "ram", flavor.RAMMB); err != nil {
+		mu.Unlock()
 		if _, ok := err.(*QuotaExceededError); ok {
 			common.SendError(c, common.NewQuotaExceededError("ram"))
 			return
@@ -364,6 +382,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		INSERT INTO instances (id, name, project_id, user_id, flavor_id, image_id, status, power_state, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, instanceID, req.Server.Name, projectID, userID, flavor.ID, imageID, "BUILD", 0, now, now)
+	// Release the quota lock as soon as the row is committed (or failed).
+	mu.Unlock()
 	middleware.LogDatabaseQuery(c, "INSERT instance", time.Since(queryStart), err)
 
 	if err != nil {
@@ -441,8 +461,12 @@ func (svc *Service) CreateServer(c *gin.Context) {
 							Str("instance_id", instanceID).
 							Str("network_id", network.UUID).
 							Msg("Failed to allocate port from Neutron")
-						// Continue with empty networks rather than failing
-						continue
+						// Fail VM creation: a VM without network is unusable
+						svc.activeDB().Exec(ctx,
+							"UPDATE instances SET status = 'ERROR', fault_message = $1, updated_at = NOW() WHERE id = $2",
+							fmt.Sprintf("Failed to allocate port for network %s: %v", network.UUID, err), instanceID,
+						)
+						return
 					}
 
 					// Type assert to neutron.PortInfo
@@ -551,6 +575,14 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		}()
 	} else {
 		logger.Debug().Msg("Stub mode: skipping libvirt VM creation")
+		// In pure stub mode, auto-transition to ACTIVE after a brief delay
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			svc.activeDB().Exec(context.Background(),
+				"UPDATE instances SET status = 'ACTIVE', power_state = 1, task_state = '', updated_at = $1 WHERE id = $2 AND status = 'BUILD'",
+				time.Now(), instanceID,
+			)
+		}()
 	}
 
 	middleware.LogOperationEnd(c, "create", "server", instanceID, time.Since(start), nil)
@@ -558,17 +590,17 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	// Return instance details
 	c.JSON(http.StatusAccepted, gin.H{
 		"server": gin.H{
-			"id":         instanceID,
-			"name":       req.Server.Name,
-			"status":     "BUILD",
-			"tenant_id":  projectID,
-			"user_id":    userID,
-			"created":    now.Format(time.RFC3339),
-			"updated":    now.Format(time.RFC3339),
-			"flavor":     gin.H{"id": flavor.ID},
-			"image":      gin.H{"id": req.Server.ImageRef},
-			"metadata":   gin.H{},
-			"adminPass":  common.GeneratePassword(16),
+			"id":        instanceID,
+			"name":      req.Server.Name,
+			"status":    "BUILD",
+			"tenant_id": projectID,
+			"user_id":   userID,
+			"created":   now.Format(time.RFC3339),
+			"updated":   now.Format(time.RFC3339),
+			"flavor":    gin.H{"id": flavor.ID},
+			"image":     gin.H{"id": req.Server.ImageRef},
+			"metadata":  gin.H{},
+			"adminPass": common.GeneratePassword(16),
 		},
 	})
 }
@@ -578,37 +610,38 @@ func (svc *Service) ListServers(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Parse pagination parameters
-	limit := 1000 // Default limit
-	offset := 0
+	limit := common.DefaultPaginationLimit
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
-	if offsetParam := c.Query("offset"); offsetParam != "" {
-		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
-			offset = parsedOffset
-		}
-	}
-	if markerParam := c.Query("marker"); markerParam != "" {
-		// Marker-based pagination: get offset of marker UUID
-		var markerOffset int
-		svc.activeDB().QueryRow(c.Request.Context(),
-			`SELECT ROW_NUMBER() OVER (ORDER BY created_at DESC) - 1
-			 FROM instances WHERE project_id = $1 AND id = $2`,
-			projectID, markerParam,
-		).Scan(&markerOffset)
-		if markerOffset > 0 {
-			offset = markerOffset
-		}
-	}
+	limit = common.CapLimit(limit)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(),
-		"SELECT id, name FROM instances WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-		projectID, limit, offset,
-	)
-	if err != nil {
-		log.Error().Err(err).Str("operation", "list_servers").Msg("database error")
+	// OpenStack uses marker-based pagination (keyset pagination).
+	// OFFSET-based skips rows under concurrent inserts.
+	markerParam := c.Query("marker")
+	var rows pgx.Rows
+	var queryErr error
+
+	if markerParam != "" {
+		// Marker-based: get rows AFTER the marker by created_at DESC, id DESC
+		rows, queryErr = svc.activeDB().Query(c.Request.Context(),
+			`SELECT id, name FROM instances
+			 WHERE project_id = $1
+			   AND (created_at, id) < (SELECT created_at, id FROM instances WHERE id = $2)
+			 ORDER BY created_at DESC, id DESC
+			 LIMIT $3`,
+			projectID, markerParam, limit,
+		)
+	} else {
+		rows, queryErr = svc.activeDB().Query(c.Request.Context(),
+			"SELECT id, name FROM instances WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
+			projectID, limit,
+		)
+	}
+	if queryErr != nil {
+		log.Error().Err(queryErr).Str("operation", "list_servers").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to list servers"))
 		return
 	}
@@ -634,6 +667,12 @@ func (svc *Service) ListServers(c *gin.Context) {
 		servers = []gin.H{}
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_servers").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read servers"))
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"servers": servers})
 }
 
@@ -642,50 +681,38 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Parse pagination parameters
-	limit := 1000
-	offset := 0
+	limit := common.DefaultPaginationLimit
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
-	if offsetParam := c.Query("offset"); offsetParam != "" {
-		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
-			offset = parsedOffset
-		}
-	}
+	limit = common.CapLimit(limit)
 
-	// Marker-based pagination
+	// Marker-based pagination (keyset pagination, no OFFSET)
 	var markerCondition string
 	var queryArgs []interface{}
 	queryArgs = append(queryArgs, projectID)
 	argIdx := 2
 
 	if marker := c.Query("marker"); marker != "" {
-		var markerCreatedAt time.Time
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT created_at FROM instances WHERE id = $1 AND project_id = $2",
-			marker, projectID,
-		).Scan(&markerCreatedAt)
-		if err == nil {
-			markerCondition = fmt.Sprintf(" AND i.created_at < $%d", argIdx)
-			queryArgs = append(queryArgs, markerCreatedAt)
-			argIdx++
-		}
+		markerCondition = fmt.Sprintf(" AND (i.created_at, i.id::text) < (SELECT created_at, id::text FROM instances WHERE id = $%d AND project_id = $1)", argIdx)
+		queryArgs = append(queryArgs, marker)
+		argIdx++
 	}
 
-	queryArgs = append(queryArgs, limit, offset)
+	queryArgs = append(queryArgs, limit)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT i.id, i.name, i.status, i.power_state, i.project_id, i.user_id,
 		       i.flavor_id, i.image_id, i.created_at, i.updated_at, i.launched_at,
-		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name
+		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name, i.host
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
 		WHERE i.project_id = $1%s
 		ORDER BY i.created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, markerCondition, argIdx, argIdx+1), queryArgs...)
+		LIMIT $%d
+	`, markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_servers_detail").Msg("database error")
@@ -701,10 +728,11 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		var powerState, vcpus, ramMB, diskGB int
 		var createdAt, updatedAt time.Time
 		var launchedAt *time.Time
+		var host sql.NullString
 
 		if err := rows.Scan(&id, &name, &status, &powerState, &projectID, &userID,
 			&flavorID, &imageID, &createdAt, &updatedAt, &launchedAt,
-			&vcpus, &ramMB, &diskGB, &flavorName); err != nil {
+			&vcpus, &ramMB, &diskGB, &flavorName, &host); err != nil {
 			log.Warn().Err(err).Msg("failed to scan server detail row")
 			continue
 		}
@@ -721,17 +749,43 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		// Get addresses for this instance
 		addresses := svc.getInstanceAddresses(c.Request.Context(), id, projectID)
 
+		// Derive OS-EXT-STS fields from status
+		var taskState interface{}
+		vmState := "active"
+		switch status {
+		case "BUILD", "BUILDING":
+			taskState = "spawning"
+			vmState = "building"
+		case "ACTIVE":
+			vmState = "active"
+		case "SHUTOFF":
+			vmState = "stopped"
+		case "ERROR":
+			vmState = "error"
+		case "DELETED", "SOFT_DELETED":
+			vmState = "deleted"
+		}
+
+		hostStr := host.String // empty string if NULL
 		servers = append(servers, gin.H{
-			"id":         id,
-			"name":       name,
-			"status":     status,
-			"tenant_id":  projectID,
-			"user_id":    userID,
-			"created":    createdAt.Format(time.RFC3339),
-			"updated":    updatedAt.Format(time.RFC3339),
-			"addresses":  addresses,
-			"OS-EXT-STS:power_state": powerState,
-			"OS-SRV-USG:launched_at": launchedAtStr,
+			"id":                                  id,
+			"name":                                name,
+			"status":                              status,
+			"tenant_id":                           projectID,
+			"user_id":                             userID,
+			"created":                             createdAt.Format(time.RFC3339),
+			"updated":                             updatedAt.Format(time.RFC3339),
+			"addresses":                           addresses,
+			"OS-EXT-STS:power_state":              powerState,
+			"OS-EXT-STS:task_state":               taskState,
+			"OS-EXT-STS:vm_state":                 vmState,
+			"OS-EXT-AZ:availability_zone":         "nova",
+			"OS-DCF:diskConfig":                   "AUTO",
+			"OS-SRV-USG:launched_at":              launchedAtStr,
+			"OS-SRV-USG:terminated_at":            nil,
+			"OS-EXT-SRV-ATTR:host":                hostStr,
+			"OS-EXT-SRV-ATTR:instance_name":       fmt.Sprintf("instance-%s", id[:8]),
+			"OS-EXT-SRV-ATTR:hypervisor_hostname": hostStr,
 			"flavor": gin.H{
 				"id":    flavorID,
 				"vcpus": vcpus,
@@ -744,6 +798,12 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 
 	if servers == nil {
 		servers = []gin.H{}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_servers_detail").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read servers"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"servers": servers})
@@ -786,8 +846,8 @@ func (svc *Service) getInstanceAddresses(ctx context.Context, instanceID, projec
 		for _, ipInfo := range fixedIPs {
 			if ipAddr, ok := ipInfo["ip_address"].(string); ok {
 				addressList = append(addressList, gin.H{
-					"addr":    ipAddr,
-					"version": 4,
+					"addr":            ipAddr,
+					"version":         4,
 					"OS-EXT-IPS:type": "fixed",
 				})
 			}
@@ -810,16 +870,18 @@ func (svc *Service) GetServer(c *gin.Context) {
 	var userID, flavorID, imageID interface{}
 	var powerState int
 	var createdAt, updatedAt time.Time
+	var launchedAt *time.Time
+	var host sql.NullString
 
 	// Try to find by ID first, then by name
 	// Use separate conditions to avoid type mismatch when id is UUID and param might be a name
 	err := svc.activeDB().QueryRow(c.Request.Context(), `
-		SELECT id, name, status, power_state, project_id, user_id, flavor_id, image_id, created_at, updated_at
+		SELECT id, name, status, power_state, project_id, user_id, flavor_id, image_id, created_at, updated_at, host, launched_at
 		FROM instances
 		WHERE project_id = $2 AND (
 			(id::text = $1) OR (name = $1)
 		)
-	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt)
+	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt)
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("instance"))
@@ -834,16 +896,51 @@ func (svc *Service) GetServer(c *gin.Context) {
 	// Get addresses from ports
 	addresses := svc.getInstanceAddresses(c.Request.Context(), id, projectID)
 
+	// Derive OS-EXT-STS fields from status
+	var getTaskState interface{}
+	getVMState := "active"
+	switch status {
+	case "BUILD", "BUILDING":
+		getTaskState = "spawning"
+		getVMState = "building"
+	case "ACTIVE":
+		getVMState = "active"
+	case "SHUTOFF":
+		getVMState = "stopped"
+	case "ERROR":
+		getVMState = "error"
+	case "DELETED", "SOFT_DELETED":
+		getVMState = "deleted"
+	}
+
+	// Use DB launched_at if non-null; fall back to created_at for ACTIVE instances
+	var getLaunchedAt interface{}
+	if launchedAt != nil {
+		getLaunchedAt = launchedAt.Format(time.RFC3339)
+	} else if status == "ACTIVE" {
+		getLaunchedAt = createdAt.Format(time.RFC3339)
+	}
+
 	// Build response with nullable fields
+	hostStr := host.String // empty string if NULL
 	response := gin.H{
-		"id":                     id,
-		"name":                   name,
-		"status":                 status,
-		"tenant_id":              projID,
-		"created":                createdAt.Format(time.RFC3339),
-		"updated":                updatedAt.Format(time.RFC3339),
-		"addresses":              addresses,
-		"OS-EXT-STS:power_state": powerState,
+		"id":                                  id,
+		"name":                                name,
+		"status":                              status,
+		"tenant_id":                           projID,
+		"created":                             createdAt.Format(time.RFC3339),
+		"updated":                             updatedAt.Format(time.RFC3339),
+		"OS-EXT-SRV-ATTR:host":                hostStr,
+		"OS-EXT-SRV-ATTR:instance_name":       fmt.Sprintf("instance-%s", id[:8]),
+		"OS-EXT-SRV-ATTR:hypervisor_hostname": hostStr,
+		"addresses":                           addresses,
+		"OS-EXT-STS:power_state":              powerState,
+		"OS-EXT-STS:task_state":               getTaskState,
+		"OS-EXT-STS:vm_state":                 getVMState,
+		"OS-EXT-AZ:availability_zone":         "nova",
+		"OS-DCF:diskConfig":                   "AUTO",
+		"OS-SRV-USG:launched_at":              getLaunchedAt,
+		"OS-SRV-USG:terminated_at":            nil,
 	}
 
 	if userID != nil {
@@ -907,8 +1004,8 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	if svc.neutronSvc != nil {
 		ctx := c.Request.Context()
 		rows, portErr := svc.activeDB().Query(ctx,
-			"SELECT id, mac_address, network_id FROM ports WHERE device_id = $1",
-			instanceID)
+			"SELECT id, mac_address, network_id FROM ports WHERE device_id = $1 AND project_id = $2",
+			instanceID, projectID)
 		if portErr == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -924,8 +1021,8 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 
 	// Delete orphaned ports for this instance
 	svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM ports WHERE device_id = $1",
-		instanceID)
+		"DELETE FROM ports WHERE device_id = $1 AND project_id = $2",
+		instanceID, projectID)
 
 	// Delete from database (support lookup by ID or name)
 	queryStart = time.Now()
@@ -1417,18 +1514,18 @@ func (svc *Service) GetHypervisorStatistics(c *gin.Context) {
 	// Return aggregated stats
 	c.JSON(200, gin.H{
 		"hypervisor_statistics": gin.H{
-			"count":              1,
-			"current_workload":   0,
+			"count":                1,
+			"current_workload":     0,
 			"disk_available_least": 800,
-			"free_disk_gb":       900,
-			"free_ram_mb":        28672,
-			"local_gb":           1000,
-			"local_gb_used":      100,
-			"memory_mb":          32768,
-			"memory_mb_used":     4096,
-			"running_vms":        runningVMs,
-			"vcpus":              16,
-			"vcpus_used":         runningVMs * 2, // Assume 2 vCPUs per VM
+			"free_disk_gb":         900,
+			"free_ram_mb":          28672,
+			"local_gb":             1000,
+			"local_gb_used":        100,
+			"memory_mb":            32768,
+			"memory_mb_used":       4096,
+			"running_vms":          runningVMs,
+			"vcpus":                16,
+			"vcpus_used":           runningVMs * 2, // Assume 2 vCPUs per VM
 		},
 	})
 }
@@ -1627,37 +1724,37 @@ func (svc *Service) ListServices(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"services": []gin.H{
 			{
-				"id":                 1,
-				"binary":             "nova-compute",
-				"host":               "o3k-compute-1",
-				"zone":               "nova",
-				"status":             "enabled",
-				"state":              "up",
-				"updated_at":         now,
-				"disabled_reason":    nil,
-				"forced_down":        false,
+				"id":              1,
+				"binary":          "nova-compute",
+				"host":            "o3k-compute-1",
+				"zone":            "nova",
+				"status":          "enabled",
+				"state":           "up",
+				"updated_at":      now,
+				"disabled_reason": nil,
+				"forced_down":     false,
 			},
 			{
-				"id":                 2,
-				"binary":             "nova-scheduler",
-				"host":               "o3k-controller",
-				"zone":               "internal",
-				"status":             "enabled",
-				"state":              "up",
-				"updated_at":         now,
-				"disabled_reason":    nil,
-				"forced_down":        false,
+				"id":              2,
+				"binary":          "nova-scheduler",
+				"host":            "o3k-controller",
+				"zone":            "internal",
+				"status":          "enabled",
+				"state":           "up",
+				"updated_at":      now,
+				"disabled_reason": nil,
+				"forced_down":     false,
 			},
 			{
-				"id":                 3,
-				"binary":             "nova-conductor",
-				"host":               "o3k-controller",
-				"zone":               "internal",
-				"status":             "enabled",
-				"state":              "up",
-				"updated_at":         now,
-				"disabled_reason":    nil,
-				"forced_down":        false,
+				"id":              3,
+				"binary":          "nova-conductor",
+				"host":            "o3k-controller",
+				"zone":            "internal",
+				"status":          "enabled",
+				"state":           "up",
+				"updated_at":      now,
+				"disabled_reason": nil,
+				"forced_down":     false,
 			},
 		},
 	})
@@ -1667,11 +1764,11 @@ func (svc *Service) ListServices(c *gin.Context) {
 func (svc *Service) GetServerMetadata(c *gin.Context) {
 	serverID := c.Param("id")
 
-	// Check if server exists
+	// Check if server exists and belongs to this project
 	var exists bool
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1)",
-		serverID,
+		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		serverID, c.GetString("project_id"),
 	).Scan(&exists)
 
 	if err != nil || !exists {
@@ -1718,11 +1815,11 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 		return
 	}
 
-	// Check if server exists
+	// Check if server exists and belongs to this project
 	var exists bool
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1)",
-		serverID,
+		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		serverID, c.GetString("project_id"),
 	).Scan(&exists)
 
 	if err != nil || !exists {
@@ -1775,6 +1872,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 // ResetServerMetadata replaces all server metadata (PUT /v2.1/servers/:id/metadata)
 func (svc *Service) ResetServerMetadata(c *gin.Context) {
 	serverID := c.Param("id")
+	projectID := c.GetString("project_id")
 
 	var req struct {
 		Metadata map[string]string `json:"metadata" binding:"required"`
@@ -1785,11 +1883,11 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 		return
 	}
 
-	// Check if server exists
+	// Check if server exists and belongs to this project
 	var exists bool
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1)",
-		serverID,
+		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		serverID, projectID,
 	).Scan(&exists)
 
 	if err != nil || !exists {
@@ -1896,14 +1994,14 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 	}
 
 	server = gin.H{
-		"id":         instanceID,
-		"name":       serverName,
-		"status":     status,
-		"tenant_id":  projectID,
-		"user_id":    userID,
-		"created":    createdAt.Format(time.RFC3339),
-		"updated":    updatedAt.Format(time.RFC3339),
-		"image":      imageResponse,
+		"id":        instanceID,
+		"name":      serverName,
+		"status":    status,
+		"tenant_id": projectID,
+		"user_id":   userID,
+		"created":   createdAt.Format(time.RFC3339),
+		"updated":   updatedAt.Format(time.RFC3339),
+		"image":     imageResponse,
 		"flavor": gin.H{
 			"id": flavorID,
 		},

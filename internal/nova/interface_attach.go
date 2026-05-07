@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -307,6 +308,11 @@ func (svc *Service) ListInterfaceAttachments(c *gin.Context) {
 			})
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_interface_attachments").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list interface attachments"))
+		return
+	}
 
 	if attachments == nil {
 		attachments = []gin.H{}
@@ -322,49 +328,65 @@ func generateMACAddress() string {
 		uuid.New()[0], uuid.New()[1], uuid.New()[2])
 }
 
-// allocateNextIP allocates the next available IP from a subnet
+// allocateNextIP allocates the next available IP from a subnet using proper CIDR parsing
 func allocateNextIP(ctx context.Context, db database.DBIF, networkID, cidr string) (string, error) {
-	// Simple allocation: get last used IP and increment
-	// In production, would use proper IPAM
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", fmt.Errorf("invalid CIDR %s: %w", cidr, err)
+	}
+
+	// Start from network base + 10
+	base := make(net.IP, len(ipNet.IP))
+	copy(base, ipNet.IP)
+	for i := 0; i < 10; i++ {
+		incrementIP(base)
+	}
+
+	// Check if any ports already exist and increment past the last used IP
 	var fixedIPsJSON []byte
-	err := db.QueryRow(ctx,
+	err = db.QueryRow(ctx,
 		"SELECT fixed_ips FROM ports WHERE network_id = $1 ORDER BY created_at DESC LIMIT 1",
 		networkID,
 	).Scan(&fixedIPsJSON)
 
 	if err == pgx.ErrNoRows {
-		// First allocation, use .10
-		baseIP := cidr[:len(cidr)-3] // Remove /24
-		return baseIP + "10", nil
+		// First allocation: use base+10
+		return base.String(), nil
 	}
 
 	if err != nil {
 		return "", err
 	}
 
-	// For simplicity, parse JSON and increment
-	// In production, would use proper IPAM library
+	// Parse existing IPs and increment past the last one
 	var ips []map[string]interface{}
-	if err := json.Unmarshal(fixedIPsJSON, &ips); err != nil {
-		// Fallback to simple allocation
-		baseIP := cidr[:len(cidr)-3]
-		return baseIP + "11", nil
+	if err := json.Unmarshal(fixedIPsJSON, &ips); err != nil || len(ips) == 0 {
+		return base.String(), nil
 	}
 
-	if len(ips) == 0 {
-		baseIP := cidr[:len(cidr)-3]
-		return baseIP + "10", nil
+	lastIPStr, _ := ips[0]["ip_address"].(string)
+	lastIP := net.ParseIP(lastIPStr).To4()
+	if lastIP == nil {
+		return base.String(), nil
 	}
 
-	lastIP := ips[0]["ip_address"].(string)
+	next := make(net.IP, len(lastIP))
+	copy(next, lastIP)
+	incrementIP(next)
 
-	// Increment last octet
-	var a, b, c, d int
-	fmt.Sscanf(lastIP, "%d.%d.%d.%d", &a, &b, &c, &d)
-	d++
-	if d > 254 {
+	if !ipNet.Contains(next) {
 		return "", fmt.Errorf("subnet exhausted")
 	}
 
-	return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d), nil
+	return next.String(), nil
+}
+
+// incrementIP increments an IP address by one in-place
+func incrementIP(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
 }

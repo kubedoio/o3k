@@ -237,12 +237,18 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 		return
 	}
 
+	// Resolve volume_type: use request value or default
+	volumeType := req.Volume.VolumeType
+	if volumeType == "" {
+		volumeType = "__DEFAULT__"
+	}
+
 	// Insert into database
 	now := time.Now()
 	_, err := svc.activeDB().Exec(c.Request.Context(), `
-		INSERT INTO volumes (id, name, project_id, user_id, size_gb, status, bootable, rbd_pool, rbd_image, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, volumeID, req.Volume.Name, projectID, userID, req.Volume.Size, "creating", false, svc.cephPool, "volume-"+volumeID, now, now)
+		INSERT INTO volumes (id, name, project_id, user_id, size_gb, status, bootable, volume_type, rbd_pool, rbd_image, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, volumeID, req.Volume.Name, projectID, userID, req.Volume.Size, "creating", false, volumeType, svc.cephPool, "volume-"+volumeID, now, now)
 
 	if err != nil {
 		// Rollback: delete from Ceph
@@ -270,17 +276,20 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"volume": gin.H{
-			"id":          volumeID,
-			"name":        req.Volume.Name,
-			"tenant_id":   projectID,
-			"user_id":     userID,
-			"size":        req.Volume.Size,
-			"status":      "creating",
-			"bootable":    "false",
-			"created_at":  now.Format("2006-01-02T15:04:05.000000"),
-			"updated_at":  now.Format("2006-01-02T15:04:05.000000"),
-			"metadata":    gin.H{},
-			"attachments": []interface{}{},
+			"id":                volumeID,
+			"name":              req.Volume.Name,
+			"tenant_id":         projectID,
+			"user_id":           userID,
+			"size":              req.Volume.Size,
+			"status":            "creating",
+			"bootable":          "false",
+			"volume_type":       volumeType,
+			"encrypted":         false,
+			"availability_zone": "nova",
+			"created_at":        now.Format("2006-01-02T15:04:05.000000"),
+			"updated_at":        now.Format("2006-01-02T15:04:05.000000"),
+			"metadata":          gin.H{},
+			"attachments":       []interface{}{},
 		},
 	})
 }
@@ -294,13 +303,14 @@ func (svc *Service) ListVolumes(c *gin.Context) {
 	}
 
 	// Parse pagination parameters
-	limit := 1000
+	limit := common.DefaultPaginationLimit
 	offset := 0
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
+	limit = common.CapLimit(limit)
 	if offsetParam := c.Query("offset"); offsetParam != "" {
 		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
 			offset = parsedOffset
@@ -329,7 +339,7 @@ func (svc *Service) ListVolumes(c *gin.Context) {
 	queryArgs = append(queryArgs, limit, offset)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
-		SELECT id, name, size_gb
+		SELECT id, name, size_gb, status, bootable
 		FROM volumes
 		WHERE project_id = $1%s
 		ORDER BY created_at DESC
@@ -345,19 +355,28 @@ func (svc *Service) ListVolumes(c *gin.Context) {
 
 	var volumes []gin.H
 	for rows.Next() {
-		var id, name string
+		var id, name, status string
 		var size int
+		var bootable bool
 
-		if err := rows.Scan(&id, &name, &size); err != nil {
+		if err := rows.Scan(&id, &name, &size, &status, &bootable); err != nil {
 			log.Warn().Err(err).Msg("failed to scan volume row")
 			continue
 		}
 
 		volumes = append(volumes, gin.H{
-			"id":   id,
-			"name": name,
-			"size": size,
+			"id":                id,
+			"name":              name,
+			"size":              size,
+			"status":            status,
+			"bootable":          fmt.Sprintf("%t", bootable),
+			"availability_zone": "nova",
 		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_volumes").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list volumes"))
+		return
 	}
 
 	if volumes == nil {
@@ -376,13 +395,14 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 	}
 
 	// Parse pagination parameters
-	limit := 1000
+	limit := common.DefaultPaginationLimit
 	offset := 0
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
+	limit = common.CapLimit(limit)
 	if offsetParam := c.Query("offset"); offsetParam != "" {
 		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
 			offset = parsedOffset
@@ -411,7 +431,7 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 	queryArgs = append(queryArgs, limit, offset)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
-		SELECT v.id, v.name, v.size_gb, v.status, v.bootable, v.attached_to_instance_id, v.created_at, v.updated_at
+		SELECT v.id, v.name, v.size_gb, v.status, v.bootable, v.attached_to_instance_id, v.created_at, v.updated_at, COALESCE(v.volume_type, '__DEFAULT__')
 		FROM volumes v
 		WHERE v.project_id = $1%s
 		ORDER BY v.created_at DESC
@@ -432,8 +452,9 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 		var bootable bool
 		var attachedTo sql.NullString
 		var createdAt, updatedAt time.Time
+		var volumeType string
 
-		if err := rows.Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt, &volumeType); err != nil {
 			log.Warn().Err(err).Msg("failed to scan volume detail row")
 			continue
 		}
@@ -447,16 +468,24 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 		}
 
 		volumes = append(volumes, gin.H{
-			"id":          id,
-			"name":        name,
-			"tenant_id":   projectID,
-			"size":        size,
-			"status":      status,
-			"bootable":    fmt.Sprintf("%t", bootable),
-			"created_at":  createdAt.Format("2006-01-02T15:04:05.000000"),
-			"updated_at":  updatedAt.Format("2006-01-02T15:04:05.000000"),
-			"attachments": attachments,
+			"id":                id,
+			"name":              name,
+			"tenant_id":         projectID,
+			"size":              size,
+			"status":            status,
+			"bootable":          fmt.Sprintf("%t", bootable),
+			"availability_zone": "nova",
+			"volume_type":       volumeType,
+			"encrypted":         false,
+			"created_at":        createdAt.Format("2006-01-02T15:04:05.000000"),
+			"updated_at":        updatedAt.Format("2006-01-02T15:04:05.000000"),
+			"attachments":       attachments,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_volumes_detail").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list volumes"))
+		return
 	}
 
 	if volumes == nil {
@@ -480,13 +509,14 @@ func (svc *Service) GetVolume(c *gin.Context) {
 	var bootable bool
 	var attachedTo sql.NullString
 	var createdAt, updatedAt time.Time
+	var volumeType string
 
 	// Support lookup by ID or name
 	err := svc.activeDB().QueryRow(c.Request.Context(), `
-		SELECT id, name, size_gb, status, bootable, attached_to_instance_id, created_at, updated_at
+		SELECT id, name, size_gb, status, bootable, attached_to_instance_id, created_at, updated_at, COALESCE(volume_type, '__DEFAULT__')
 		FROM volumes
 		WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))
-	`, volumeID, projectID).Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt)
+	`, volumeID, projectID).Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt, &volumeType)
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("volume"))
@@ -508,15 +538,18 @@ func (svc *Service) GetVolume(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"volume": gin.H{
-			"id":          id,
-			"name":        name,
-			"tenant_id":   projectID,
-			"size":        size,
-			"status":      status,
-			"bootable":    fmt.Sprintf("%t", bootable),
-			"created_at":  createdAt.Format("2006-01-02T15:04:05.000000"),
-			"updated_at":  updatedAt.Format("2006-01-02T15:04:05.000000"),
-			"attachments": attachments,
+			"id":                id,
+			"name":              name,
+			"tenant_id":         projectID,
+			"size":              size,
+			"status":            status,
+			"bootable":          fmt.Sprintf("%t", bootable),
+			"availability_zone": "nova",
+			"volume_type":       volumeType,
+			"encrypted":         false,
+			"created_at":        createdAt.Format("2006-01-02T15:04:05.000000"),
+			"updated_at":        updatedAt.Format("2006-01-02T15:04:05.000000"),
+			"attachments":       attachments,
 		},
 	})
 }
@@ -1054,12 +1087,22 @@ func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
 		projectID = c.GetString("project_id")
 	}
 
+	// Parse pagination parameters
+	limit := common.DefaultPaginationLimit
+	if limitParam := c.Query("limit"); limitParam != "" {
+		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
+		}
+	}
+	limit = common.CapLimit(limit)
+
 	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, name, volume_id, size_gb, status, created_at
 		FROM snapshots
 		WHERE project_id = $1
 		ORDER BY created_at DESC
-	`, projectID)
+		LIMIT $2
+	`, projectID, limit)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_snapshots_detail").Msg("failed to query snapshots")
@@ -1087,6 +1130,11 @@ func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
 			"status":     status,
 			"created_at": createdAt.Format("2006-01-02T15:04:05.000000"),
 		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_snapshots").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list snapshots"))
+		return
 	}
 
 	if snapshots == nil {
@@ -1117,12 +1165,22 @@ func (svc *Service) ListSnapshots(c *gin.Context) {
 		projectID = c.GetString("project_id")
 	}
 
+	// Parse pagination parameters
+	limit := common.DefaultPaginationLimit
+	if limitParam := c.Query("limit"); limitParam != "" {
+		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
+		}
+	}
+	limit = common.CapLimit(limit)
+
 	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, name, volume_id, size_gb, status, created_at
 		FROM snapshots
 		WHERE project_id = $1
 		ORDER BY created_at DESC
-	`, projectID)
+		LIMIT $2
+	`, projectID, limit)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_snapshots").Msg("failed to query snapshots")
@@ -1150,6 +1208,11 @@ func (svc *Service) ListSnapshots(c *gin.Context) {
 			"status":     status,
 			"created_at": createdAt.Format("2006-01-02T15:04:05.000000"),
 		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_snapshots_detail").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list snapshots"))
+		return
 	}
 
 	if snapshots == nil {
@@ -1277,6 +1340,11 @@ func (svc *Service) ListVolumeTypes(c *gin.Context) {
 			"is_public":   isPublic,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_volume_types").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list volume types"))
+		return
+	}
 
 	if types == nil {
 		types = []gin.H{}
@@ -1338,11 +1406,14 @@ func (svc *Service) UpdateVolume(c *gin.Context) {
 	var currentName, currentDesc string
 	var sizeGB int
 	var status string
+	var bootable bool
+	var attachedTo sql.NullString
+	var existingVolumeType string
 	var createdAt, updatedAt time.Time
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT name, COALESCE(description, ''), size_gb, status, created_at, updated_at FROM volumes WHERE id = $1 AND project_id = $2",
+		"SELECT name, COALESCE(description, ''), size_gb, status, bootable, attached_to_instance_id, COALESCE(volume_type, '__DEFAULT__'), created_at, updated_at FROM volumes WHERE id = $1 AND project_id = $2",
 		volumeID, projectID,
-	).Scan(&currentName, &currentDesc, &sizeGB, &status, &createdAt, &updatedAt)
+	).Scan(&currentName, &currentDesc, &sizeGB, &status, &bootable, &attachedTo, &existingVolumeType, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("volume"))
@@ -1373,15 +1444,30 @@ func (svc *Service) UpdateVolume(c *gin.Context) {
 		return
 	}
 
+	attachments := []interface{}{}
+	if attachedTo.Valid {
+		attachments = append(attachments, gin.H{
+			"server_id": attachedTo.String,
+			"device":    "/dev/vdb",
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"volume": gin.H{
-			"id":          volumeID,
-			"name":        currentName,
-			"description": currentDesc,
-			"size":        sizeGB,
-			"status":      status,
-			"created_at":  createdAt.Format("2006-01-02T15:04:05.000000"),
-			"updated_at":  now.Format("2006-01-02T15:04:05.000000"),
+			"id":                volumeID,
+			"name":              currentName,
+			"description":       currentDesc,
+			"tenant_id":         projectID,
+			"size":              sizeGB,
+			"status":            status,
+			"bootable":          fmt.Sprintf("%t", bootable),
+			"availability_zone": "nova",
+			"volume_type":       existingVolumeType,
+			"encrypted":         false,
+			"attachments":       attachments,
+			"metadata":          gin.H{},
+			"created_at":        createdAt.Format("2006-01-02T15:04:05.000000"),
+			"updated_at":        now.Format("2006-01-02T15:04:05.000000"),
 		},
 	})
 }
@@ -1490,6 +1576,11 @@ func (svc *Service) GetVolumeMetadata(c *gin.Context) {
 			continue
 		}
 		metadata[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "get_metadata").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to get metadata"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"metadata": metadata})
@@ -1699,6 +1790,11 @@ func (svc *Service) GetSnapshotMetadata(c *gin.Context) {
 			continue
 		}
 		metadata[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "get_metadata").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to get metadata"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"metadata": metadata})
@@ -1988,6 +2084,11 @@ func (svc *Service) ListServices(c *gin.Context) {
 
 // GetVersions returns the root version discovery response
 func (svc *Service) GetVersions(c *gin.Context) {
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s/v3/", scheme, c.Request.Host)
 	c.JSON(http.StatusOK, gin.H{
 		"versions": []gin.H{
 			{
@@ -1999,7 +2100,7 @@ func (svc *Service) GetVersions(c *gin.Context) {
 				"links": []gin.H{
 					{
 						"rel":  "self",
-						"href": "http://o3k:8776/v3/",
+						"href": baseURL,
 					},
 				},
 				"media-types": []gin.H{
@@ -2015,6 +2116,11 @@ func (svc *Service) GetVersions(c *gin.Context) {
 
 // GetVersionV3 returns the v3 version information
 func (svc *Service) GetVersionV3(c *gin.Context) {
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s/v3/", scheme, c.Request.Host)
 	c.JSON(http.StatusOK, gin.H{
 		"version": gin.H{
 			"id":      "v3.0",
@@ -2025,7 +2131,7 @@ func (svc *Service) GetVersionV3(c *gin.Context) {
 			"links": []gin.H{
 				{
 					"rel":  "self",
-					"href": "http://o3k:8776/v3/",
+					"href": baseURL,
 				},
 			},
 			"media-types": []gin.H{

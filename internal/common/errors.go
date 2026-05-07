@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,10 +24,12 @@ func (e *OpenStackError) Error() string {
 }
 
 // ToJSON converts the error to OpenStack-compatible JSON format
+// OpenStack requires: {"error": {"message": "...", "code": N, "title": "Title"}}
 func (e *OpenStackError) ToJSON() gin.H {
 	errorBody := gin.H{
 		"message": e.Message,
 		"code":    e.StatusCode,
+		"title":   http.StatusText(e.StatusCode),
 	}
 
 	if e.Details != "" {
@@ -34,7 +37,7 @@ func (e *OpenStackError) ToJSON() gin.H {
 	}
 
 	return gin.H{
-		e.Code: errorBody,
+		"error": errorBody,
 	}
 }
 
@@ -144,7 +147,7 @@ func NewMissingFieldError(fields ...string) *OpenStackError {
 	if len(fields) == 1 {
 		fieldList = fields[0]
 	} else {
-		fieldList = fmt.Sprintf("%s", fields)
+		fieldList = strings.Join(fields, ", ")
 	}
 	return &OpenStackError{
 		StatusCode: http.StatusBadRequest,

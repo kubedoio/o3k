@@ -42,39 +42,27 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Parse pagination parameters
-	limit := 1000
-	offset := 0
+	limit := common.DefaultPaginationLimit
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
-	if offsetParam := c.Query("offset"); offsetParam != "" {
-		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
-			offset = parsedOffset
-		}
-	}
+	limit = common.CapLimit(limit)
 
-	// Marker-based pagination
+	// Marker-based pagination using (created_at, id) for deterministic ordering.
 	var markerCondition string
 	var queryArgs []interface{}
 	queryArgs = append(queryArgs, projectID)
 	argIdx := 2
 
 	if marker := c.Query("marker"); marker != "" {
-		var markerCreatedAt time.Time
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT created_at FROM floating_ips WHERE id = $1 AND project_id = $2",
-			marker, projectID,
-		).Scan(&markerCreatedAt)
-		if err == nil {
-			markerCondition = fmt.Sprintf(" AND created_at < $%d", argIdx)
-			queryArgs = append(queryArgs, markerCreatedAt)
-			argIdx++
-		}
+		markerCondition = fmt.Sprintf(` AND (created_at, id) > (SELECT created_at, id FROM floating_ips WHERE id = $%d)`, argIdx)
+		queryArgs = append(queryArgs, marker)
+		argIdx++
 	}
 
-	queryArgs = append(queryArgs, limit, offset)
+	queryArgs = append(queryArgs, limit+1)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, project_id, floating_network_id, floating_ip_address,
@@ -82,9 +70,9 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 		       created_at, updated_at
 		FROM floating_ips
 		WHERE project_id = $1%s
-		ORDER BY created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, markerCondition, argIdx, argIdx+1), queryArgs...)
+		ORDER BY created_at ASC, id ASC
+		LIMIT $%d
+	`, markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_floatingips").Msg("database error")
@@ -140,12 +128,28 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 
 		floatingIPs = append(floatingIPs, result)
 	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_floatingips").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to list floating IPs"))
+		return
+	}
 
 	if floatingIPs == nil {
 		floatingIPs = []gin.H{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"floatingips": floatingIPs})
+	// Check if there are more results
+	resp := gin.H{"floatingips": floatingIPs}
+	if len(floatingIPs) > limit {
+		floatingIPs = floatingIPs[:limit]
+		lastID := floatingIPs[limit-1]["id"].(string)
+		resp = gin.H{
+			"floatingips":       floatingIPs,
+			"floatingips_links": []gin.H{{"rel": "next", "href": fmt.Sprintf("?marker=%s&limit=%d", lastID, limit)}},
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // CreateFloatingIP allocates a new floating IP
@@ -176,7 +180,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 	}
 
 	// Allocate an IP from the external network subnet
-	floatingIP, err := svc.allocateFloatingIP(c.Request.Context(), subnetCIDR)
+	floatingIP, err := svc.allocateFloatingIP(c.Request.Context(), req.FloatingIP.FloatingNetworkID, subnetCIDR)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "allocate_floatingip").Msg("failed to allocate floating IP")
 		common.SendError(c, common.NewInternalServerError("failed to allocate floating IP"))
@@ -605,18 +609,27 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 }
 
 // Helper function to allocate a floating IP from subnet
-func (svc *Service) allocateFloatingIP(ctx context.Context, subnetCIDR string) (string, error) {
+func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, subnetCIDR string) (string, error) {
 	_, ipNet, err := net.ParseCIDR(subnetCIDR)
 	if err != nil {
 		return "", err
 	}
 
-	// Get all allocated floating IPs in this subnet
-	rows, err := svc.activeDB().Query(ctx,
-		"SELECT floating_ip_address FROM floating_ips",
+	tx, err := svc.activeDB().BeginTx(ctx, pgx.TxOptions{
+		IsoLevel: pgx.Serializable,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Get all allocated floating IPs in this external network
+	rows, err := tx.Query(ctx,
+		"SELECT floating_ip_address FROM floating_ips WHERE floating_network_id = $1 FOR UPDATE",
+		floatingNetworkID,
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to query allocated IPs: %w", err)
 	}
 	defer rows.Close()
 
@@ -628,6 +641,9 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, subnetCIDR string) (
 		}
 		allocatedIPs[ip] = true
 	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterating allocated IPs: %w", err)
+	}
 
 	// Find first available IP in range
 	// Start from .100 to avoid gateway and DHCP range
@@ -635,6 +651,9 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, subnetCIDR string) (
 	for ipNet.Contains(ip) {
 		ipStr := ip.String()
 		if !allocatedIPs[ipStr] {
+			if err := tx.Commit(ctx); err != nil {
+				return "", fmt.Errorf("failed to commit IP allocation: %w", err)
+			}
 			return ipStr, nil
 		}
 		ip = incrementIP(ip, 1)

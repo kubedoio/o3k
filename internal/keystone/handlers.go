@@ -13,6 +13,7 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -46,93 +47,114 @@ func (svc *Service) activeDB() database.DBIF {
 	return database.DB
 }
 
-// RegisterRoutes registers Keystone routes
-func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
+// RegisterRoutes registers Keystone routes.
+// adminMiddleware is applied to all destructive/admin write operations; pass nil to skip.
+func (svc *Service) RegisterRoutes(r *gin.RouterGroup, adminMiddleware ...gin.HandlerFunc) {
 	v3 := r.Group("/v3")
 	{
-		// Version discovery
+		// Version discovery (unauthenticated — AuthMiddleware skips /v3)
 		v3.GET("", svc.GetVersion)
 
-		// Authentication
+		// Authentication (unauthenticated — AuthMiddleware skips POST /v3/auth/tokens)
 		v3.POST("/auth/tokens", svc.AuthenticateToken)
 		v3.GET("/auth/tokens", svc.ValidateToken)
 		v3.DELETE("/auth/tokens", svc.RevokeToken)
 		v3.GET("/auth/projects", svc.ListAuthProjects)
 
-		// Users
+		// Users — read (any authenticated user)
 		v3.GET("/users", svc.ListUsers)
-		v3.POST("/users", svc.CreateUser)
 		v3.GET("/users/:id", svc.GetUser)
-		v3.PATCH("/users/:id", svc.UpdateUser)
-		v3.DELETE("/users/:id", svc.DeleteUser)
 		v3.POST("/users/:id/password", svc.ChangePassword)
 		v3.GET("/users/:id/projects", svc.GetUserProjects)
 		v3.GET("/users/:id/groups", svc.GetUserGroups)
-		v3.POST("/users/:id/application_credentials", svc.CreateApplicationCredential)
 		v3.GET("/users/:id/application_credentials", svc.ListApplicationCredentials)
 		v3.GET("/users/:id/application_credentials/:cred_id", svc.GetApplicationCredential)
+		v3.POST("/users/:id/application_credentials", svc.CreateApplicationCredential)
 		v3.DELETE("/users/:id/application_credentials/:cred_id", svc.DeleteApplicationCredential)
 
-		// Projects (role assignments must come before /projects/:id to avoid conflicts)
+		// Projects — read (any authenticated user)
 		v3.GET("/projects", svc.ListProjects)
-		v3.POST("/projects", svc.CreateProject)
-		v3.PUT("/projects/:id/users/:user_id/roles/:role_id", svc.AssignRole)
-		v3.DELETE("/projects/:id/users/:user_id/roles/:role_id", svc.UnassignRole)
+		v3.GET("/projects/:id", svc.GetProject)
 		v3.GET("/projects/:id/users/:user_id/roles", svc.ListUserProjectRoles)
 		v3.GET("/projects/:id/users/:user_id/roles/:role_id", svc.CheckRoleAssignment)
-		v3.GET("/projects/:id", svc.GetProject)
-		v3.PATCH("/projects/:id", svc.UpdateProject)
-		v3.DELETE("/projects/:id", svc.DeleteProject)
 
-		// Groups
+		// Groups — read (any authenticated user)
 		v3.GET("/groups", svc.ListGroups)
-		v3.POST("/groups", svc.CreateGroup)
 		v3.GET("/groups/:id", svc.GetGroup)
-		v3.PATCH("/groups/:id", svc.UpdateGroup)
-		v3.DELETE("/groups/:id", svc.DeleteGroup)
 		v3.GET("/groups/:id/users", svc.ListGroupUsers)
-		v3.PUT("/groups/:id/users/:user_id", svc.AddUserToGroup)
-		v3.DELETE("/groups/:id/users/:user_id", svc.RemoveUserFromGroup)
 
-		// Roles
+		// Roles — read (any authenticated user)
 		v3.GET("/roles", svc.ListRoles)
-		v3.POST("/roles", svc.CreateRole)
 		v3.GET("/roles/:id", svc.GetRole)
-		v3.PATCH("/roles/:id", svc.UpdateRole)
-		v3.DELETE("/roles/:id", svc.DeleteRole)
 
-		// Role Assignments (additional endpoint)
+		// Role Assignments — read (any authenticated user)
 		v3.GET("/role_assignments", svc.ListRoleAssignments)
 
-		// Domains
+		// Domains — read (any authenticated user)
 		v3.GET("/domains", svc.ListDomains)
-		v3.POST("/domains", svc.CreateDomain)
 		v3.GET("/domains/:id", svc.GetDomain)
-		v3.PATCH("/domains/:id", svc.UpdateDomain)
-		v3.DELETE("/domains/:id", svc.DeleteDomain)
 		v3.GET("/domains/:id/config", svc.GetDomainConfig)
 
-		// Services (catalog management)
+		// Services (catalog) — read (any authenticated user)
 		v3.GET("/services", svc.ListServices)
-		v3.POST("/services", svc.CreateService)
 		v3.GET("/services/:id", svc.GetService)
-		v3.PATCH("/services/:id", svc.UpdateService)
-		v3.DELETE("/services/:id", svc.DeleteService)
 
-		// Endpoints
+		// Endpoints — read (any authenticated user)
 		v3.GET("/endpoints", svc.ListEndpoints)
-		v3.POST("/endpoints", svc.CreateEndpoint)
-		v3.DELETE("/endpoints/:id", svc.DeleteEndpoint)
 
-		// Credentials
+		// Credentials — read (any authenticated user)
 		v3.GET("/credentials", svc.ListCredentials)
-		v3.POST("/credentials", svc.CreateCredential)
 		v3.GET("/credentials/:id", svc.GetCredential)
-		v3.PATCH("/credentials/:id", svc.UpdateCredential)
-		v3.DELETE("/credentials/:id", svc.DeleteCredential)
 
-		// Application Credentials (lookup by ID without user_id)
+		// Application Credentials (lookup by ID without user_id) — read
 		v3.GET("/application_credentials/:id", svc.GetApplicationCredentialByID)
+	}
+
+	// Admin-only write operations
+	admin := r.Group("/v3", adminMiddleware...)
+	{
+		// Users — write
+		admin.POST("/users", svc.CreateUser)
+		admin.PATCH("/users/:id", svc.UpdateUser)
+		admin.DELETE("/users/:id", svc.DeleteUser)
+
+		// Projects — write
+		admin.POST("/projects", svc.CreateProject)
+		admin.PATCH("/projects/:id", svc.UpdateProject)
+		admin.DELETE("/projects/:id", svc.DeleteProject)
+		admin.PUT("/projects/:id/users/:user_id/roles/:role_id", svc.AssignRole)
+		admin.DELETE("/projects/:id/users/:user_id/roles/:role_id", svc.UnassignRole)
+
+		// Groups — write
+		admin.POST("/groups", svc.CreateGroup)
+		admin.PATCH("/groups/:id", svc.UpdateGroup)
+		admin.DELETE("/groups/:id", svc.DeleteGroup)
+		admin.PUT("/groups/:id/users/:user_id", svc.AddUserToGroup)
+		admin.DELETE("/groups/:id/users/:user_id", svc.RemoveUserFromGroup)
+
+		// Roles — write
+		admin.POST("/roles", svc.CreateRole)
+		admin.PATCH("/roles/:id", svc.UpdateRole)
+		admin.DELETE("/roles/:id", svc.DeleteRole)
+
+		// Domains — write
+		admin.POST("/domains", svc.CreateDomain)
+		admin.PATCH("/domains/:id", svc.UpdateDomain)
+		admin.DELETE("/domains/:id", svc.DeleteDomain)
+
+		// Services (catalog) — write
+		admin.POST("/services", svc.CreateService)
+		admin.PATCH("/services/:id", svc.UpdateService)
+		admin.DELETE("/services/:id", svc.DeleteService)
+
+		// Endpoints — write
+		admin.POST("/endpoints", svc.CreateEndpoint)
+		admin.DELETE("/endpoints/:id", svc.DeleteEndpoint)
+
+		// Credentials — write
+		admin.POST("/credentials", svc.CreateCredential)
+		admin.PATCH("/credentials/:id", svc.UpdateCredential)
+		admin.DELETE("/credentials/:id", svc.DeleteCredential)
 	}
 }
 
@@ -180,11 +202,19 @@ func (svc *Service) AuthenticateToken(c *gin.Context) {
 	if req.Auth.Identity.Token != nil && req.Auth.Identity.Token.ID != "" {
 		// Token-based authentication (re-scoping)
 		resp, tokenString, err = svc.authService.AuthenticateToken(c.Request.Context(), &req)
+	} else if req.Auth.Identity.ApplicationCredential != nil {
+		// Application credential authentication
+		var unrestricted bool
+		resp, tokenString, unrestricted, err = svc.authService.AuthenticateApplicationCredential(c.Request.Context(), &req)
+		if err == nil {
+			c.Set("auth_method", "application_credential")
+			c.Set("app_credential_unrestricted", unrestricted)
+		}
 	} else if req.Auth.Identity.Password != nil {
 		// Password-based authentication
 		resp, tokenString, err = svc.authService.AuthenticatePassword(c.Request.Context(), &req)
 	} else {
-		common.SendError(c, common.NewBadRequestError("password or token authentication required"))
+		common.SendError(c, common.NewBadRequestError("password, token, or application_credential authentication required"))
 		return
 	}
 
@@ -221,23 +251,115 @@ func (svc *Service) ValidateToken(c *gin.Context) {
 		return
 	}
 
-	// Return token info
-	c.JSON(http.StatusOK, gin.H{
-		"token": gin.H{
-			"user": gin.H{
-				"id":   claims.UserID,
-				"name": claims.UserName,
-			},
-			"project_id": claims.ProjectID,
-			"roles":      claims.Roles,
+	// Build full token response (same structure as POST /v3/auth/tokens)
+	tokenResp := gin.H{
+		"methods":    []string{"token"},
+		"expires_at": claims.ExpiresAt.Time.Format(time.RFC3339),
+		"issued_at":  claims.IssuedAt.Time.Format(time.RFC3339),
+	}
+
+	// Query user's domain
+	var userDomainName, userDomainID string
+	err = svc.activeDB().QueryRow(c.Request.Context(),
+		"SELECT d.id, d.name FROM users u JOIN domains d ON u.domain_id = d.id WHERE u.id = $1",
+		claims.UserID,
+	).Scan(&userDomainID, &userDomainName)
+	if err != nil {
+		userDomainID = "default"
+		userDomainName = "Default"
+	}
+
+	tokenResp["user"] = gin.H{
+		"id":   claims.UserID,
+		"name": claims.UserName,
+		"domain": gin.H{
+			"id":   userDomainID,
+			"name": userDomainName,
 		},
-	})
+	}
+
+	// Add project, roles, and catalog if scoped
+	if claims.ProjectID != "" {
+		var projectName, projectDomainID, projectDomainName string
+		err = svc.activeDB().QueryRow(c.Request.Context(),
+			"SELECT p.name, p.domain_id, d.name FROM projects p JOIN domains d ON p.domain_id = d.id WHERE p.id = $1",
+			claims.ProjectID,
+		).Scan(&projectName, &projectDomainID, &projectDomainName)
+		if err != nil {
+			projectName = claims.ProjectID
+			projectDomainID = "default"
+			projectDomainName = "Default"
+		}
+
+		tokenResp["project"] = gin.H{
+			"id":        claims.ProjectID,
+			"name":      projectName,
+			"is_domain": false,
+			"domain": gin.H{
+				"id":   projectDomainID,
+				"name": projectDomainName,
+			},
+		}
+
+		// Fetch role IDs from database
+		var roles []gin.H
+		for _, roleName := range claims.Roles {
+			var roleID string
+			err = svc.activeDB().QueryRow(c.Request.Context(),
+				"SELECT id FROM roles WHERE name = $1",
+				roleName,
+			).Scan(&roleID)
+			if err != nil {
+				roleID = roleName // fallback to name as ID
+			}
+			roles = append(roles, gin.H{
+				"id":   roleID,
+				"name": roleName,
+			})
+		}
+		if roles == nil {
+			roles = []gin.H{}
+		}
+		tokenResp["roles"] = roles
+
+		// Add service catalog
+		tokenResp["catalog"] = svc.authService.BuildServiceCatalog(claims.ProjectID, svc.cache)
+	} else {
+		tokenResp["roles"] = []gin.H{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"token": tokenResp})
 }
 
 // RevokeToken revokes a token (DELETE /v3/auth/tokens)
 func (svc *Service) RevokeToken(c *gin.Context) {
-	// In JWT implementation, we don't maintain token blacklist
-	// Tokens expire naturally based on TTL
+	tokenString := c.GetHeader("X-Subject-Token")
+	if tokenString == "" {
+		tokenString = c.GetHeader("X-Auth-Token")
+	}
+	if tokenString == "" {
+		common.SendError(c, common.NewBadRequestError("missing token to revoke"))
+		return
+	}
+
+	// Parse the token to get its expiry (so revocation entry can auto-expire)
+	claims, err := svc.authService.ValidateToken(tokenString)
+	if err != nil {
+		// Token already invalid, still return 204 per OpenStack behavior
+		c.Status(http.StatusNoContent)
+		return
+	}
+
+	// Authorization check: only the token owner or an admin can revoke
+	requestingUserID := c.GetString("user_id")
+	isAdmin, _ := c.Get("is_admin")
+	if claims.UserID != requestingUserID && isAdmin != true {
+		common.SendError(c, common.NewForbiddenError("only the token owner or an admin can revoke this token"))
+		return
+	}
+
+	expiresAt := claims.ExpiresAt.Time
+	svc.authService.RevokeToken(tokenString, expiresAt)
 	c.Status(http.StatusNoContent)
 }
 
@@ -297,6 +419,12 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_auth_projects").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read projects"))
+		return
+	}
+
 	if projects == nil {
 		projects = []gin.H{}
 	}
@@ -304,11 +432,25 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"projects": projects})
 }
 
-// ListUsers lists all users
+// ListUsers lists all users (admin sees all, non-admin sees only themselves)
 func (svc *Service) ListUsers(c *gin.Context) {
-	rows, err := svc.activeDB().Query(c.Request.Context(),
-		"SELECT id, name, enabled, domain_id FROM users ORDER BY name",
-	)
+	isAdmin, _ := c.Get("is_admin")
+	requestingUserID := c.GetString("user_id")
+
+	ctx := c.Request.Context()
+	var rows pgx.Rows
+	var err error
+
+	if isAdmin == true {
+		rows, err = svc.activeDB().Query(ctx,
+			"SELECT id, name, enabled, domain_id FROM users ORDER BY name",
+		)
+	} else {
+		rows, err = svc.activeDB().Query(ctx,
+			"SELECT id, name, enabled, domain_id FROM users WHERE id = $1",
+			requestingUserID,
+		)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_users").Msg("Failed to query users")
 		common.SendError(c, common.NewInternalServerError("failed to query users"))
@@ -333,12 +475,27 @@ func (svc *Service) ListUsers(c *gin.Context) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_users").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read users"))
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"users": users})
 }
 
-// GetUser returns a single user
+// GetUser returns a single user (non-admin can only view their own record)
 func (svc *Service) GetUser(c *gin.Context) {
-	userID := c.Param("id")
+	isAdmin := c.GetBool("is_admin")
+	callerID := c.GetString("user_id")
+	requestedID := c.Param("id")
+
+	if !isAdmin && callerID != requestedID {
+		common.SendError(c, common.NewForbiddenError("insufficient privileges"))
+		return
+	}
+
+	userID := requestedID
 
 	var id, name, domainID string
 	var enabled bool
@@ -360,11 +517,27 @@ func (svc *Service) GetUser(c *gin.Context) {
 	}})
 }
 
-// ListProjects lists all projects
+// ListProjects lists projects (admin sees all, non-admin sees only assigned projects)
 func (svc *Service) ListProjects(c *gin.Context) {
-	rows, err := svc.activeDB().Query(c.Request.Context(),
-		"SELECT id, name, description, enabled, domain_id FROM projects ORDER BY name",
-	)
+	isAdmin := c.GetBool("is_admin")
+	userID := c.GetString("user_id")
+	ctx := c.Request.Context()
+
+	var rows pgx.Rows
+	var err error
+
+	if isAdmin {
+		rows, err = svc.activeDB().Query(ctx,
+			"SELECT id, name, description, enabled, domain_id FROM projects ORDER BY name",
+		)
+	} else {
+		rows, err = svc.activeDB().Query(ctx,
+			`SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id
+			 FROM projects p
+			 JOIN role_assignments ra ON ra.project_id = p.id
+			 WHERE ra.user_id = $1
+			 ORDER BY p.name`, userID)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_projects").Msg("Failed to query projects")
 		common.SendError(c, common.NewInternalServerError("failed to query projects"))
@@ -388,6 +561,12 @@ func (svc *Service) ListProjects(c *gin.Context) {
 			"enabled":     enabled,
 			"domain_id":   domainID,
 		})
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_projects").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read projects"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"projects": projects})
@@ -600,6 +779,12 @@ func (svc *Service) ListRoles(c *gin.Context) {
 			"id":   id,
 			"name": name,
 		})
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_roles").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read roles"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"roles": roles})
@@ -835,6 +1020,12 @@ func (svc *Service) ListUserProjectRoles(c *gin.Context) {
 		roles = []gin.H{}
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_user_project_roles").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read roles"))
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"roles": roles})
 }
 
@@ -869,6 +1060,9 @@ func (svc *Service) CheckRoleAssignment(c *gin.Context) {
 
 // ListRoleAssignments handles GET /v3/role_assignments
 func (svc *Service) ListRoleAssignments(c *gin.Context) {
+	isAdmin := c.GetBool("is_admin")
+	callerID := c.GetString("user_id")
+
 	// Parse query parameters
 	userID := c.Query("user.id")
 	projectID := c.Query("scope.project.id")
@@ -881,6 +1075,13 @@ func (svc *Service) ListRoleAssignments(c *gin.Context) {
 	          WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
+
+	// Non-admin users can only see their own role assignments
+	if !isAdmin {
+		query += fmt.Sprintf(" AND ra.user_id = $%d", argIdx)
+		args = append(args, callerID)
+		argIdx++
+	}
 
 	if userID != "" {
 		query += fmt.Sprintf(" AND ra.user_id = $%d", argIdx)
@@ -931,6 +1132,12 @@ func (svc *Service) ListRoleAssignments(c *gin.Context) {
 
 	if assignments == nil {
 		assignments = []gin.H{}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_role_assignments").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read role assignments"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"role_assignments": assignments})
@@ -1186,9 +1393,26 @@ func (svc *Service) DeleteUser(c *gin.Context) {
 func (svc *Service) ChangePassword(c *gin.Context) {
 	userID := c.Param("id")
 
+	callerID := c.GetString("user_id")
+	if callerID != userID {
+		roles, _ := c.Get("roles")
+		roleList, _ := roles.([]string)
+		isAdmin := false
+		for _, r := range roleList {
+			if r == "admin" {
+				isAdmin = true
+				break
+			}
+		}
+		if !isAdmin {
+			common.SendError(c, common.NewForbiddenError("cannot change another user's password"))
+			return
+		}
+	}
+
 	var req struct {
 		User struct {
-			OriginalPassword string `json:"original_password" binding:"required"`
+			OriginalPassword string `json:"original_password"`
 			Password         string `json:"password" binding:"required"`
 		} `json:"user" binding:"required"`
 	}
@@ -1210,10 +1434,12 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	// Verify original password
-	if !svc.authService.CheckPassword(req.User.OriginalPassword, currentPasswordHash) {
-		common.SendError(c, common.NewUnauthorizedError("original password is incorrect"))
-		return
+	// Verify original password only for self-service changes
+	if callerID == userID {
+		if !svc.authService.CheckPassword(req.User.OriginalPassword, currentPasswordHash) {
+			common.SendError(c, common.NewUnauthorizedError("original password is incorrect"))
+			return
+		}
 	}
 
 	// Hash new password
@@ -1290,6 +1516,12 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "get_user_projects").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read projects"))
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"projects": projects})
 }
 
@@ -1340,6 +1572,12 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 			"description": description,
 			"domain_id":   domainID,
 		})
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "get_user_groups").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read groups"))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"groups": groups})

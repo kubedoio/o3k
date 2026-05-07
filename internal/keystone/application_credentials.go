@@ -10,11 +10,29 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ListApplicationCredentials returns application credentials for a user
 func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 	userID := c.Param("id")
+
+	callerID := c.GetString("user_id")
+	if callerID != userID {
+		roles, _ := c.Get("roles")
+		roleList, _ := roles.([]string)
+		isAdmin := false
+		for _, r := range roleList {
+			if r == "admin" {
+				isAdmin = true
+				break
+			}
+		}
+		if !isAdmin {
+			common.SendError(c, common.NewForbiddenError("access denied"))
+			return
+		}
+	}
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), `
 		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, created_at
@@ -76,11 +94,20 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 					})
 				}
 			}
+			if roleRowsErr := roleRows.Err(); roleRowsErr != nil {
+				log.Warn().Err(roleRowsErr).Str("operation", "list_application_credentials").Str("credential_id", id).Msg("error iterating role rows")
+			}
 			roleRows.Close()
 			credential["roles"] = roles
 		}
 
 		credentials = append(credentials, credential)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "list_application_credentials").Msg("row iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to read application credentials"))
+		return
 	}
 
 	c.JSON(200, gin.H{"application_credentials": credentials})
@@ -89,6 +116,23 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 // CreateApplicationCredential creates a new application credential
 func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 	userID := c.Param("id")
+
+	callerID := c.GetString("user_id")
+	if callerID != userID {
+		roles, _ := c.Get("roles")
+		roleList, _ := roles.([]string)
+		isAdmin := false
+		for _, r := range roleList {
+			if r == "admin" {
+				isAdmin = true
+				break
+			}
+		}
+		if !isAdmin {
+			common.SendError(c, common.NewForbiddenError("access denied"))
+			return
+		}
+	}
 
 	var req struct {
 		ApplicationCredential struct {
@@ -99,6 +143,13 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 			Unrestricted bool                     `json:"unrestricted"`
 			Roles        []map[string]interface{} `json:"roles"`
 		} `json:"application_credential"`
+	}
+
+	// H1: reject creation of new app credentials when caller authenticated via
+	// an app credential that does not have unrestricted=true.
+	if c.GetString("auth_method") == "application_credential" && !c.GetBool("app_credential_unrestricted") {
+		common.SendError(c, common.NewForbiddenError("application credentials cannot be created using a restricted application credential"))
+		return
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -118,6 +169,14 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 	}
 	secret := base64.URLEncoding.EncodeToString(secretBytes)
 
+	// Hash the secret with bcrypt (cost 12 per spec)
+	secretHash, err := bcrypt.GenerateFromPassword([]byte(secret), 12)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to hash application credential secret")
+		common.SendError(c, common.NewInternalServerError("failed to generate credential secret"))
+		return
+	}
+
 	var projectID interface{}
 	if req.ApplicationCredential.ProjectID != "" {
 		projectID = req.ApplicationCredential.ProjectID
@@ -130,10 +189,10 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		}
 	}
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
-		INSERT INTO application_credentials (id, user_id, project_id, name, secret_hash, description, expires_at, unrestricted, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, credID, userID, projectID, req.ApplicationCredential.Name, secret, req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, now)
+	_, err = svc.activeDB().Exec(c.Request.Context(), `
+		INSERT INTO application_credentials (id, user_id, project_id, name, secret_hash, description, expires_at, unrestricted, legacy_auth, updated_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9)
+	`, credID, userID, projectID, req.ApplicationCredential.Name, string(secretHash), req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_application_credential").Str("user_id", userID).Msg("Failed to create application credential")
@@ -183,6 +242,23 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	userID := c.Param("id")
 	credID := c.Param("cred_id")
+
+	callerID := c.GetString("user_id")
+	if callerID != userID {
+		roles, _ := c.Get("roles")
+		roleList, _ := roles.([]string)
+		isAdmin := false
+		for _, r := range roleList {
+			if r == "admin" {
+				isAdmin = true
+				break
+			}
+		}
+		if !isAdmin {
+			common.SendError(c, common.NewForbiddenError("access denied"))
+			return
+		}
+	}
 
 	var id, userIDVal, name string
 	var projectID, description *string
@@ -240,6 +316,9 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 				})
 			}
 		}
+		if roleRowsErr := roleRows.Err(); roleRowsErr != nil {
+			log.Warn().Err(roleRowsErr).Str("operation", "get_application_credential").Str("credential_id", id).Msg("error iterating role rows")
+		}
 		roleRows.Close()
 		credential["roles"] = roles
 	}
@@ -251,6 +330,23 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 func (svc *Service) DeleteApplicationCredential(c *gin.Context) {
 	userID := c.Param("id")
 	credID := c.Param("cred_id")
+
+	callerID := c.GetString("user_id")
+	if callerID != userID {
+		roles, _ := c.Get("roles")
+		roleList, _ := roles.([]string)
+		isAdmin := false
+		for _, r := range roleList {
+			if r == "admin" {
+				isAdmin = true
+				break
+			}
+		}
+		if !isAdmin {
+			common.SendError(c, common.NewForbiddenError("access denied"))
+			return
+		}
+	}
 
 	result, err := svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM application_credentials WHERE id = $1 AND user_id = $2",
@@ -273,6 +369,8 @@ func (svc *Service) DeleteApplicationCredential(c *gin.Context) {
 // GetApplicationCredentialByID returns an application credential by ID only
 func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	credID := c.Param("id")
+	callerID := c.GetString("user_id")
+	isAdmin := c.GetBool("is_admin")
 
 	var id, userID, name string
 	var projectID, description *string
@@ -292,6 +390,12 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	if err != nil {
 		log.Error().Err(err).Str("operation", "get_application_credential_by_id").Str("cred_id", credID).Msg("Failed to query application credential")
 		common.SendError(c, common.NewInternalServerError("failed to query application credential"))
+		return
+	}
+
+	// Non-admin users can only view their own application credentials
+	if callerID != userID && !isAdmin {
+		common.SendError(c, common.NewForbiddenError("insufficient privileges"))
 		return
 	}
 
@@ -329,6 +433,9 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 					"name": roleName,
 				})
 			}
+		}
+		if roleRowsErr := roleRows.Err(); roleRowsErr != nil {
+			log.Warn().Err(roleRowsErr).Str("operation", "get_application_credential_by_id").Str("credential_id", id).Msg("error iterating role rows")
 		}
 		roleRows.Close()
 		credential["roles"] = roles

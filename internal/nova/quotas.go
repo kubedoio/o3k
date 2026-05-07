@@ -45,42 +45,39 @@ func (svc *Service) GetQuotaSet(c *gin.Context) {
 		"id": projectID,
 	}
 
-	// Default values if not in database
+	// Default limits if not in database
 	defaults := map[string]int{
-		"instances":             10,
-		"cores":                 20,
-		"ram":                   51200,
-		"volumes":               10,
-		"gigabytes":             1000,
-		"snapshots":             10,
-		"networks":              10,
-		"subnets":               10,
-		"ports":                 50,
-		"routers":               10,
-		"floatingip":            10,
-		"security_groups":       10,
-		"security_group_rules":  100,
+		"instances":            10,
+		"cores":                20,
+		"ram":                  51200,
+		"volumes":              10,
+		"gigabytes":            1000,
+		"snapshots":            10,
+		"networks":             10,
+		"subnets":              10,
+		"ports":                50,
+		"routers":              10,
+		"floatingip":           10,
+		"security_groups":      10,
+		"security_group_rules": 100,
 	}
 
-	// Load limits from database
+	// Load limits from database (overrides defaults)
 	for rows.Next() {
 		var resource string
 		var limit int
 		if err := rows.Scan(&resource, &limit); err != nil {
 			continue
 		}
-		quotaSet[resource] = limit
-		delete(defaults, resource) // Remove from defaults if found in DB
+		defaults[resource] = limit
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Str("operation", "get_quota_set").Msg("rows iteration error")
+		common.SendError(c, common.NewInternalServerError("failed to get quota set"))
+		return
 	}
 
-	// Add any missing defaults
-	for resource, limit := range defaults {
-		if _, exists := quotaSet[resource]; !exists {
-			quotaSet[resource] = limit
-		}
-	}
-
-	// Calculate usage
+	// Calculate compute usage
 	var instanceCount, coreCount, ramCount int
 	svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT COUNT(*), COALESCE(SUM(f.vcpus), 0), COALESCE(SUM(f.ram_mb), 0)
@@ -89,37 +86,53 @@ func (svc *Service) GetQuotaSet(c *gin.Context) {
 		WHERE i.project_id = $1
 	`, projectID).Scan(&instanceCount, &coreCount, &ramCount)
 
-	// Add usage information (OpenStack includes these as separate keys)
-	quotaSet["instances_used"] = instanceCount
-	quotaSet["cores_used"] = coreCount
-	quotaSet["ram_used"] = ramCount
-
 	// Volume usage
-	var volumeCount, gigabyteCount int
+	var volumeCount, gigabyteCount, snapshotCount int
 	svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT COUNT(*), COALESCE(SUM(size_gb), 0)
 		FROM volumes
 		WHERE project_id = $1
 	`, projectID).Scan(&volumeCount, &gigabyteCount)
 
-	quotaSet["volumes_used"] = volumeCount
-	quotaSet["gigabytes_used"] = gigabyteCount
+	// Snapshot usage
+	svc.activeDB().QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) FROM volume_snapshots WHERE project_id = $1`, projectID,
+	).Scan(&snapshotCount)
 
 	// Network resource usage
-	var networkCount, subnetCount, portCount, routerCount, floatingipCount, sgCount int
+	var networkCount, subnetCount, portCount, routerCount, floatingipCount, sgCount, sgrCount int
 	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM networks WHERE project_id = $1`, projectID).Scan(&networkCount)
 	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM subnets WHERE project_id = $1`, projectID).Scan(&subnetCount)
 	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM ports WHERE project_id = $1`, projectID).Scan(&portCount)
 	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM routers WHERE project_id = $1`, projectID).Scan(&routerCount)
 	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM floating_ips WHERE project_id = $1`, projectID).Scan(&floatingipCount)
 	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM security_groups WHERE project_id = $1`, projectID).Scan(&sgCount)
+	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM security_group_rules WHERE security_group_id IN (SELECT id FROM security_groups WHERE project_id = $1)`, projectID).Scan(&sgrCount)
 
-	quotaSet["networks_used"] = networkCount
-	quotaSet["subnets_used"] = subnetCount
-	quotaSet["ports_used"] = portCount
-	quotaSet["routers_used"] = routerCount
-	quotaSet["floatingip_used"] = floatingipCount
-	quotaSet["security_groups_used"] = sgCount
+	usages := map[string]int{
+		"instances":            instanceCount,
+		"cores":                coreCount,
+		"ram":                  ramCount,
+		"volumes":              volumeCount,
+		"gigabytes":            gigabyteCount,
+		"snapshots":            snapshotCount,
+		"networks":             networkCount,
+		"subnets":              subnetCount,
+		"ports":                portCount,
+		"routers":              routerCount,
+		"floatingip":           floatingipCount,
+		"security_groups":      sgCount,
+		"security_group_rules": sgrCount,
+	}
+
+	// Build nested quota format: each resource is {"in_use": N, "limit": M, "reserved": 0}
+	for resource, limit := range defaults {
+		quotaSet[resource] = gin.H{
+			"in_use":   usages[resource],
+			"limit":    limit,
+			"reserved": 0,
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{"quota_set": quotaSet})
 }
@@ -179,21 +192,25 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 func (svc *Service) GetQuotaSetDefaults(c *gin.Context) {
 	projectID := c.Param("id")
 
-	quotaSet := gin.H{
-		"id":                    projectID,
-		"instances":             10,
-		"cores":                 20,
-		"ram":                   51200,
-		"volumes":               10,
-		"gigabytes":             1000,
-		"snapshots":             10,
-		"networks":              10,
-		"subnets":               10,
-		"ports":                 50,
-		"routers":               10,
-		"floatingip":            10,
-		"security_groups":       10,
-		"security_group_rules":  100,
+	defaults := map[string]int{
+		"instances":            10,
+		"cores":                20,
+		"ram":                  51200,
+		"volumes":              10,
+		"gigabytes":            1000,
+		"snapshots":            10,
+		"networks":             10,
+		"subnets":              10,
+		"ports":                50,
+		"routers":              10,
+		"floatingip":           10,
+		"security_groups":      10,
+		"security_group_rules": 100,
+	}
+
+	quotaSet := gin.H{"id": projectID}
+	for resource, limit := range defaults {
+		quotaSet[resource] = gin.H{"in_use": 0, "limit": limit, "reserved": 0}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"quota_set": quotaSet})
@@ -212,19 +229,19 @@ func (svc *Service) CheckQuota(c *gin.Context, resource string, requestedAmount 
 	if err == pgx.ErrNoRows {
 		// No quota set, use defaults
 		defaults := map[string]int{
-			"instances":             10,
-			"cores":                 20,
-			"ram":                   51200,
-			"volumes":               10,
-			"gigabytes":             1000,
-			"snapshots":             10,
-			"networks":              10,
-			"subnets":               10,
-			"ports":                 50,
-			"routers":               10,
-			"floatingip":            10,
-			"security_groups":       10,
-			"security_group_rules":  100,
+			"instances":            10,
+			"cores":                20,
+			"ram":                  51200,
+			"volumes":              10,
+			"gigabytes":            1000,
+			"snapshots":            10,
+			"networks":             10,
+			"subnets":              10,
+			"ports":                50,
+			"routers":              10,
+			"floatingip":           10,
+			"security_groups":      10,
+			"security_group_rules": 100,
 		}
 		limit = defaults[resource]
 	} else if err != nil {
@@ -263,9 +280,9 @@ func (svc *Service) CheckQuota(c *gin.Context, resource string, requestedAmount 
 	// Check if adding requested amount would exceed limit
 	if usage+requestedAmount > limit {
 		return &QuotaExceededError{
-			Resource: resource,
-			Limit:    limit,
-			Usage:    usage,
+			Resource:  resource,
+			Limit:     limit,
+			Usage:     usage,
 			Requested: requestedAmount,
 		}
 	}
