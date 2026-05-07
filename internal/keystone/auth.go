@@ -268,6 +268,9 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 			}
 			roles = append(roles, roleName)
 		}
+		if err := rows.Err(); err != nil {
+			return nil, "", fmt.Errorf("failed to iterate roles: %w", err)
+		}
 
 		if len(roles) == 0 {
 			return nil, "", common.NewForbiddenError("user has no roles on this project")
@@ -359,7 +362,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		}
 
 		// Add service catalog
-		resp.Token.Catalog = BuildServiceCatalog(projectID, s.cache)
+		resp.Token.Catalog = s.BuildServiceCatalog(projectID, s.cache)
 	}
 
 	return resp, tokenString, nil
@@ -456,6 +459,9 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 			}
 			roles = append(roles, roleName)
 		}
+		if err := rows.Err(); err != nil {
+			return nil, "", fmt.Errorf("failed to iterate roles: %w", err)
+		}
 
 		if len(roles) == 0 {
 			return nil, "", common.NewForbiddenError("user has no roles on this project")
@@ -546,7 +552,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 		}
 
 		// Add service catalog
-		resp.Token.Catalog = BuildServiceCatalog(projectID, s.cache)
+		resp.Token.Catalog = s.BuildServiceCatalog(projectID, s.cache)
 	}
 
 	return resp, tokenString, nil
@@ -730,7 +736,7 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 		}
 
 		// Add service catalog
-		resp.Token.Catalog = BuildServiceCatalog(scopeProjectID, s.cache)
+		resp.Token.Catalog = s.BuildServiceCatalog(scopeProjectID, s.cache)
 	}
 
 	return resp, tokenString, nil
@@ -857,7 +863,7 @@ func (s *AuthService) CheckPassword(password, hash string) bool {
 }
 
 // BuildServiceCatalog builds the OpenStack service catalog from database
-func BuildServiceCatalog(projectID string, cacheInstance *cache.Cache) []CatalogEntry {
+func (s *AuthService) BuildServiceCatalog(projectID string, cacheInstance *cache.Cache) []CatalogEntry {
 	ctx := context.Background()
 
 	// Try cache first (service catalog is immutable, 24h TTL)
@@ -872,7 +878,7 @@ func BuildServiceCatalog(projectID string, cacheInstance *cache.Cache) []Catalog
 	catalog := []CatalogEntry{}
 
 	// Query services and their endpoints from database
-	rows, err := database.DB.Query(ctx, `
+	rows, err := s.activeDB().Query(ctx, `
 		SELECT s.id, s.type, s.name, e.id, e.interface, e.url, e.region
 		FROM services s
 		LEFT JOIN endpoints e ON s.id = e.service_id
@@ -925,6 +931,10 @@ func BuildServiceCatalog(projectID string, cacheInstance *cache.Cache) []Catalog
 			}
 			serviceMap[serviceID].Endpoints = append(serviceMap[serviceID].Endpoints, endpoint)
 		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return buildHardcodedCatalog(projectID)
 	}
 
 	// Convert map to slice

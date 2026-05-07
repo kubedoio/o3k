@@ -650,12 +650,13 @@ func (svc *Service) CreateSecurityGroup(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"security_group": gin.H{
-			"id":          sgID,
-			"name":        req.SecurityGroup.Name,
-			"tenant_id":   projectID,
-			"description": req.SecurityGroup.Description,
-			"created_at":  now.Format(time.RFC3339),
-			"updated_at":  now.Format(time.RFC3339),
+			"id":                   sgID,
+			"name":                 req.SecurityGroup.Name,
+			"tenant_id":            projectID,
+			"description":          req.SecurityGroup.Description,
+			"security_group_rules": []gin.H{},
+			"created_at":           now.Format(time.RFC3339),
+			"updated_at":           now.Format(time.RFC3339),
 		},
 	})
 }
@@ -986,12 +987,15 @@ func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
 		return
 	}
 
+	rules := svc.getSecurityGroupRules(c.Request.Context(), sgID)
+
 	c.JSON(http.StatusOK, gin.H{
 		"security_group": gin.H{
-			"id":          sgID,
-			"name":        currentName,
-			"description": currentDesc,
-			"tenant_id":   projectID,
+			"id":                   sgID,
+			"name":                 currentName,
+			"description":          currentDesc,
+			"tenant_id":            projectID,
+			"security_group_rules": rules,
 		},
 	})
 }
@@ -1011,7 +1015,7 @@ type CreateSecurityGroupRuleRequest struct {
 	} `json:"security_group_rule"`
 }
 
-// CreateSecurityGroupRule creates a new security group rule
+	// CreateSecurityGroupRule creates a new security group rule
 func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 	var req CreateSecurityGroupRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1021,29 +1025,39 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 
 	ruleID := uuid.New().String()
 
+	var protocolVal interface{}
 	protocol := ""
-	if req.SecurityGroupRule.Protocol != nil {
+	if req.SecurityGroupRule.Protocol != nil && *req.SecurityGroupRule.Protocol != "" {
 		protocol = *req.SecurityGroupRule.Protocol
+		protocolVal = protocol
 	}
 
+	var portMinVal interface{}
 	portMin := 0
 	if req.SecurityGroupRule.PortRangeMin != nil {
 		portMin = *req.SecurityGroupRule.PortRangeMin
+		portMinVal = portMin
 	}
 
+	var portMaxVal interface{}
 	portMax := 0
 	if req.SecurityGroupRule.PortRangeMax != nil {
 		portMax = *req.SecurityGroupRule.PortRangeMax
+		portMaxVal = portMax
 	}
 
+	var remoteIPVal interface{}
 	remoteIP := ""
-	if req.SecurityGroupRule.RemoteIPPrefix != nil {
+	if req.SecurityGroupRule.RemoteIPPrefix != nil && *req.SecurityGroupRule.RemoteIPPrefix != "" {
 		remoteIP = *req.SecurityGroupRule.RemoteIPPrefix
+		remoteIPVal = remoteIP
 	}
 
+	var remoteGroupVal interface{}
 	remoteGroup := ""
-	if req.SecurityGroupRule.RemoteGroupID != nil {
+	if req.SecurityGroupRule.RemoteGroupID != nil && *req.SecurityGroupRule.RemoteGroupID != "" {
 		remoteGroup = *req.SecurityGroupRule.RemoteGroupID
+		remoteGroupVal = remoteGroup
 	}
 
 	etherType := "IPv4"
@@ -1096,11 +1110,11 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 			"security_group_id":  req.SecurityGroupRule.SecurityGroupID,
 			"direction":          req.SecurityGroupRule.Direction,
 			"ethertype":          etherType,
-			"protocol":           protocol,
-			"port_range_min":     portMin,
-			"port_range_max":     portMax,
-			"remote_ip_prefix":   remoteIP,
-			"remote_group_id":    remoteGroup,
+			"protocol":           protocolVal,
+			"port_range_min":     portMinVal,
+			"port_range_max":     portMaxVal,
+			"remote_ip_prefix":   remoteIPVal,
+			"remote_group_id":    remoteGroupVal,
 			"created_at":         now.Format(time.RFC3339),
 		},
 	})

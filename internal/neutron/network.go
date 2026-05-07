@@ -543,7 +543,7 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 	queryArgs = append(queryArgs, limit+1)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
-		SELECT n.id, n.name, n.admin_state_up, n.status, n.shared, n.mtu, n.created_at, n.updated_at
+		SELECT n.id, n.name, n.project_id, n.admin_state_up, n.status, n.shared, n.mtu, n.created_at, n.updated_at
 		FROM networks n
 		WHERE (n.project_id = $1 OR n.shared = true)%s
 		ORDER BY n.id ASC
@@ -559,19 +559,19 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 
 	var networks []gin.H
 	for rows.Next() {
-		var id, name, status string
+		var id, name, ownerProjectID, status string
 		var adminStateUp, shared bool
 		var mtu int
 		var createdAt, updatedAt time.Time
 
-		if err := rows.Scan(&id, &name, &adminStateUp, &status, &shared, &mtu, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 
 		networks = append(networks, gin.H{
 			"id":                       id,
 			"name":                     name,
-			"tenant_id":                projectID,
+			"tenant_id":                ownerProjectID,
 			"admin_state_up":           adminStateUp,
 			"status":                   status,
 			"shared":                   shared,
@@ -625,17 +625,17 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	}
 
 	// Cache miss - query database
-	var id, name, status string
+	var id, name, ownerProjectID, status string
 	var adminStateUp, shared bool
 	var mtu int
 	var createdAt, updatedAt time.Time
 
 	err := svc.activeDB().QueryRow(ctx, `
-		SELECT id, name, admin_state_up, status, shared, mtu, created_at, updated_at
+		SELECT id, name, project_id, admin_state_up, status, shared, mtu, created_at, updated_at
 		FROM networks
 		WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)
 		LIMIT 1
-	`, networkID, projectID).Scan(&id, &name, &adminStateUp, &status, &shared, &mtu, &createdAt, &updatedAt)
+	`, networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &createdAt, &updatedAt)
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("network"))
@@ -650,7 +650,7 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	network := gin.H{
 		"id":                       id,
 		"name":                     name,
-		"tenant_id":                projectID,
+		"tenant_id":                ownerProjectID,
 		"admin_state_up":           adminStateUp,
 		"status":                   status,
 		"shared":                   shared,
@@ -871,48 +871,36 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Parse pagination parameters
-	limit := 1000
-	offset := 0
+	limit := common.DefaultPaginationLimit
 	if limitParam := c.Query("limit"); limitParam != "" {
 		if parsedLimit, err := strconv.Atoi(limitParam); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
-	if offsetParam := c.Query("offset"); offsetParam != "" {
-		if parsedOffset, err := strconv.Atoi(offsetParam); err == nil && parsedOffset >= 0 {
-			offset = parsedOffset
-		}
-	}
+	limit = common.CapLimit(limit)
 
-	// Marker-based pagination
+	// Marker-based pagination (by ID)
 	var markerCondition string
 	var queryArgs []interface{}
 	queryArgs = append(queryArgs, projectID)
 	argIdx := 2
 
 	if marker := c.Query("marker"); marker != "" {
-		var markerCreatedAt time.Time
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT created_at FROM subnets WHERE id = $1",
-			marker,
-		).Scan(&markerCreatedAt)
-		if err == nil {
-			markerCondition = fmt.Sprintf(" AND s.created_at < $%d", argIdx)
-			queryArgs = append(queryArgs, markerCreatedAt)
-			argIdx++
-		}
+		markerCondition = fmt.Sprintf(" AND s.id > $%d", argIdx)
+		queryArgs = append(queryArgs, marker)
+		argIdx++
 	}
 
-	queryArgs = append(queryArgs, limit, offset)
+	queryArgs = append(queryArgs, limit+1)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
 		WHERE (s.project_id = $1 OR n.shared = true)%s
-		ORDER BY s.created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, markerCondition, argIdx, argIdx+1), queryArgs...)
+		ORDER BY s.id ASC
+		LIMIT $%d
+	`, markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_subnets").Msg("database error")
@@ -957,7 +945,18 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 		subnets = []gin.H{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"subnets": subnets})
+	// Check if there are more results
+	resp := gin.H{"subnets": subnets}
+	if len(subnets) > limit {
+		subnets = subnets[:limit]
+		lastID := subnets[limit-1]["id"].(string)
+		resp = gin.H{
+			"subnets":       subnets,
+			"subnets_links": []gin.H{{"rel": "next", "href": fmt.Sprintf("?marker=%s&limit=%d", lastID, limit)}},
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // GetSubnet returns a single subnet

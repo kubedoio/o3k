@@ -318,7 +318,7 @@ func (svc *Service) ValidateToken(c *gin.Context) {
 		tokenResp["roles"] = roles
 
 		// Add service catalog
-		tokenResp["catalog"] = BuildServiceCatalog(claims.ProjectID, svc.cache)
+		tokenResp["catalog"] = svc.authService.BuildServiceCatalog(claims.ProjectID, svc.cache)
 	} else {
 		tokenResp["roles"] = []gin.H{}
 	}
@@ -1407,7 +1407,7 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 
 	var req struct {
 		User struct {
-			OriginalPassword string `json:"original_password" binding:"required"`
+			OriginalPassword string `json:"original_password"`
 			Password         string `json:"password" binding:"required"`
 		} `json:"user" binding:"required"`
 	}
@@ -1429,10 +1429,12 @@ func (svc *Service) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	// Verify original password
-	if !svc.authService.CheckPassword(req.User.OriginalPassword, currentPasswordHash) {
-		common.SendError(c, common.NewUnauthorizedError("original password is incorrect"))
-		return
+	// Verify original password only for self-service changes
+	if callerID == userID {
+		if !svc.authService.CheckPassword(req.User.OriginalPassword, currentPasswordHash) {
+			common.SendError(c, common.NewUnauthorizedError("original password is incorrect"))
+			return
+		}
 	}
 
 	// Hash new password

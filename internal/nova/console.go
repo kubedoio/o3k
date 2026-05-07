@@ -46,6 +46,11 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// If VNC not configured yet, set it up
 	if vncPort == 0 || vncPassword == "" {
@@ -140,6 +145,11 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_vnc_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// If VNC not configured yet, set it up
 	if vncPort == 0 || vncPassword == "" {
@@ -231,6 +241,11 @@ func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interfa
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_console_output").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse length parameter
 	length := 0
@@ -273,6 +288,11 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_serial_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse console type
 	consoleType := "serial"
@@ -310,6 +330,11 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_spice_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
+		return
+	}
 
 	// Parse console type
 	consoleType := "spice-html5"
@@ -345,6 +370,11 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("instance"))
+		return
+	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "get_rdp_console").Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to get instance"))
 		return
 	}
 

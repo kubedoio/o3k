@@ -1,6 +1,7 @@
 package nova
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -10,7 +11,53 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// isAdminContext returns true if the request context carries the "admin" role.
+// buildServerUsages queries per-instance usage data for a project within the given time range.
+// startParam and stopParam may be empty strings (in which case no time filter is applied).
+func (svc *Service) buildServerUsages(ctx context.Context, projectID, startParam, stopParam string) []gin.H {
+	query := `
+		SELECT i.id, i.name, COALESCE(f.vcpus, 0), COALESCE(f.ram_mb, 0), COALESCE(f.disk_gb, 0),
+		       i.created_at, i.status
+		FROM instances i
+		LEFT JOIN flavors f ON i.flavor_id = f.id
+		WHERE i.project_id = $1`
+	args := []interface{}{projectID}
+
+	rows, err := svc.activeDB().Query(ctx, query, args...)
+	if err != nil {
+		return []gin.H{}
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var usages []gin.H
+	for rows.Next() {
+		var (
+			id, name, status string
+			vcpus, ramMB, diskGB int
+			createdAt            time.Time
+		)
+		if err := rows.Scan(&id, &name, &vcpus, &ramMB, &diskGB, &createdAt, &status); err != nil {
+			continue
+		}
+		hours := now.Sub(createdAt).Hours()
+		usages = append(usages, gin.H{
+			"server_id": id,
+			"name":      name,
+			"vcpus":     vcpus,
+			"memory_mb": ramMB,
+			"local_gb":  diskGB,
+			"hours":     hours,
+			"flavor":    name, // flavor name not always available; use instance name as fallback
+			"state":     status,
+		})
+	}
+	if usages == nil {
+		return []gin.H{}
+	}
+	return usages
+}
+
+
 func isAdminContext(c *gin.Context) bool {
 	roles, _ := c.Get("roles")
 	if roleList, ok := roles.([]string); ok {
@@ -88,7 +135,7 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 			"total_hours":           totalHours,
 			"start":                 time.Now().Add(-30 * 24 * time.Hour).Format("2006-01-02T15:04:05.000000"),
 			"stop":                  time.Now().Format("2006-01-02T15:04:05.000000"),
-			"server_usages":         []gin.H{},
+			"server_usages":         svc.buildServerUsages(ctx, pid, "", ""),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -151,7 +198,7 @@ func (svc *Service) GetTenantUsage(c *gin.Context) {
 			"total_hours":           totalHours,
 			"start":                 time.Now().Add(-30 * 24 * time.Hour).Format("2006-01-02T15:04:05.000000"),
 			"stop":                  time.Now().Format("2006-01-02T15:04:05.000000"),
-			"server_usages":         []gin.H{},
+			"server_usages":         svc.buildServerUsages(c.Request.Context(), tenantID, c.Query("start"), c.Query("end")),
 		},
 	})
 }

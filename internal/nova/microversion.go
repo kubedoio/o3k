@@ -28,10 +28,12 @@ func MicroversionMiddleware() gin.HandlerFunc {
 		} else {
 			// Parse "2.X" format and compare minor version as integer
 			parts := strings.Split(version, ".")
-			if len(parts) == 2 {
+			if len(parts) == 2 && parts[0] == "2" {
 				if minor, err := strconv.Atoi(parts[1]); err == nil && minor > 93 {
 					version = novaMaxVersion
 				}
+			} else {
+				version = "2.1" // reject non-2.X versions
 			}
 		}
 

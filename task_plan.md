@@ -1,24 +1,22 @@
-# Task Plan: Implement v4 Production Readiness Fixes
+# Task Plan: Fix Critical and High Findings from v5 Review
 
 ## Goal
-Fix all findings from the v4 comprehensive review (55 issues), bringing O3K from 5.5/10 to 8/10.
+Fix all 8 CRITICAL and 14 HIGH findings from the comprehensive review, bringing O3K from 6.5/10 to ~8/10.
 
 ## Phases
-- [x] Phase 1: Stop the crashes — C2 (missing migration), M19 (NULL scan crash), pagination cap, critical rows.Err()
-- [x] Phase 2: Security — C4 (hardcoded creds), H4 (JWT default abort), H5 (host header), H3 (bcrypt cost), H10 (IP race), M3/M4 (authz)
-- [x] Phase 3: Horizon compat — C5/C6 (OS-EXT-* attrs), H1/H2 (ValidateToken), H6 (microversions), H8 (network fields), H9 (neutron pagination), M11 (SG rules), M16/M17 (cinder fields)
-- [x] Phase 4: App credential auth + token revocation — C1 (auth method dispatch), C3 (DB-backed revocation check)
-- [x] Phase 5: Systemic rows.Err() pass — 67 locations fixed across 39 files
-- [x] Phase 6: Verify — build OK, vet OK, all tests pass
+- [x] Phase 1: Create feature branch
+- [x] Phase 2: Fix CRITICALs (C1-C8) via parallel subagents
+- [x] Phase 3: Fix HIGHs (H1-H14) via parallel subagents
+- [x] Phase 4: Verify — build OK, vet OK, all tests pass
 
 ## Decisions Made
-- Work on existing branch `fix/production-readiness-security-data`
-- Phases 1-4 dispatched as parallel subagents (different files)
-- Phase 5 runs after 1-4 complete (touches all packages)
-- Phase 6 is final verification
+- Dispatch by file grouping to avoid conflicts between agents
+- Agent 1: Keystone fixes (C1, H1-H5) — COMPLETE
+- Agent 2: Nova fixes (C2, C3, C4, C8, H6, H7, H8) — COMPLETE
+- Agent 3: Neutron fixes (C5, C6, C7, H9-H14) — COMPLETE
 
 ## Errors Encountered
 - None
 
 ## Status
-**COMPLETE** — All 6 phases done. Build passes, all tests pass.
+**COMPLETE** — All 22 findings fixed. Build passes, vet clean, all tests pass.

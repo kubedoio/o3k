@@ -696,16 +696,9 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	argIdx := 2
 
 	if marker := c.Query("marker"); marker != "" {
-		var markerCreatedAt time.Time
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT created_at FROM instances WHERE id = $1 AND project_id = $2",
-			marker, projectID,
-		).Scan(&markerCreatedAt)
-		if err == nil {
-			markerCondition = fmt.Sprintf(" AND i.created_at < $%d", argIdx)
-			queryArgs = append(queryArgs, markerCreatedAt)
-			argIdx++
-		}
+		markerCondition = fmt.Sprintf(" AND (i.created_at, i.id::text) < (SELECT created_at, id::text FROM instances WHERE id = $%d AND project_id = $1)", argIdx)
+		queryArgs = append(queryArgs, marker)
+		argIdx++
 	}
 
 	queryArgs = append(queryArgs, limit)
@@ -713,7 +706,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT i.id, i.name, i.status, i.power_state, i.project_id, i.user_id,
 		       i.flavor_id, i.image_id, i.created_at, i.updated_at, i.launched_at,
-		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name
+		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name, i.host
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
 		WHERE i.project_id = $1%s
@@ -735,10 +728,11 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		var powerState, vcpus, ramMB, diskGB int
 		var createdAt, updatedAt time.Time
 		var launchedAt *time.Time
+		var host sql.NullString
 
 		if err := rows.Scan(&id, &name, &status, &powerState, &projectID, &userID,
 			&flavorID, &imageID, &createdAt, &updatedAt, &launchedAt,
-			&vcpus, &ramMB, &diskGB, &flavorName); err != nil {
+			&vcpus, &ramMB, &diskGB, &flavorName, &host); err != nil {
 			log.Warn().Err(err).Msg("failed to scan server detail row")
 			continue
 		}
@@ -772,6 +766,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			vmState = "deleted"
 		}
 
+		hostStr := host.String // empty string if NULL
 		servers = append(servers, gin.H{
 			"id":         id,
 			"name":       name,
@@ -788,6 +783,9 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			"OS-DCF:diskConfig":           "AUTO",
 			"OS-SRV-USG:launched_at":      launchedAtStr,
 			"OS-SRV-USG:terminated_at":    nil,
+			"OS-EXT-SRV-ATTR:host":              hostStr,
+			"OS-EXT-SRV-ATTR:instance_name":     fmt.Sprintf("instance-%s", id[:8]),
+			"OS-EXT-SRV-ATTR:hypervisor_hostname": hostStr,
 			"flavor": gin.H{
 				"id":    flavorID,
 				"vcpus": vcpus,
@@ -872,16 +870,17 @@ func (svc *Service) GetServer(c *gin.Context) {
 	var userID, flavorID, imageID interface{}
 	var powerState int
 	var createdAt, updatedAt time.Time
+	var host sql.NullString
 
 	// Try to find by ID first, then by name
 	// Use separate conditions to avoid type mismatch when id is UUID and param might be a name
 	err := svc.activeDB().QueryRow(c.Request.Context(), `
-		SELECT id, name, status, power_state, project_id, user_id, flavor_id, image_id, created_at, updated_at
+		SELECT id, name, status, power_state, project_id, user_id, flavor_id, image_id, created_at, updated_at, host
 		FROM instances
 		WHERE project_id = $2 AND (
 			(id::text = $1) OR (name = $1)
 		)
-	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt)
+	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host)
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("instance"))
@@ -920,6 +919,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 	}
 
 	// Build response with nullable fields
+	hostStr := host.String // empty string if NULL
 	response := gin.H{
 		"id":                          id,
 		"name":                        name,
@@ -927,6 +927,9 @@ func (svc *Service) GetServer(c *gin.Context) {
 		"tenant_id":                   projID,
 		"created":                     createdAt.Format(time.RFC3339),
 		"updated":                     updatedAt.Format(time.RFC3339),
+		"OS-EXT-SRV-ATTR:host":              hostStr,
+		"OS-EXT-SRV-ATTR:instance_name":     fmt.Sprintf("instance-%s", id[:8]),
+		"OS-EXT-SRV-ATTR:hypervisor_hostname": hostStr,
 		"addresses":                   addresses,
 		"OS-EXT-STS:power_state":      powerState,
 		"OS-EXT-STS:task_state":       getTaskState,

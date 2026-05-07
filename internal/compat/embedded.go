@@ -61,8 +61,9 @@ func NewEmbeddedRouter() (http.Handler, func()) {
 
 	// Keystone — handles /v3
 	keystoneGin := newServiceGin()
+	keystoneGin.Use(middleware.AuthMiddleware(authService))
 	keystoneSvc := keystone.NewService(authService, nil)
-	keystoneSvc.RegisterRoutes(keystoneGin.Group(""))
+	keystoneSvc.RegisterRoutes(keystoneGin.Group(""), middleware.RequireRole("admin"))
 
 	// Nova — handles /v2.1, / (version discovery)
 	novaGin := newServiceGin()

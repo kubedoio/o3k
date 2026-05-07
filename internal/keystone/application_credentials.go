@@ -84,6 +84,7 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 			WHERE acr.application_credential_id = $1
 		`, id)
 		if err == nil {
+			defer roleRows.Close()
 			roles := []map[string]interface{}{}
 			for roleRows.Next() {
 				var roleID, roleName string
@@ -94,8 +95,9 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 					})
 				}
 			}
-			roleRows.Close()
-			credential["roles"] = roles
+			if roleRows.Err() == nil {
+				credential["roles"] = roles
+			}
 		}
 
 		credentials = append(credentials, credential)
@@ -296,6 +298,7 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 		WHERE acr.application_credential_id = $1
 	`, id)
 	if err == nil {
+		defer roleRows.Close()
 		roles := []map[string]interface{}{}
 		for roleRows.Next() {
 			var roleID, roleName string
@@ -306,8 +309,9 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 				})
 			}
 		}
-		roleRows.Close()
-		credential["roles"] = roles
+		if roleRows.Err() == nil {
+			credential["roles"] = roles
+		}
 	}
 
 	c.JSON(200, gin.H{"application_credential": credential})
@@ -411,6 +415,7 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 		WHERE acr.application_credential_id = $1
 	`, id)
 	if err == nil {
+		defer roleRows.Close()
 		roles := []map[string]interface{}{}
 		for roleRows.Next() {
 			var roleID, roleName string
@@ -421,8 +426,9 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 				})
 			}
 		}
-		roleRows.Close()
-		credential["roles"] = roles
+		if roleRows.Err() == nil {
+			credential["roles"] = roles
+		}
 	}
 
 	c.JSON(200, gin.H{"application_credential": credential})
