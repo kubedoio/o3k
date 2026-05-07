@@ -162,6 +162,11 @@ func runServer(args []string) {
 	authService := keystone.NewAuthService(cfg.Keystone.JWTSecret, cfg.Keystone.TokenTTL, cacheInstance)
 	keystoneService := keystone.NewService(authService, cacheInstance)
 
+	// Load policy rules from DB (best-effort; table may not exist before migration 067)
+	if err := keystoneService.LoadPoliciesFromDB(ctx); err != nil {
+		log.Printf("WARNING: failed to load policies from DB (table may not exist yet): %v", err)
+	}
+
 	// Set default libvirt mode if not specified
 	libvirtMode := cfg.Nova.LibvirtMode
 	if libvirtMode == "" {

@@ -155,6 +155,13 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup, adminMiddleware ...gin.Ha
 		admin.POST("/credentials", svc.CreateCredential)
 		admin.PATCH("/credentials/:id", svc.UpdateCredential)
 		admin.DELETE("/credentials/:id", svc.DeleteCredential)
+
+		// Policies — CRUD
+		admin.GET("/policies", svc.ListPolicies)
+		admin.POST("/policies", svc.CreatePolicy)
+		admin.GET("/policies/:policy_id", svc.GetPolicy)
+		admin.PATCH("/policies/:policy_id", svc.UpdatePolicy)
+		admin.DELETE("/policies/:policy_id", svc.DeletePolicy)
 	}
 }
 
