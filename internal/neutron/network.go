@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/internal/keystone"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 )
@@ -679,6 +680,38 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 	projectID := c.GetString("project_id")
 	ctx := c.Request.Context()
 
+	// Fetch the network's owning project before deleting (supports policy enforcement).
+	var networkProjectID string
+	err := svc.activeDB().QueryRow(ctx,
+		"SELECT project_id FROM networks WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)",
+		networkID, projectID,
+	).Scan(&networkProjectID)
+	if err == pgx.ErrNoRows {
+		common.SendError(c, common.NewNotFoundError("network"))
+		return
+	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "delete_network").Str("network_id", networkID).Msg("database error")
+		common.SendError(c, common.NewInternalServerError("failed to delete network"))
+		return
+	}
+
+	// Policy enforcement
+	if keystone.PolicyEngine != nil {
+		target := map[string]interface{}{
+			"project_id": networkProjectID,
+		}
+		credentials := map[string]interface{}{
+			"user_id":    c.GetString("user_id"),
+			"project_id": c.GetString("project_id"),
+			"roles":      c.GetStringSlice("roles"),
+		}
+		if !keystone.PolicyEngine.Enforce("network:delete_network", target, credentials) {
+			common.SendError(c, common.NewForbiddenError("Policy doesn't allow this action"))
+			return
+		}
+	}
+
 	bridgeName := "br-" + networkID[:8]
 	nsName := svc.nsManager.GetNamespaceName(projectID)
 
@@ -686,7 +719,7 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 	svc.brManager.DeleteBridge(bridgeName, true, nsName)
 
 	// Delete from database
-	_, err := svc.activeDB().Exec(ctx,
+	_, err = svc.activeDB().Exec(ctx,
 		"DELETE FROM networks WHERE id = $1 AND project_id = $2",
 		networkID, projectID,
 	)

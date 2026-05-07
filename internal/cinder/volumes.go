@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/internal/keystone"
 	"github.com/cobaltcore-dev/o3k/pkg/storage"
 )
 
@@ -566,10 +567,11 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 	// Check if volume is attached (support lookup by ID or name)
 	var attachedTo sql.NullString
 	var actualVolumeID string
+	var volumeUserID sql.NullString
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id, attached_to_instance_id FROM volumes WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		"SELECT id, attached_to_instance_id, user_id FROM volumes WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		volumeID, projectID,
-	).Scan(&actualVolumeID, &attachedTo)
+	).Scan(&actualVolumeID, &attachedTo, &volumeUserID)
 
 	if err == pgx.ErrNoRows {
 		common.SendError(c, common.NewNotFoundError("volume"))
@@ -579,6 +581,23 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 	if attachedTo.Valid {
 		common.SendError(c, common.NewBadRequestError("volume is attached to an instance"))
 		return
+	}
+
+	// Policy enforcement
+	if keystone.PolicyEngine != nil {
+		target := map[string]interface{}{
+			"user_id":    volumeUserID.String,
+			"project_id": projectID,
+		}
+		credentials := map[string]interface{}{
+			"user_id":    c.GetString("user_id"),
+			"project_id": c.GetString("project_id"),
+			"roles":      c.GetStringSlice("roles"),
+		}
+		if !keystone.PolicyEngine.Enforce("volume:delete", target, credentials) {
+			common.SendError(c, common.NewForbiddenError("Policy doesn't allow this action"))
+			return
+		}
 	}
 
 	// Delete from Ceph

@@ -12,6 +12,7 @@ import (
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/internal/keystone"
 	"github.com/cobaltcore-dev/o3k/internal/middleware"
 	"github.com/cobaltcore-dev/o3k/internal/neutron"
 	"github.com/cobaltcore-dev/o3k/internal/tunnel"
@@ -966,13 +967,14 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 
 	middleware.LogOperationStart(c, "delete", "server", instanceID)
 
-	// Get libvirt domain ID (support lookup by ID or name)
+	// Get libvirt domain ID and owner (support lookup by ID or name)
 	var libvirtDomainID string
+	var instanceUserID sql.NullString
 	queryStart := time.Now()
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		"SELECT libvirt_domain_id, user_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
-	).Scan(&libvirtDomainID)
+	).Scan(&libvirtDomainID, &instanceUserID)
 	middleware.LogDatabaseQuery(c, "SELECT libvirt_domain_id", time.Since(queryStart), err)
 
 	if err == pgx.ErrNoRows {
@@ -980,6 +982,23 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
+	}
+
+	// Policy enforcement
+	if keystone.PolicyEngine != nil {
+		target := map[string]interface{}{
+			"user_id":    instanceUserID.String,
+			"project_id": projectID,
+		}
+		credentials := map[string]interface{}{
+			"user_id":    c.GetString("user_id"),
+			"project_id": c.GetString("project_id"),
+			"roles":      c.GetStringSlice("roles"),
+		}
+		if !keystone.PolicyEngine.Enforce("compute:delete", target, credentials) {
+			common.SendError(c, common.NewForbiddenError("Policy doesn't allow this action"))
+			return
+		}
 	}
 
 	// Delete VM from libvirt (if available)
