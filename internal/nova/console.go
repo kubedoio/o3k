@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -43,7 +44,7 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -64,7 +65,10 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 	}
 
 	// Build console URL based on protocol/type
-	consoleHost := strings.Split(c.Request.Host, ":")[0]
+	consoleHost := svc.NoVNCProxyHost
+	if consoleHost == "" {
+		consoleHost = strings.Split(c.Request.Host, ":")[0]
+	}
 	var consoleURL string
 	switch req.RemoteConsole.Type {
 	case "novnc":
@@ -143,7 +147,7 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -164,7 +168,10 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 	}
 
 	// Generate console URL
-	consoleHost := strings.Split(c.Request.Host, ":")[0]
+	consoleHost := svc.NoVNCProxyHost
+	if consoleHost == "" {
+		consoleHost = strings.Split(c.Request.Host, ":")[0]
+	}
 	token := generateConsoleToken(instanceID)
 	consoleURL := fmt.Sprintf("http://%s:6080/vnc_auto.html?token=%s", consoleHost, token)
 
@@ -240,7 +247,7 @@ func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interfa
 		instanceID, projectID,
 	).Scan(&id)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -287,7 +294,7 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 		instanceID, projectID,
 	).Scan(&id)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -306,7 +313,10 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 	}
 
 	// Generate serial console URL
-	consoleHost := strings.Split(c.Request.Host, ":")[0]
+	consoleHost := svc.NoVNCProxyHost
+	if consoleHost == "" {
+		consoleHost = strings.Split(c.Request.Host, ":")[0]
+	}
 	token := generateConsoleToken(instanceID)
 	consoleURL := fmt.Sprintf("ws://%s:6083/?token=%s", consoleHost, token)
 
@@ -330,7 +340,7 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 		instanceID, projectID,
 	).Scan(&id)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -349,7 +359,10 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 	}
 
 	// Generate SPICE console URL
-	consoleHost := strings.Split(c.Request.Host, ":")[0]
+	consoleHost := svc.NoVNCProxyHost
+	if consoleHost == "" {
+		consoleHost = strings.Split(c.Request.Host, ":")[0]
+	}
 	token := generateConsoleToken(instanceID)
 	consoleURL := fmt.Sprintf("http://%s:6082/spice_auto.html?token=%s", consoleHost, token)
 
@@ -373,7 +386,7 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 		instanceID, projectID,
 	).Scan(&id)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -392,7 +405,10 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 	}
 
 	// Generate RDP console URL
-	consoleHost := strings.Split(c.Request.Host, ":")[0]
+	consoleHost := svc.NoVNCProxyHost
+	if consoleHost == "" {
+		consoleHost = strings.Split(c.Request.Host, ":")[0]
+	}
 	token := generateConsoleToken(instanceID)
 	consoleURL := fmt.Sprintf("http://%s:6084/rdp.html?token=%s", consoleHost, token)
 

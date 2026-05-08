@@ -3,6 +3,8 @@ package keystone
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
@@ -35,7 +37,7 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 	}
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), `
-		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, created_at
+		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, created_at, access_rules
 		FROM application_credentials
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -54,8 +56,9 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		var expiresAt *time.Time
 		var unrestricted bool
 		var createdAt time.Time
+		var accessRulesJSON []byte
 
-		if err := rows.Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted, &createdAt); err != nil {
+		if err := rows.Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted, &createdAt, &accessRulesJSON); err != nil {
 			continue
 		}
 
@@ -74,6 +77,14 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		}
 		if expiresAt != nil {
 			credential["expires_at"] = expiresAt.Format(time.RFC3339)
+		}
+
+		// Parse and include access_rules if present
+		if accessRulesJSON != nil {
+			var accessRules []AccessRule
+			if err := json.Unmarshal(accessRulesJSON, &accessRules); err == nil && len(accessRules) > 0 {
+				credential["access_rules"] = accessRules
+			}
 		}
 
 		// Get roles
@@ -142,6 +153,7 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 			ExpiresAt    string                   `json:"expires_at"`
 			Unrestricted bool                     `json:"unrestricted"`
 			Roles        []map[string]interface{} `json:"roles"`
+			AccessRules  []AccessRule             `json:"access_rules,omitempty"`
 		} `json:"application_credential"`
 	}
 
@@ -189,10 +201,41 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		}
 	}
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
-		INSERT INTO application_credentials (id, user_id, project_id, name, secret_hash, description, expires_at, unrestricted, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, credID, userID, projectID, req.ApplicationCredential.Name, string(secretHash), req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, now)
+	var accessRulesJSON interface{}
+	if len(req.ApplicationCredential.AccessRules) > 0 {
+		b, err := json.Marshal(req.ApplicationCredential.AccessRules)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to marshal access_rules")
+			common.SendError(c, common.NewInternalServerError("failed to process access rules"))
+			return
+		}
+		accessRulesJSON = b
+	}
+
+	ctx := c.Request.Context()
+
+	// Validate that caller holds each requested role
+	callerProjectID := c.GetString("project_id")
+	for _, role := range req.ApplicationCredential.Roles {
+		roleID, _ := role["id"].(string)
+		if roleID == "" {
+			continue
+		}
+		var exists bool
+		err := svc.activeDB().QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM role_assignments WHERE user_id=$1 AND project_id=$2 AND role_id=$3)`,
+			callerID, callerProjectID, roleID,
+		).Scan(&exists)
+		if err != nil || !exists {
+			common.SendError(c, common.NewForbiddenError("cannot assign role not held by caller"))
+			return
+		}
+	}
+
+	_, err = svc.activeDB().Exec(ctx, `
+		INSERT INTO application_credentials (id, user_id, project_id, name, secret_hash, description, expires_at, unrestricted, legacy_auth, updated_at, access_rules, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9, $10)
+	`, credID, userID, projectID, req.ApplicationCredential.Name, string(secretHash), req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, accessRulesJSON, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_application_credential").Str("user_id", userID).Msg("Failed to create application credential")
@@ -206,7 +249,7 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		if !ok || roleID == "" {
 			continue
 		}
-		svc.activeDB().Exec(c.Request.Context(), `
+		svc.activeDB().Exec(ctx, `
 			INSERT INTO application_credential_roles (application_credential_id, role_id)
 			VALUES ($1, $2)
 		`, credID, roleID)
@@ -227,12 +270,19 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		credential["description"] = req.ApplicationCredential.Description
 	}
 	if expiresAt != nil {
-		credential["expires_at"] = expiresAt.(time.Time).Format(time.RFC3339)
+		if t, ok := expiresAt.(time.Time); ok {
+			credential["expires_at"] = t.Format(time.RFC3339)
+		}
 	}
 
 	// Add roles to response
 	if len(req.ApplicationCredential.Roles) > 0 {
 		credential["roles"] = req.ApplicationCredential.Roles
+	}
+
+	// Add access_rules to response
+	if len(req.ApplicationCredential.AccessRules) > 0 {
+		credential["access_rules"] = req.ApplicationCredential.AccessRules
 	}
 
 	c.JSON(201, gin.H{"application_credential": credential})
@@ -264,14 +314,15 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	var projectID, description *string
 	var expiresAt *time.Time
 	var unrestricted bool
+	var accessRulesJSON []byte
 
 	err := svc.activeDB().QueryRow(c.Request.Context(), `
-		SELECT id, user_id, project_id, name, description, expires_at, unrestricted
+		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, access_rules
 		FROM application_credentials
 		WHERE id = $1 AND user_id = $2
-	`, credID, userID).Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted)
+	`, credID, userID).Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted, &accessRulesJSON)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
@@ -296,6 +347,14 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	}
 	if expiresAt != nil {
 		credential["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+
+	// Parse and include access_rules if present
+	if accessRulesJSON != nil {
+		var accessRules []AccessRule
+		if err := json.Unmarshal(accessRulesJSON, &accessRules); err == nil && len(accessRules) > 0 {
+			credential["access_rules"] = accessRules
+		}
 	}
 
 	// Get roles
@@ -376,14 +435,15 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	var projectID, description *string
 	var expiresAt *time.Time
 	var unrestricted bool
+	var accessRulesJSON []byte
 
 	err := svc.activeDB().QueryRow(c.Request.Context(), `
-		SELECT id, user_id, project_id, name, description, expires_at, unrestricted
+		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, access_rules
 		FROM application_credentials
 		WHERE id = $1
-	`, credID).Scan(&id, &userID, &projectID, &name, &description, &expiresAt, &unrestricted)
+	`, credID).Scan(&id, &userID, &projectID, &name, &description, &expiresAt, &unrestricted, &accessRulesJSON)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
@@ -414,6 +474,14 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	}
 	if expiresAt != nil {
 		credential["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+
+	// Parse and include access_rules if present
+	if accessRulesJSON != nil {
+		var accessRules []AccessRule
+		if err := json.Unmarshal(accessRulesJSON, &accessRules); err == nil && len(accessRules) > 0 {
+			credential["access_rules"] = accessRules
+		}
 	}
 
 	// Get roles

@@ -4,17 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/cobaltcore-dev/o3k/internal/common"
 )
 
 // Router represents a Neutron L3 router
@@ -33,17 +34,17 @@ type Router struct {
 
 // FloatingIP represents a floating IP address
 type FloatingIP struct {
-	ID                 string    `json:"id"`
-	ProjectID          string    `json:"tenant_id"`
-	FloatingNetworkID  string    `json:"floating_network_id"`
-	FloatingIPAddress  string    `json:"floating_ip_address"`
-	FixedIPAddress     string    `json:"fixed_ip_address"`
-	PortID             string    `json:"port_id"`
-	RouterID           string    `json:"router_id"`
-	Status             string    `json:"status"`
-	Description        string    `json:"description"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	ProjectID         string    `json:"tenant_id"`
+	FloatingNetworkID string    `json:"floating_network_id"`
+	FloatingIPAddress string    `json:"floating_ip_address"`
+	FixedIPAddress    string    `json:"fixed_ip_address"`
+	PortID            string    `json:"port_id"`
+	RouterID          string    `json:"router_id"`
+	Status            string    `json:"status"`
+	Description       string    `json:"description"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // CreateRouterRequest represents a router creation request
@@ -152,7 +153,7 @@ func (svc *Service) ListRouters(c *gin.Context) {
 	resp := gin.H{"routers": routers}
 	if len(routers) > limit {
 		routers = routers[:limit]
-		lastID := routers[limit-1]["id"].(string)
+		lastID, _ := routers[limit-1]["id"].(string)
 		resp = gin.H{
 			"routers":       routers,
 			"routers_links": []gin.H{{"rel": "next", "href": fmt.Sprintf("?marker=%s&limit=%d", lastID, limit)}},
@@ -194,14 +195,7 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 		gatewayInfoJSON, _ = json.Marshal(req.Router.ExternalGatewayInfo)
 	}
 
-	// Create router namespace
-	if err := svc.routerManager.CreateRouterNamespace(routerID); err != nil {
-		log.Error().Err(err).Str("operation", "create_router_namespace").Str("router_id", routerID).Msg("failed to create router namespace")
-		common.SendError(c, common.NewInternalServerError("failed to create router namespace"))
-		return
-	}
-
-	// Insert into database
+	// Insert into database first
 	now := time.Now()
 	_, err := svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO routers (id, name, project_id, admin_state_up, status, external_gateway_info, distributed, ha, created_at, updated_at)
@@ -209,10 +203,14 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 	`, routerID, req.Router.Name, projectID, adminStateUp, "ACTIVE", gatewayInfoJSON, distributed, ha, now, now)
 
 	if err != nil {
-		svc.routerManager.DeleteRouterNamespace(routerID) // Cleanup on error
 		log.Error().Err(err).Str("operation", "create_router").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to create router"))
 		return
+	}
+
+	// Create router namespace after DB insert (best effort)
+	if err := svc.routerManager.CreateRouterNamespace(routerID); err != nil {
+		log.Warn().Err(err).Str("router_id", routerID).Msg("failed to create router namespace (router record exists in DB)")
 	}
 
 	// If external gateway is configured, set it up
@@ -256,7 +254,7 @@ func (svc *Service) GetRouter(c *gin.Context) {
 	`, routerID, projectID).Scan(&r.ID, &r.Name, &r.ProjectID, &r.AdminStateUp, &r.Status,
 		&gatewayInfo, &r.Distributed, &r.HA, &r.CreatedAt, &r.UpdatedAt)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("router"))
 		return
 	}
@@ -364,7 +362,7 @@ func (svc *Service) DeleteRouter(c *gin.Context) {
 		routerID,
 	).Scan(&interfaceCount)
 
-	if err != nil && err != pgx.ErrNoRows {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		log.Error().Err(err).Str("operation", "delete_router_check").Str("router_id", routerID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to check router interfaces"))
 		return
@@ -432,7 +430,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 		req.SubnetID, projectID,
 	).Scan(&subnetID, &networkID, &cidr, &gatewayIP)
 
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
@@ -521,7 +519,7 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 			routerID, req.SubnetID,
 		).Scan(&portID)
 
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			common.SendError(c, common.NewNotFoundError("router interface"))
 			return
 		}
@@ -544,6 +542,13 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 		return
 	}
 
+	// Query network_id from the port before deleting it
+	var networkID string
+	_ = svc.activeDB().QueryRow(c.Request.Context(),
+		"SELECT network_id FROM ports WHERE id = $1",
+		portID,
+	).Scan(&networkID)
+
 	// Delete the port
 	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM ports WHERE id = $1 AND project_id = $2",
@@ -556,8 +561,11 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"subnet_id": req.SubnetID,
-		"port_id":   portID,
+		"id":         routerID,
+		"subnet_id":  req.SubnetID,
+		"port_id":    portID,
+		"network_id": networkID,
+		"tenant_id":  projectID,
 	})
 }
 

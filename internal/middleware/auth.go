@@ -41,6 +41,13 @@ func AuthMiddleware(authService *keystone.AuthService) gin.HandlerFunc {
 		c.Set("user_name", claims.UserName)
 		c.Set("project_id", claims.ProjectID)
 		c.Set("roles", claims.Roles)
+		if claims.AccessRules != nil {
+			c.Set("access_rules", claims.AccessRules)
+		}
+		if claims.IsAppCredential {
+			c.Set("auth_method", "application_credential")
+			c.Set("app_credential_unrestricted", claims.Unrestricted)
+		}
 
 		// Set is_admin flag for convenience
 		isAdmin := false
@@ -50,6 +57,7 @@ func AuthMiddleware(authService *keystone.AuthService) gin.HandlerFunc {
 				break
 			}
 		}
+		c.Set("is_admin", isAdmin)
 		c.Set("is_admin", isAdmin)
 
 		c.Next()

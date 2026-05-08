@@ -162,6 +162,11 @@ func runServer(args []string) {
 	authService := keystone.NewAuthService(cfg.Keystone.JWTSecret, cfg.Keystone.TokenTTL, cacheInstance)
 	keystoneService := keystone.NewService(authService, cacheInstance)
 
+	// Load policy rules from DB (best-effort; table may not exist before migration 067)
+	if err := keystoneService.LoadPoliciesFromDB(ctx); err != nil {
+		log.Printf("WARNING: failed to load policies from DB (table may not exist yet): %v", err)
+	}
+
 	// Set default libvirt mode if not specified
 	libvirtMode := cfg.Nova.LibvirtMode
 	if libvirtMode == "" {
@@ -288,9 +293,7 @@ func runServer(args []string) {
 	log.Printf("Glance initialized in %s mode", glanceStorageMode)
 
 	// Initialize metadata service
-	// testMode=true when libvirt is in stub mode (development); allows X-Instance-ID header
-	metadataTestMode := libvirtMode == "stub"
-	metadataService := metadata.NewService("localhost:8775", metadataTestMode)
+	metadataService := metadata.NewService("localhost:8775")
 	log.Println("Metadata service initialized")
 
 	// Initialize placement service
@@ -422,6 +425,7 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.Use(middleware.EnforceAccessRules("identity"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -447,8 +451,11 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 	svc.RegisterRoutes(r.Group(""), middleware.RequireRole("admin"))
 
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Keystone.Port),
-		Handler: r,
+		Addr:         fmt.Sprintf(":%d", cfg.Keystone.Port),
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 }
 
@@ -459,6 +466,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.Use(middleware.EnforceAccessRules("compute"))
 	r.Use(nova.MicroversionMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
@@ -467,8 +475,11 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Nova.Port),
-		Handler: r,
+		Addr:         fmt.Sprintf(":%d", cfg.Nova.Port),
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 }
 
@@ -479,6 +490,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.Use(middleware.EnforceAccessRules("network"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -486,8 +498,11 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Neutron.Port),
-		Handler: r,
+		Addr:         fmt.Sprintf(":%d", cfg.Neutron.Port),
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 }
 
@@ -498,6 +513,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
+	r.Use(middleware.EnforceAccessRules("block-storage"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -505,8 +521,11 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Cinder.Port),
-		Handler: r,
+		Addr:         fmt.Sprintf(":%d", cfg.Cinder.Port),
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 }
 
@@ -528,11 +547,15 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	// All other routes require authentication and are under /v2
 	authGroup := r.Group("/v2")
 	authGroup.Use(middleware.AuthMiddleware(authService))
+	authGroup.Use(middleware.EnforceAccessRules("image"))
 	svc.RegisterRoutes(authGroup)
 
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Glance.Port),
-		Handler: r,
+		Addr:         fmt.Sprintf(":%d", cfg.Glance.Port),
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Minute,
+		IdleTimeout:  120 * time.Second,
 	}
 }
 
@@ -542,6 +565,7 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.AuthMiddleware(authService))
+	r.Use(middleware.EnforceAccessRules("placement"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -549,8 +573,11 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:    ":8778",
-		Handler: r,
+		Addr:         ":8778",
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 }
 
@@ -567,7 +594,10 @@ func createMetadataServer(svc *metadata.Service) *http.Server {
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:    ":8775",
-		Handler: r,
+		Addr:         ":8775",
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 }
