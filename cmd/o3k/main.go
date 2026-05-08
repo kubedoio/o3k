@@ -25,6 +25,7 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/nova"
 	"github.com/cobaltcore-dev/o3k/internal/placement"
 	"github.com/cobaltcore-dev/o3k/internal/scheduler"
+	"github.com/cobaltcore-dev/o3k/internal/server"
 	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
@@ -70,10 +71,51 @@ func runServer(args []string) {
 	migrationsPath := fs.String("migrations", "migrations", "Path to migrations directory")
 	_ = fs.Parse(args)
 
-	// Load configuration
+	// Load configuration (file not found = zero-config mode, returns empty Config).
 	cfg, err := common.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Zero-config mode: if no database URL or datastore is configured, bootstrap
+	// with embedded SQLite and auto-generate secrets.
+	var bootstrapResult *server.BootstrapResult
+	datastore := cfg.Database.Datastore
+	if datastore == "" {
+		datastore = cfg.Database.URL
+	}
+	if datastore == "" {
+		var bsErr error
+		bootstrapResult, bsErr = server.Bootstrap()
+		if bsErr != nil {
+			log.Fatalf("Bootstrap failed: %v", bsErr)
+		}
+		datastore = "sqlite://" + bootstrapResult.DBPath
+
+		// Use the bootstrap-generated JWT secret when config has none.
+		if cfg.Keystone.JWTSecret == "" {
+			cfg.Keystone.JWTSecret = bootstrapResult.JWTSecret
+		}
+
+		fmt.Println("═══════════════════════════════════════════")
+		fmt.Println("  O3K — OpenStack in a single binary")
+		fmt.Println("═══════════════════════════════════════════")
+		fmt.Printf("  Data:     %s\n", bootstrapResult.DataDir)
+		fmt.Printf("  Database: SQLite (embedded)\n")
+		fmt.Printf("  API:      http://localhost:35357/v3\n")
+		fmt.Printf("  User:     admin\n")
+		fmt.Printf("  Password: %s\n", bootstrapResult.AdminPassword)
+		fmt.Println("───────────────────────────────────────────")
+		fmt.Printf("  Join agents: o3k agent --server http://<this-ip>:6443 --token %s\n", bootstrapResult.AgentToken)
+		fmt.Println("═══════════════════════════════════════════")
+	}
+
+	// Validate JWT secret now that bootstrap may have set it.
+	if cfg.Keystone.JWTSecret == "" || cfg.Keystone.JWTSecret == "change-me-in-production" {
+		env := os.Getenv("O3K_ENV")
+		if env != "development" && env != "test" {
+			log.Fatalf("FATAL: JWT secret is not set. Set O3K_JWT_SECRET or use O3K_ENV=development for dev mode.")
+		}
 	}
 
 	// Initialize structured logging
@@ -112,9 +154,12 @@ func runServer(args []string) {
 	}
 
 	// Determine datastore: explicit Datastore field takes priority over URL.
-	datastore := cfg.Database.Datastore
+	// (Already set to the bootstrap SQLite path when running in zero-config mode.)
 	if datastore == "" {
-		datastore = cfg.Database.URL
+		datastore = cfg.Database.Datastore
+		if datastore == "" {
+			datastore = cfg.Database.URL
+		}
 	}
 
 	if strings.HasPrefix(datastore, "sqlite://") || strings.HasPrefix(datastore, "sqlite:") {
@@ -145,6 +190,13 @@ func runServer(args []string) {
 		}
 	} else {
 		log.Println("SQLite mode: skipping PostgreSQL migrations")
+	}
+
+	// Seed defaults when running in zero-config (bootstrap) mode.
+	if bootstrapResult != nil {
+		if err := server.SeedDefaults(ctx, database.DB, bootstrapResult.AdminPassword); err != nil {
+			log.Printf("WARNING: seed defaults: %v", err)
+		}
 	}
 
 	// Start TunnelHub gRPC server if configured

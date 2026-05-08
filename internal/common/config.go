@@ -167,15 +167,17 @@ func expandEnvWithDefault(s string) string {
 	return result
 }
 
-// LoadConfig loads configuration from file and applies environment variable overrides
+// LoadConfig loads configuration from file and applies environment variable overrides.
+// If path does not exist, an empty Config is returned — zero-config mode.
 func LoadConfig(path string) (*Config, error) {
+	var cfg Config
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
+		// File not found — proceed with zero-config empty struct.
+	} else if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
@@ -194,8 +196,10 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Keystone.JWTSecret = jwtSecret
 	}
 
-	// Refuse to start with default JWT secret in production
-	if cfg.Keystone.JWTSecret == "" || cfg.Keystone.JWTSecret == "change-me-in-production" {
+	// Refuse to start with default JWT secret in production.
+	// Skip the check when no secret is set at all — zero-config mode will
+	// supply a bootstrap-generated secret before starting any service.
+	if cfg.Keystone.JWTSecret == "change-me-in-production" {
 		env := os.Getenv("O3K_ENV")
 		if env != "development" && env != "test" {
 			fmt.Fprintln(os.Stderr, "FATAL: JWT secret is set to the insecure default. Set O3K_JWT_SECRET or set O3K_ENV=development to allow default in dev mode.")
