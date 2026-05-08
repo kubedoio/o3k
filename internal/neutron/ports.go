@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -58,7 +58,7 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		req.Port.NetworkID, projectID,
 	).Scan(&networkID)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
@@ -433,7 +433,7 @@ func (svc *Service) GetPort(c *gin.Context) {
 		WHERE p.id = $1 AND (p.project_id = $2 OR n.shared = true)
 	`, portID, projectID).Scan(&id, &name, &networkID, &deviceID, &deviceOwner, &macAddress, &adminStateUp, &status, &fixedIPsJSON, &allowedAddrPairJSON, &createdAt, &updatedAt)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("port"))
 		return
 	}
@@ -654,8 +654,8 @@ func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr str
 		return "", fmt.Errorf("invalid CIDR: %w", err)
 	}
 
-	tx, err := svc.activeDB().BeginTx(ctx, pgx.TxOptions{
-		IsoLevel: pgx.Serializable,
+	tx, err := svc.activeDB().BeginTx(ctx, database.TxOptions{
+		IsoLevel: "serializable",
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to begin transaction: %w", err)
@@ -982,7 +982,7 @@ func (svc *Service) GetSecurityGroup(c *gin.Context) {
 		WHERE id = $1 AND project_id = $2
 	`, sgID, projectID).Scan(&id, &name, &description, &createdAt, &updatedAt)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("security group"))
 		return
 	}
@@ -1055,7 +1055,7 @@ func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
 		sgID, projectID,
 	).Scan(&currentName, &currentDesc)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("security group"))
 		return
 	}
@@ -1351,7 +1351,7 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 		networkID, projectID,
 	).Scan(&netID)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("network %s not found", networkID)
 	}
 	if err != nil {

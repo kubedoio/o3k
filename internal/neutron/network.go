@@ -17,7 +17,6 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -679,7 +678,7 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 		LIMIT 1
 	`, networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAt, &updatedAt)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
@@ -725,7 +724,7 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 		"SELECT project_id FROM networks WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)",
 		networkID, projectID,
 	).Scan(&networkProjectID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
@@ -1081,7 +1080,7 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 		WHERE s.id = $1 AND (s.project_id = $2 OR n.shared = true)
 	`, subnetID, projectID).Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameservers, &createdAt, &updatedAt)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
@@ -1161,7 +1160,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 		subnetID, projectID,
 	).Scan(&currentName)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}

@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,7 +25,7 @@ func (svc *Service) GetAutoAllocatedTopology(c *gin.Context) {
 		LIMIT 1
 	`, projectID).Scan(&networkID, &networkName)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{
 			"NeutronError": gin.H{
 				"type":    "AutoAllocationNotAvailable",
@@ -133,7 +133,7 @@ func (svc *Service) DeleteAutoAllocatedTopology(c *gin.Context) {
 		LIMIT 1
 	`, projectID).Scan(&networkID)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("auto-allocated topology"))
 		return
 	}

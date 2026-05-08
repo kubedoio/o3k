@@ -61,7 +61,7 @@ func Connect(ctx context.Context, connString string, poolConfig *PoolConfig) err
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	DB = p
+	DB = NewPgxAdapter(p)
 	pool = p
 	return nil
 }

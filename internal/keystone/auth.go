@@ -19,7 +19,6 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -226,7 +225,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		domainName,
 	).Scan(&domainID)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return nil, "", common.NewUnauthorizedError("invalid domain")
 	}
 	if err != nil {
@@ -240,7 +239,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		username, domainID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return nil, "", common.NewUnauthorizedError("invalid credentials")
 	}
 	if err != nil {
@@ -282,7 +281,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		err := s.activeDB().QueryRow(ctx, query, params...).Scan(
 			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, database.ErrNoRows) {
 			return nil, "", common.NewUnauthorizedError("project not found")
 		}
 		if err != nil {
@@ -436,7 +435,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 		claims.UserID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return nil, "", common.NewUnauthorizedError("user not found")
 	}
 	if err != nil {
@@ -475,7 +474,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 		err := s.activeDB().QueryRow(ctx, query, params...).Scan(
 			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, database.ErrNoRows) {
 			return nil, "", common.NewUnauthorizedError("project not found")
 		}
 		if err != nil {
@@ -636,7 +635,7 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 		WHERE id = $1
 	`, credID).Scan(&userID, &projectID, &secretHash, &name, &expiresAt, &unrestricted, &legacyAuth, &accessRulesJSON)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return nil, "", false, common.NewUnauthorizedError("invalid application credential")
 	}
 	if err != nil {
@@ -684,7 +683,7 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1",
 		userID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return nil, "", false, common.NewUnauthorizedError("user not found for application credential")
 	}
 	if err != nil {

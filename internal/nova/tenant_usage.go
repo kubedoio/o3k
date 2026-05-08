@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -98,7 +98,7 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 	stopParam := c.Query("end")
 
 	var (
-		rows pgx.Rows
+		rows database.Rows
 		err  error
 	)
 

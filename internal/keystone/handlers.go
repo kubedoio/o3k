@@ -13,7 +13,6 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -445,7 +444,7 @@ func (svc *Service) ListUsers(c *gin.Context) {
 	requestingUserID := c.GetString("user_id")
 
 	ctx := c.Request.Context()
-	var rows pgx.Rows
+	var rows database.Rows
 	var err error
 
 	if isAdmin == true {
@@ -550,7 +549,7 @@ func (svc *Service) ListProjects(c *gin.Context) {
 	userID := c.GetString("user_id")
 	ctx := c.Request.Context()
 
-	var rows pgx.Rows
+	var rows database.Rows
 	var err error
 
 	if isAdmin {

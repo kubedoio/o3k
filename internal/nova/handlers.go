@@ -22,7 +22,6 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/hypervisor"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -311,7 +310,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	).Scan(&flavor.ID, &flavor.Name, &flavor.VCPUs, &flavor.RAMMB, &flavor.DiskGB)
 	middleware.LogDatabaseQuery(c, "SELECT flavor", time.Since(queryStart), err)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		logger.Warn().Str("flavor_ref", req.Server.FlavorRef).Msg("Flavor not found")
 		middleware.LogOperationEnd(c, "create", "server", req.Server.Name, time.Since(start), err)
 		common.SendError(c, common.NewNotFoundError("flavor"))
@@ -1034,7 +1033,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 		)
 	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt, &locked, &vcpus, &ramMB, &diskGB, &flavorName)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -1166,7 +1165,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	).Scan(&libvirtDomainID, &instanceUserID, &instanceStatus)
 	middleware.LogDatabaseQuery(c, "SELECT libvirt_domain_id", time.Since(queryStart), err)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		logger.Warn().Str("instance_id", instanceID).Msg("Instance not found")
 		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 		common.SendError(c, common.NewNotFoundError("instance"))
@@ -1397,7 +1396,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &instanceStatus)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		log.Warn().Str("instance_id", instanceID).Msg("Instance not found in ServerAction")
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
@@ -1668,7 +1667,7 @@ func (svc *Service) GetFlavor(c *gin.Context) {
 		flavorID,
 	).Scan(&id, &name, &vcpus, &ramMB, &diskGB, &isPublic)
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("flavor"))
 		return
 	}
@@ -2152,7 +2151,7 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 	}
 
 	// Delete all existing metadata then insert new metadata atomically
-	err = database.WithTx(c.Request.Context(), func(tx pgx.Tx) error {
+	err = database.WithTx(c.Request.Context(), func(tx database.Tx) error {
 		if _, err := tx.Exec(c.Request.Context(),
 			"DELETE FROM instance_metadata WHERE instance_id = $1",
 			serverID,
