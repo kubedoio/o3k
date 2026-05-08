@@ -183,7 +183,9 @@ func (svc *Service) GetMetadefNamespace(c *gin.Context) {
 		for rows.Next() {
 			var name string
 			var prefix *string
-			rows.Scan(&name, &prefix)
+			if err := rows.Scan(&name, &prefix); err != nil {
+				continue
+			}
 
 			rt := map[string]interface{}{
 				"name": name,

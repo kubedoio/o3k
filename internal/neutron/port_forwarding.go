@@ -366,7 +366,7 @@ func (svc *Service) UpdatePortForwarding(c *gin.Context) {
 	if needsNATUpdate && routerID.Valid {
 		externalInterface := "qg-ext-" + routerID.String[:7]
 		// Remove old NAT rule
-		svc.routerManager.RemovePortForwarding(
+		_ = svc.routerManager.RemovePortForwarding(
 			routerID.String,
 			floatingIP.String,
 			currentPF.ExternalPort,

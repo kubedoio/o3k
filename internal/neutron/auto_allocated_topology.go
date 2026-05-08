@@ -109,7 +109,7 @@ func (svc *Service) CreateAutoAllocatedTopology(c *gin.Context) {
 		if err := svc.nsManager.CreateNamespace(projectID); err == nil {
 			bridgeName := "br-" + networkID[:8]
 			nsName := svc.nsManager.GetNamespaceName(projectID)
-			svc.brManager.CreateBridge(bridgeName, true, nsName)
+			_ = svc.brManager.CreateBridge(bridgeName, true, nsName)
 		}
 	}
 
@@ -170,7 +170,7 @@ func (svc *Service) DeleteAutoAllocatedTopology(c *gin.Context) {
 	if svc.mode != "stub" {
 		bridgeName := "br-" + networkID[:8]
 		nsName := svc.nsManager.GetNamespaceName(projectID)
-		svc.brManager.DeleteBridge(bridgeName, true, nsName)
+		_ = svc.brManager.DeleteBridge(bridgeName, true, nsName)
 	}
 
 	c.Status(http.StatusNoContent)

@@ -122,7 +122,7 @@ func (svc *Service) ListRouters(c *gin.Context) {
 
 		// Parse external gateway info
 		if gatewayInfo.Valid {
-			json.Unmarshal([]byte(gatewayInfo.String), &r.ExternalGatewayInfo)
+			_ = json.Unmarshal([]byte(gatewayInfo.String), &r.ExternalGatewayInfo)
 		}
 
 		routers = append(routers, gin.H{

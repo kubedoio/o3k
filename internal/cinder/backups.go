@@ -234,15 +234,12 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 	}
 
 	// Get backup details
-	var (
-		originalVolumeID string
-		sizeGB           int
-	)
+	var sizeGB int
 
 	err := svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT volume_id, size_gb FROM volume_backups WHERE id = $1 AND project_id = $2",
 		backupID, projectID,
-	).Scan(&originalVolumeID, &sizeGB)
+	).Scan(new(string), &sizeGB)
 
 	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("backup"))
@@ -255,7 +252,7 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 	}
 
 	// If volume_id specified, restore to existing volume
-	restoredVolumeID := originalVolumeID
+	var restoredVolumeID string
 	if requestedVolumeID != nil {
 		restoredVolumeID = *requestedVolumeID
 

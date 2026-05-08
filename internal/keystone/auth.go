@@ -130,7 +130,6 @@ func (s *ScopeField) UnmarshalJSON(data []byte) error {
 	}
 
 	// Otherwise unmarshal as object
-	type scopeAlias ScopeField
 	var temp struct {
 		Project *struct {
 			Name   string `json:"name"`
@@ -908,8 +907,10 @@ func (s *AuthService) IsTokenRevoked(tokenString string) bool {
 	// Found in DB — check if already expired
 	if time.Now().After(expiresAt) {
 		// Token expired anyway, clean it up from DB asynchronously
-		go db.Exec(context.Background(),
-			"DELETE FROM revoked_tokens WHERE token_hash = $1", hash)
+		go func() {
+			_, _ = db.Exec(context.Background(),
+				"DELETE FROM revoked_tokens WHERE token_hash = $1", hash)
+		}()
 		return false
 	}
 
@@ -931,7 +932,7 @@ func (s *AuthService) CleanExpiredRevocations() {
 
 	// Also clean expired entries from the database
 	if db := s.activeDB(); db != nil {
-		db.Exec(context.Background(),
+		_, _ = db.Exec(context.Background(),
 			"DELETE FROM revoked_tokens WHERE expires_at < $1", now)
 	}
 }
@@ -1049,7 +1050,7 @@ func (s *AuthService) BuildServiceCatalog(projectID string, cacheInstance *cache
 
 	// Store in cache (24h TTL per config)
 	if cacheInstance != nil {
-		cacheInstance.Set(ctx, "service_catalog:"+projectID, catalog, 24*time.Hour)
+		_ = cacheInstance.Set(ctx, "service_catalog:"+projectID, catalog, 24*time.Hour)
 	}
 
 	return catalog

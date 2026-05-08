@@ -1693,7 +1693,7 @@ func (svc *Service) GetFlavor(c *gin.Context) {
 	// Store in cache (24 hour TTL - flavors rarely change)
 	if svc.cache != nil {
 		cacheKey := "flavor:" + id
-		svc.cache.Set(ctx, cacheKey, flavor, 24*time.Hour)
+		_ = svc.cache.Set(ctx, cacheKey, flavor, 24*time.Hour)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"flavor": flavor})

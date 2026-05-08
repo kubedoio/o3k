@@ -35,7 +35,6 @@ func (svc *Service) buildServerUsages(ctx context.Context, projectID, startParam
 		if t, err := time.Parse("2006-01-02T15:04:05.000000", stopParam); err == nil {
 			query += fmt.Sprintf(" AND i.created_at <= $%d", argIdx)
 			args = append(args, t)
-			argIdx++
 		}
 	}
 

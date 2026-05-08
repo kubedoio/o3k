@@ -219,7 +219,7 @@ func generateConsoleToken(instanceID string) string {
 // generateVNCPassword creates a random VNC password
 func generateVNCPassword() string {
 	bytes := make([]byte, 8)
-	rand.Read(bytes)
+	_, _ = rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
 

@@ -333,7 +333,7 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 		common.SendError(c, common.NewInternalServerError("failed to resize instance"))
 		return
 	}
-	defer tx.Rollback(c.Request.Context())
+	defer func() { _ = tx.Rollback(c.Request.Context()) }()
 
 	_, err = tx.Exec(c.Request.Context(), `
 		UPDATE instances
@@ -1028,7 +1028,9 @@ func (svc *Service) CreateBackupAction(c *gin.Context) {
 		for rows.Next() {
 			var id string
 			var createdAt time.Time
-			rows.Scan(&id, &createdAt)
+			if err := rows.Scan(&id, &createdAt); err != nil {
+				continue
+			}
 			backupIDs = append(backupIDs, id)
 		}
 		if err := rows.Err(); err != nil {

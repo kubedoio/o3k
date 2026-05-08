@@ -249,7 +249,7 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		if !ok || roleID == "" {
 			continue
 		}
-		svc.activeDB().Exec(ctx, `
+		_, _ = svc.activeDB().Exec(ctx, `
 			INSERT INTO application_credential_roles (application_credential_id, role_id)
 			VALUES ($1, $2)
 		`, credID, roleID)

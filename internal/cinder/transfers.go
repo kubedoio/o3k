@@ -55,7 +55,7 @@ func (svc *Service) CreateVolumeTransfer(c *gin.Context) {
 
 	// Generate auth key
 	authKeyBytes := make([]byte, 16)
-	rand.Read(authKeyBytes)
+	_, _ = rand.Read(authKeyBytes)
 	authKey := hex.EncodeToString(authKeyBytes)
 
 	transferID := uuid.New().String()

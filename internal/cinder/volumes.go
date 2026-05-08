@@ -261,7 +261,7 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 
 	if err != nil {
 		// Rollback: delete from Ceph
-		svc.cephClient.DeleteVolume(c.Request.Context(), volumeID)
+		_ = svc.cephClient.DeleteVolume(c.Request.Context(), volumeID)
 		log.Error().Err(err).Str("operation", "create_volume_db").Msg("failed to insert volume into database")
 		common.SendError(c, common.NewInternalServerError("failed to create volume"))
 		return
@@ -1287,7 +1287,7 @@ func (svc *Service) CreateSnapshot(c *gin.Context) {
 	`, snapshotID, req.Snapshot.Name, volumeID, projectID, size, "creating", now)
 
 	if err != nil {
-		svc.cephClient.DeleteSnapshot(c.Request.Context(), volumeID, snapshotID)
+		_ = svc.cephClient.DeleteSnapshot(c.Request.Context(), volumeID, snapshotID)
 		log.Error().Err(err).Str("operation", "create_snapshot_db").Msg("failed to insert snapshot into database")
 		common.SendError(c, common.NewInternalServerError("failed to create snapshot"))
 		return
@@ -2218,12 +2218,12 @@ func (svc *Service) GetLimits(c *gin.Context) {
 	// Query current usage from database
 	var volumesUsed, snapshotsUsed, gigabytesUsed int
 
-	svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id = $1 AND status != 'deleted'",
 		projectID,
 	).Scan(&volumesUsed, &gigabytesUsed)
 
-	svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM snapshots WHERE project_id = $1 AND status != 'deleted'",
 		projectID,
 	).Scan(&snapshotsUsed)
@@ -2256,12 +2256,12 @@ func (svc *Service) GetLimitsNoProject(c *gin.Context) {
 	// Query current usage from database
 	var volumesUsed, snapshotsUsed, gigabytesUsed int
 
-	svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id = $1 AND status != 'deleted'",
 		projectID,
 	).Scan(&volumesUsed, &gigabytesUsed)
 
-	svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM snapshots WHERE project_id = $1 AND status != 'deleted'",
 		projectID,
 	).Scan(&snapshotsUsed)

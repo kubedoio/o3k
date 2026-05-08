@@ -706,7 +706,7 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 
 	// Store in cache (30min TTL per config)
 	if svc.cache != nil {
-		svc.cache.Set(ctx, "network:"+id, network, 30*time.Minute)
+		_ = svc.cache.Set(ctx, "network:"+id, network, 30*time.Minute)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"network": network})
@@ -754,7 +754,7 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 	nsName := svc.nsManager.GetNamespaceName(projectID)
 
 	// Delete bridge
-	svc.brManager.DeleteBridge(bridgeName, true, nsName)
+	_ = svc.brManager.DeleteBridge(bridgeName, true, nsName)
 
 	// Delete from database
 	_, err = svc.activeDB().Exec(ctx,
@@ -769,8 +769,8 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 
 	// Invalidate cache
 	if svc.cache != nil {
-		svc.cache.Delete(ctx, "network:"+networkID)
-		svc.cache.DeletePattern(ctx, "networks:*")
+		_ = svc.cache.Delete(ctx, "network:"+networkID)
+		_ = svc.cache.DeletePattern(ctx, "networks:*")
 	}
 
 	c.Status(http.StatusNoContent)
@@ -917,7 +917,7 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 			LeaseTime:      "24h",
 		}
 
-		go svc.dhcpManager.StartDHCP(dhcpConfig, nsName)
+		go func() { _ = svc.dhcpManager.StartDHCP(dhcpConfig, nsName) }()
 	}
 
 	// Calculate allocation pools (entire subnet minus gateway)
@@ -1121,7 +1121,7 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 
 	if err == nil {
 		// Stop DHCP server
-		svc.dhcpManager.StopDHCP(networkID)
+		_ = svc.dhcpManager.StopDHCP(networkID)
 	}
 
 	// Delete from database

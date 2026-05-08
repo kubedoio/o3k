@@ -42,13 +42,6 @@ func isSubcommand(s string) bool {
 	return false
 }
 
-func schemeFromRequest(c *gin.Context) string {
-	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
-		return "https"
-	}
-	return "http"
-}
-
 func main() {
 	if len(os.Args) >= 2 && isSubcommand(os.Args[1]) {
 		switch os.Args[1] {

@@ -523,7 +523,7 @@ func (svc *Service) GetImage(c *gin.Context) {
 
 	// Store in cache (1h TTL per config)
 	if svc.cache != nil {
-		svc.cache.Set(ctx, "image:"+projectID+":"+id, image, 1*time.Hour)
+		_ = svc.cache.Set(ctx, "image:"+projectID+":"+id, image, 1*time.Hour)
 	}
 
 	c.JSON(http.StatusOK, image)
@@ -579,8 +579,8 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 
 	// Invalidate cache
 	if svc.cache != nil {
-		svc.cache.Delete(ctx, "image:"+projectID+":"+imageID)
-		svc.cache.DeletePattern(ctx, "images:*")
+		_ = svc.cache.Delete(ctx, "image:"+projectID+":"+imageID)
+		_ = svc.cache.DeletePattern(ctx, "images:*")
 	}
 
 	c.Status(http.StatusNoContent)
@@ -661,7 +661,7 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 	}
 
 	// Update status to saving
-	svc.activeDB().Exec(c.Request.Context(),
+	_, _ = svc.activeDB().Exec(c.Request.Context(),
 		"UPDATE images SET status = $1, updated_at = $2 WHERE id = $3",
 		"saving", time.Now(), imageID)
 
@@ -671,7 +671,7 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 	limitedBody := io.LimitReader(io.TeeReader(c.Request.Body, h), maxImageUpload)
 	size, err := svc.imageStore.UploadImage(c.Request.Context(), imageID, limitedBody)
 	if err != nil {
-		svc.activeDB().Exec(c.Request.Context(),
+		_, _ = svc.activeDB().Exec(c.Request.Context(),
 			"UPDATE images SET status = $1 WHERE id = $2",
 			"queued", imageID)
 		log.Error().Err(err).Str("operation", "upload_image").Str("image_id", imageID).Msg("failed to upload image to storage")

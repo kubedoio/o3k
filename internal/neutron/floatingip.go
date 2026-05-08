@@ -424,7 +424,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 					rid = rid[:7]
 				}
 				externalInterface := "qg-ext-" + rid
-				svc.routerManager.RemoveFloatingIP(currentRouterID.String, currentFloatingIP.String, currentFixedIP.String, externalInterface)
+				_ = svc.routerManager.RemoveFloatingIP(currentRouterID.String, currentFloatingIP.String, currentFixedIP.String, externalInterface)
 			}
 
 			if shouldDisassociate {
@@ -622,7 +622,7 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, s
 	if err != nil {
 		return "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Get all allocated floating IPs in this external network
 	rows, err := tx.Query(ctx,

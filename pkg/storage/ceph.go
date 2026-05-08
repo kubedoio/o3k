@@ -18,8 +18,8 @@ type CephClient struct {
 	mu       sync.Mutex
 	stubVolumes map[string]*stubVolume // For stub mode
 	localPath   string                 // For local mode
-	conn        interface{}            // Ceph RADOS connection (type depends on build tags)
-	ioctx       interface{}            // RADOS IO context for pool (type depends on build tags)
+	conn        interface{} // Ceph RADOS connection (type depends on build tags) //nolint:unused
+	ioctx       interface{} // RADOS IO context for pool (type depends on build tags) //nolint:unused
 }
 
 // stubVolume represents a simulated volume
@@ -77,7 +77,7 @@ func (c *CephClient) CreateVolume(ctx context.Context, volumeID string, sizeGB i
 		}
 		if err := c.createVolumeRBD(ctx, volumeID, sizeGB); err != nil {
 			// Rollback local creation
-			c.deleteVolumeLocal(ctx, volumeID)
+			_ = c.deleteVolumeLocal(ctx, volumeID)
 			return fmt.Errorf("failed to create RBD volume: %w", err)
 		}
 		return nil

@@ -195,7 +195,7 @@ func (svc *Service) AuthenticateToken(c *gin.Context) {
 	var req AuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// Log parse error with request body
-		c.Error(fmt.Errorf("auth parse failed: %v, body: %s", err, string(bodyBytes)))
+		_ = c.Error(fmt.Errorf("auth parse failed: %v, body: %s", err, string(bodyBytes)))
 		common.SendError(c, common.NewBadRequestError("invalid request body: "+err.Error()))
 		return
 	}
@@ -1151,7 +1151,6 @@ func (svc *Service) ListRoleAssignments(c *gin.Context) {
 	if roleID != "" {
 		query += fmt.Sprintf(" AND ra.role_id = $%d", argIdx)
 		args = append(args, roleID)
-		argIdx++
 	}
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), query, args...)
@@ -1364,7 +1363,6 @@ func (svc *Service) UpdateUser(c *gin.Context) {
 		}
 		updates = append(updates, "password_hash = $"+fmt.Sprint(argIndex))
 		args = append(args, string(hashedBytes))
-		argIndex++
 	}
 
 	if len(updates) == 0 {
