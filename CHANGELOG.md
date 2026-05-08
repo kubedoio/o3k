@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-05-08
+
+### Security Fixes
+- **unrestricted flag enforcement**: App credential restriction now carried in JWT (works across requests)
+- **Access rules service matching**: `service` field in access rules now evaluated (was silently ignored)
+- **Policy engine cycle detection**: Circular rule references return deny instead of crashing
+- **Role validation**: App credential creation validates roles against caller's actual assignments
+- **Empty JWT secret rejected**: Blank secret now blocked in production (not just the placeholder string)
+- **Glance cache key fix**: DeleteImage invalidates the correct cache entry
+
+### Nova
+- Console URL from configured proxy host (not request Host header)
+- Tenant usage honors start/end query parameters
+- Server responses include security_groups, links, root_device_name, launch_index
+
+### Neutron
+- ListPorts uses batch security-group query (was N+1)
+- RemoveRouterInterface returns full response fields
+- CreateRouter does DB insert before namespace creation (rollback safe)
+
+### Cinder
+- availability_zone and encrypted read from DB (were hardcoded)
+- Migration 068 adds columns to volumes table
+
+### Documentation
+- New comprehensive K3s-style deployment guide (docs/DEPLOYMENT_GUIDE.md)
+- Documentation cleanup: removed 30 redundant/internal files
+- README rewritten for clarity
+
+---
+
 ## [0.8.0] - 2026-05-01
 
 ### 🚀 Server/Agent Execution Loop
