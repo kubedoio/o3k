@@ -814,6 +814,22 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		return
 	}
 
+	// Fetch current volume status once for all state-guarded actions
+	var currentStatus string
+	err := svc.activeDB().QueryRow(c.Request.Context(),
+		"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+		volumeID, projectID,
+	).Scan(&currentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		common.SendError(c, common.NewNotFoundError("volume"))
+		return
+	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "volume_action_status").Str("volume_id", volumeID).Msg("failed to query volume status")
+		common.SendError(c, common.NewInternalServerError("failed to query volume"))
+		return
+	}
+
 	// Handle attach action
 	if attachData, ok := req["os-attach"]; ok {
 		attachMap, ok := attachData.(map[string]interface{})
@@ -824,6 +840,16 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		instanceID, ok := attachMap["instance_uuid"].(string)
 		if !ok || instanceID == "" {
 			common.SendError(c, common.NewBadRequestError("instance_uuid is required"))
+			return
+		}
+
+		if currentStatus != "available" {
+			c.JSON(http.StatusConflict, gin.H{
+				"conflictingRequest": gin.H{
+					"message": fmt.Sprintf("Invalid volume: Volume %s status must be available to attach, currently %s.", volumeID, currentStatus),
+					"code":    409,
+				},
+			})
 			return
 		}
 
@@ -846,6 +872,15 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 
 	// Handle detach action
 	if _, ok := req["os-detach"]; ok {
+		if currentStatus != "in-use" {
+			c.JSON(http.StatusConflict, gin.H{
+				"conflictingRequest": gin.H{
+					"message": fmt.Sprintf("Invalid volume: Volume %s status must be in-use to detach, currently %s.", volumeID, currentStatus),
+					"code":    409,
+				},
+			})
+			return
+		}
 		// Update volume to available status
 		_, err := svc.activeDB().Exec(c.Request.Context(), `
 			UPDATE volumes
@@ -870,6 +905,17 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			common.SendError(c, common.NewBadRequestError("invalid os-extend payload"))
 			return
 		}
+
+		if currentStatus != "available" {
+			c.JSON(http.StatusConflict, gin.H{
+				"conflictingRequest": gin.H{
+					"message": fmt.Sprintf("Invalid volume: Volume %s status must be available to extend, currently %s.", volumeID, currentStatus),
+					"code":    409,
+				},
+			})
+			return
+		}
+
 		var newSize int
 
 		// Handle different JSON number types

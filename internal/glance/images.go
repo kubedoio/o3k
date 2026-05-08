@@ -210,9 +210,9 @@ func (svc *Service) CreateImage(c *gin.Context) {
 	// Insert into database
 	now := time.Now()
 	_, err := svc.activeDB().Exec(c.Request.Context(), `
-		INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, min_disk_gb, min_ram_mb, rbd_pool, rbd_image, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, imageID, req.Name, sql.NullString{String: projectID, Valid: visibility == "private"}, "queued", visibility, diskFormat, containerFormat, req.MinDisk, req.MinRAM, svc.cephPool, "image-"+imageID, now, now)
+		INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, min_disk_gb, min_ram_mb, protected, rbd_pool, rbd_image, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, imageID, req.Name, sql.NullString{String: projectID, Valid: visibility == "private"}, "queued", visibility, diskFormat, containerFormat, req.MinDisk, req.MinRAM, req.Protected, svc.cephPool, "image-"+imageID, now, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_image").Msg("failed to insert image into database")
@@ -537,13 +537,13 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 	isAdmin := c.GetBool("is_admin")
 	ctx := c.Request.Context()
 
-	// Check if image exists and determine ownership
+	// Check if image exists and determine ownership + protection status
 	var ownerProjectID sql.NullString
-	var visibility string
+	var protected bool
 	err := svc.activeDB().QueryRow(ctx,
-		"SELECT project_id, visibility FROM images WHERE id = $1",
+		"SELECT project_id, COALESCE(protected, false) FROM images WHERE id = $1",
 		imageID,
-	).Scan(&ownerProjectID, &visibility)
+	).Scan(&ownerProjectID, &protected)
 	if err != nil {
 		common.SendError(c, common.NewNotFoundError("image"))
 		return
@@ -552,6 +552,15 @@ func (svc *Service) DeleteImage(c *gin.Context) {
 	// Only the owner or admin can delete; public visibility does not grant delete access
 	if (!ownerProjectID.Valid || ownerProjectID.String != projectID) && !isAdmin {
 		common.SendError(c, common.NewForbiddenError("you do not have permission to delete this image"))
+		return
+	}
+
+	// Protected images cannot be deleted
+	if protected {
+		c.JSON(http.StatusForbidden, gin.H{
+			"message": fmt.Sprintf("Image %s is protected and cannot be deleted.", imageID),
+			"code":    403,
+		})
 		return
 	}
 

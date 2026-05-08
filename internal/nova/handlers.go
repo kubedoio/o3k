@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1154,20 +1155,32 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 
 	middleware.LogOperationStart(c, "delete", "server", instanceID)
 
-	// Get libvirt domain ID and owner (support lookup by ID or name)
+	// Get libvirt domain ID, status, and owner (support lookup by ID or name)
 	var libvirtDomainID string
 	var instanceUserID sql.NullString
+	var instanceStatus string
 	queryStart := time.Now()
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id, user_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		"SELECT libvirt_domain_id, user_id, status FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
-	).Scan(&libvirtDomainID, &instanceUserID)
+	).Scan(&libvirtDomainID, &instanceUserID, &instanceStatus)
 	middleware.LogDatabaseQuery(c, "SELECT libvirt_domain_id", time.Since(queryStart), err)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		logger.Warn().Str("instance_id", instanceID).Msg("Instance not found")
 		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 		common.SendError(c, common.NewNotFoundError("instance"))
+		return
+	}
+
+	// Reject delete while instance is in BUILD state (use forceDelete action instead)
+	if instanceStatus == "BUILD" || instanceStatus == "BUILDING" {
+		c.JSON(http.StatusConflict, gin.H{
+			"conflictingRequest": gin.H{
+				"message": "Cannot 'delete' instance " + instanceID + " while it is in vm_state building",
+				"code":    409,
+			},
+		})
 		return
 	}
 
@@ -1376,12 +1389,13 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		return
 	}
 
-	// Get libvirt domain ID for remaining actions (support lookup by ID or name)
+	// Get libvirt domain ID and status for remaining actions (support lookup by ID or name)
 	var libvirtDomainID interface{}
+	var instanceStatus string
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		"SELECT libvirt_domain_id, status FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
-	).Scan(&libvirtDomainID)
+	).Scan(&libvirtDomainID, &instanceStatus)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		log.Warn().Str("instance_id", instanceID).Msg("Instance not found in ServerAction")
@@ -1429,10 +1443,28 @@ func (svc *Service) ServerAction(c *gin.Context) {
 					"ACTIVE", time.Now(), instanceID, projectID)
 			}()
 		} else if _, ok := req["os-stop"]; ok {
+			if instanceStatus != "ACTIVE" {
+				c.JSON(http.StatusConflict, gin.H{
+					"conflictingRequest": gin.H{
+						"message": "Cannot 'stop' instance " + instanceID + " while it is in vm_state " + strings.ToLower(instanceStatus),
+						"code":    409,
+					},
+				})
+				return
+			}
 			svc.activeDB().Exec(c.Request.Context(),
 				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
 				"SHUTOFF", 4, time.Now(), instanceID, projectID)
 		} else if _, ok := req["os-start"]; ok {
+			if instanceStatus != "SHUTOFF" {
+				c.JSON(http.StatusConflict, gin.H{
+					"conflictingRequest": gin.H{
+						"message": "Cannot 'start' instance " + instanceID + " while it is in vm_state " + strings.ToLower(instanceStatus),
+						"code":    409,
+					},
+				})
+				return
+			}
 			svc.activeDB().Exec(c.Request.Context(),
 				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
 				"ACTIVE", 1, time.Now(), instanceID, projectID)
@@ -1455,12 +1487,30 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			return
 		}
 	} else if _, ok := req["os-stop"]; ok {
+		if instanceStatus != "ACTIVE" {
+			c.JSON(http.StatusConflict, gin.H{
+				"conflictingRequest": gin.H{
+					"message": "Cannot 'stop' instance " + instanceID + " while it is in vm_state " + strings.ToLower(instanceStatus),
+					"code":    409,
+				},
+			})
+			return
+		}
 		if err := svc.vmManager.StopVM(ctx, libvirtDomainStr); err != nil {
 			log.Error().Err(err).Str("operation", "stop_vm").Msg("libvirt error")
 			common.SendError(c, common.NewInternalServerError("failed to stop server"))
 			return
 		}
 	} else if _, ok := req["os-start"]; ok {
+		if instanceStatus != "SHUTOFF" {
+			c.JSON(http.StatusConflict, gin.H{
+				"conflictingRequest": gin.H{
+					"message": "Cannot 'start' instance " + instanceID + " while it is in vm_state " + strings.ToLower(instanceStatus),
+					"code":    409,
+				},
+			})
+			return
+		}
 		if err := svc.vmManager.StartVM(ctx, libvirtDomainStr); err != nil {
 			log.Error().Err(err).Str("operation", "start_vm").Msg("libvirt error")
 			common.SendError(c, common.NewInternalServerError("failed to start server"))
