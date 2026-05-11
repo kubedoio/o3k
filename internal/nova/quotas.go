@@ -79,13 +79,13 @@ func (svc *Service) GetQuotaSet(c *gin.Context) {
 		return
 	}
 
-	// Calculate compute usage
+	// Calculate compute usage — exclude terminal/error states from quota counts.
 	var instanceCount, coreCount, ramCount int
 	svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT COUNT(*), COALESCE(SUM(f.vcpus), 0), COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id = $1
+		WHERE i.project_id = $1 AND i.status NOT IN ('DELETED', 'SOFT_DELETED', 'ERROR')
 	`, projectID).Scan(&instanceCount, &coreCount, &ramCount)
 
 	// Volume usage

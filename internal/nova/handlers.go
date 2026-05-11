@@ -949,6 +949,9 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			"description":  nil,
 			"tags":         []string{},
 			"key_name":     nullStringToInterface(keyNameDB),
+			"accessIPv4":   "",
+			"accessIPv6":   "",
+			"metadata":     map[string]string{},
 		}
 		if status == "ERROR" {
 			faultMsg := "Server in error state"
@@ -1221,6 +1224,26 @@ func (svc *Service) GetServer(c *gin.Context) {
 	response["security_groups"] = svc.getServerSecurityGroups(c.Request.Context(), id)
 	response["OS-EXT-SRV-ATTR:root_device_name"] = "/dev/vda"
 	response["OS-EXT-SRV-ATTR:launch_index"] = 0
+	response["accessIPv4"] = ""
+	response["accessIPv6"] = ""
+
+	// Fetch instance metadata from DB
+	serverMetadata := make(map[string]string)
+	metaRows, metaErr := svc.activeDB().Query(c.Request.Context(),
+		"SELECT meta_key, meta_value FROM instance_metadata WHERE instance_id = $1",
+		id,
+	)
+	if metaErr == nil {
+		defer metaRows.Close()
+		for metaRows.Next() {
+			var mk, mv string
+			if metaRows.Scan(&mk, &mv) == nil {
+				serverMetadata[mk] = mv
+			}
+		}
+	}
+	response["metadata"] = serverMetadata
+
 	response["links"] = []gin.H{
 		{"rel": "self", "href": fmt.Sprintf("/v2.1/servers/%s", id)},
 		{"rel": "bookmark", "href": fmt.Sprintf("/servers/%s", id)},

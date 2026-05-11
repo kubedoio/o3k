@@ -365,22 +365,24 @@ func (svc *Service) resizeInstance(c *gin.Context, instanceID, projectID, flavor
 		return
 	}
 
-	// In real mode, would rebuild VM with new flavor
-	// For stub mode, auto-confirm after 5 seconds
-	svc.wg.Add(1)
-	go func() {
-		defer svc.wg.Done()
-		select {
-		case <-time.After(5 * time.Second):
-		case <-svc.ctx.Done():
-			return
-		}
-		ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
-		defer cancel()
-		svc.activeDB().Exec(ctx,
-			"UPDATE instances SET status = $1, task_state = $2 WHERE id = $3",
-			"ACTIVE", "", instanceID)
-	}()
+	if svc.libvirtMode == "stub" {
+		// Stub mode: status was already set to VERIFY_RESIZE by the transaction above.
+		// No timer needed — the caller must explicitly confirm or revert.
+	} else {
+		// Real mode: rebuild VM with new flavor, then auto-confirm.
+		svc.wg.Go(func() {
+			select {
+			case <-time.After(5 * time.Second):
+			case <-svc.ctx.Done():
+				return
+			}
+			ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
+			defer cancel()
+			svc.activeDB().Exec(ctx,
+				"UPDATE instances SET status = $1, task_state = $2 WHERE id = $3",
+				"ACTIVE", "", instanceID)
+		})
+	}
 
 	c.Status(http.StatusAccepted)
 }

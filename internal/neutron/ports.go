@@ -1279,6 +1279,25 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 	if req.SecurityGroupRule.RemoteGroupID != nil && *req.SecurityGroupRule.RemoteGroupID != "" {
 		remoteGroup = *req.SecurityGroupRule.RemoteGroupID
 		remoteGroupVal = remoteGroup
+
+		// Verify the remote security group belongs to the same project.
+		var remoteGroupProjectID string
+		err := svc.activeDB().QueryRow(c.Request.Context(),
+			"SELECT project_id FROM security_groups WHERE id = $1",
+			remoteGroup,
+		).Scan(&remoteGroupProjectID)
+		if errors.Is(err, database.ErrNoRows) {
+			common.SendError(c, common.NewNotFoundError("remote security group"))
+			return
+		}
+		if err != nil {
+			common.SendError(c, common.NewInternalServerError("failed to verify remote security group"))
+			return
+		}
+		if remoteGroupProjectID != projectID && !isAdminBool {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Remote security group belongs to another project"})
+			return
+		}
 	}
 
 	etherType := "IPv4"

@@ -938,6 +938,30 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 		gatewayIP = incrementIP(ipNet.IP, 1).String()
 	}
 
+	// Check for CIDR overlap with existing subnets on the same network
+	existingRows, cidrErr := svc.activeDB().Query(c.Request.Context(),
+		"SELECT cidr FROM subnets WHERE network_id = $1",
+		req.Subnet.NetworkID,
+	)
+	if cidrErr == nil {
+		defer existingRows.Close()
+		for existingRows.Next() {
+			var existingCIDR string
+			if scanErr := existingRows.Scan(&existingCIDR); scanErr == nil {
+				if cidrsOverlap(req.Subnet.CIDR, existingCIDR) {
+					c.JSON(http.StatusConflict, gin.H{
+						"NeutronError": gin.H{
+							"message": fmt.Sprintf("Invalid input for operation: Requested subnet with cidr: %s overlaps with another subnet", req.Subnet.CIDR),
+							"type":    "InvalidInput",
+							"detail":  "",
+						},
+					})
+					return
+				}
+			}
+		}
+	}
+
 	// Insert into database
 	now := time.Now()
 	_, err = svc.activeDB().Exec(c.Request.Context(), `
@@ -1391,6 +1415,16 @@ func updateString(updates []string) string {
 		result += update
 	}
 	return result
+}
+
+// cidrsOverlap returns true when two CIDR ranges share any addresses.
+func cidrsOverlap(cidr1, cidr2 string) bool {
+	_, net1, err1 := net.ParseCIDR(cidr1)
+	_, net2, err2 := net.ParseCIDR(cidr2)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return net1.Contains(net2.IP) || net2.Contains(net1.IP)
 }
 
 func generateMAC() string {

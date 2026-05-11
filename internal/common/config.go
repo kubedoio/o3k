@@ -21,6 +21,9 @@ type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Tunnel   TunnelConfig   `yaml:"tunnel"`
 	Tasks    TaskConfig     `yaml:"tasks"`
+	// ZeroConfig is true when the binary started without a config file and
+	// applied built-in defaults (SQLite, stub services, auto-generated secrets).
+	ZeroConfig bool `yaml:"-"`
 }
 
 // TaskConfig holds tuning knobs for the async task worker pool and reconciler.
@@ -72,6 +75,12 @@ type TunnelConfig struct {
 	Port        int    `yaml:"port"`
 	TokenSecret string `yaml:"token_secret"`
 	TokenFile   string `yaml:"token_file"`
+	// TLSDisabled disables TLS on the tunnel gRPC server (development only).
+	// By default TLS is enabled; when TLSCertFile and TLSKeyFile are empty a
+	// self-signed certificate is auto-generated on each startup.
+	TLSDisabled bool   `yaml:"tls_disabled"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 type NeutronConfig struct {

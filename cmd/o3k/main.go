@@ -62,16 +62,108 @@ func main() {
 	runServer(os.Args[1:])
 }
 
+// defaultPorts maps each service to its standard OpenStack port.
+// Used when the config has port=0 (not explicitly set).
+var defaultPorts = struct {
+	Keystone  int
+	Nova      int
+	Neutron   int
+	Cinder    int
+	Glance    int
+	Placement int
+	Metadata  int
+	Tunnel    int
+}{
+	Keystone:  35357,
+	Nova:      8774,
+	Neutron:   9696,
+	Cinder:    8776,
+	Glance:    9292,
+	Placement: 8778,
+	Metadata:  8775,
+	Tunnel:    6443,
+}
+
+// applyPortDefaults fills zero-value service ports.
+// When basePort > 0 the ports are offset from it (K8s-style); otherwise the
+// standard OpenStack port numbers are used.
+func applyPortDefaults(cfg *common.Config, basePort int) {
+	if basePort > 0 {
+		// Offset layout: base+357, base+774, base+696, base+776, base+292, base+778, base+775
+		if cfg.Keystone.Port == 0 {
+			cfg.Keystone.Port = basePort + 357
+		}
+		if cfg.Nova.Port == 0 {
+			cfg.Nova.Port = basePort + 774
+		}
+		if cfg.Neutron.Port == 0 {
+			cfg.Neutron.Port = basePort + 696
+		}
+		if cfg.Cinder.Port == 0 {
+			cfg.Cinder.Port = basePort + 776
+		}
+		if cfg.Glance.Port == 0 {
+			cfg.Glance.Port = basePort + 292
+		}
+		return
+	}
+	if cfg.Keystone.Port == 0 {
+		cfg.Keystone.Port = defaultPorts.Keystone
+	}
+	if cfg.Nova.Port == 0 {
+		cfg.Nova.Port = defaultPorts.Nova
+	}
+	if cfg.Neutron.Port == 0 {
+		cfg.Neutron.Port = defaultPorts.Neutron
+	}
+	if cfg.Cinder.Port == 0 {
+		cfg.Cinder.Port = defaultPorts.Cinder
+	}
+	if cfg.Glance.Port == 0 {
+		cfg.Glance.Port = defaultPorts.Glance
+	}
+}
+
 func runServer(args []string) {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := fs.String("config", "config/o3k.yaml", "Path to configuration file")
 	migrationsPath := fs.String("migrations", "migrations", "Path to migrations directory")
+	datastoreFlag := fs.String("datastore", "", "Database backend: sqlite (default, zero-config) or postgres")
+	dbURLFlag := fs.String("db-url", "", "Database URL for postgres datastore (overrides DATABASE_URL env var)")
+	portFlag := fs.Int("port", 0, "Base port for all services (0 = standard OpenStack ports: Keystone 35357, Nova 8774, …)")
 	_ = fs.Parse(args)
 
 	// Load configuration (file not found = zero-config mode, returns empty Config).
 	cfg, err := common.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// CLI flags override config-file values.
+	// --db-url sets the postgres connection string.
+	if *dbURLFlag != "" {
+		cfg.Database.URL = *dbURLFlag
+		cfg.Database.Datastore = *dbURLFlag
+	}
+	// --datastore sqlite|postgres overrides config when explicitly set.
+	if *datastoreFlag != "" {
+		switch *datastoreFlag {
+		case "sqlite":
+			// Force zero-config SQLite path; clear any postgres URL from config.
+			cfg.Database.Datastore = ""
+			cfg.Database.URL = ""
+		case "postgres":
+			// Require a connection URL from --db-url, O3K_DB_URL, or DATABASE_URL.
+			if cfg.Database.Datastore == "" && cfg.Database.URL == "" {
+				pgURL := os.Getenv("DATABASE_URL")
+				if pgURL == "" {
+					log.Fatalf("--datastore postgres requires --db-url, O3K_DB_URL, or DATABASE_URL env var")
+				}
+				cfg.Database.URL = pgURL
+			}
+		default:
+			log.Fatalf("--datastore must be 'sqlite' or 'postgres', got %q", *datastoreFlag)
+		}
 	}
 
 	// Validate configuration before bootstrapping anything.
@@ -87,6 +179,7 @@ func runServer(args []string) {
 		datastore = cfg.Database.URL
 	}
 	if datastore == "" {
+		cfg.ZeroConfig = true
 		var bsErr error
 		bootstrapResult, bsErr = server.Bootstrap()
 		if bsErr != nil {
@@ -99,23 +192,36 @@ func runServer(args []string) {
 			cfg.Keystone.JWTSecret = bootstrapResult.JWTSecret
 		}
 
+		keystonePort := cfg.Keystone.Port
+		if keystonePort == 0 {
+			if *portFlag > 0 {
+				keystonePort = *portFlag + 357
+			} else {
+				keystonePort = defaultPorts.Keystone
+			}
+		}
 		fmt.Println("═══════════════════════════════════════════")
 		fmt.Println("  O3K — OpenStack in a single binary")
 		fmt.Println("═══════════════════════════════════════════")
+		fmt.Printf("  Mode:     zero-config (SQLite, stub services)\n")
 		fmt.Printf("  Data:     %s\n", bootstrapResult.DataDir)
 		fmt.Printf("  Database: SQLite (embedded)\n")
-		fmt.Printf("  API:      http://localhost:35357/v3\n")
+		fmt.Printf("  API:      http://localhost:%d/v3\n", keystonePort)
 		fmt.Printf("  User:     admin\n")
 		fmt.Printf("  Password: %s\n", bootstrapResult.AdminPassword)
 		fmt.Println("───────────────────────────────────────────")
+		fmt.Printf("  Use --config to customize. Set O3K_JWT_SECRET for persistent auth.\n")
 		fmt.Printf("  Join agents: o3k agent --server http://<this-ip>:6443 --token %s\n", bootstrapResult.AgentToken)
 		fmt.Println("═══════════════════════════════════════════")
 	}
 
+	// Apply port defaults (after bootstrap so the banner can show the right port).
+	applyPortDefaults(cfg, *portFlag)
+
 	// In zero-config mode, always start the tunnel hub on default port with the bootstrap token.
 	if bootstrapResult != nil {
 		if cfg.Tunnel.Port == 0 {
-			cfg.Tunnel.Port = 6443
+			cfg.Tunnel.Port = defaultPorts.Tunnel
 		}
 		if cfg.Tunnel.TokenSecret == "" {
 			cfg.Tunnel.TokenSecret = bootstrapResult.AgentToken
@@ -123,6 +229,8 @@ func runServer(args []string) {
 	}
 
 	// Validate JWT secret now that bootstrap may have set it.
+	// In zero-config (SQLite) mode the secret was auto-generated above, so this
+	// check only fires for postgres/explicit-config mode without a proper secret.
 	if cfg.Keystone.JWTSecret == "" || cfg.Keystone.JWTSecret == "change-me-in-production" || len(cfg.Keystone.JWTSecret) < 32 {
 		env := os.Getenv("O3K_ENV")
 		if env != "development" && env != "test" {
@@ -224,6 +332,16 @@ func runServer(args []string) {
 			}
 		}
 		hub = tunnel.NewHub(tokenSecret)
+
+		// TLS is on by default; set tls_disabled=true in config to run plaintext (dev only).
+		if !cfg.Tunnel.TLSDisabled {
+			tlsCfg, tlsErr := tunnel.HubTLSConfig(cfg.Tunnel.TLSCertFile, cfg.Tunnel.TLSKeyFile)
+			if tlsErr != nil {
+				log.Fatalf("tunnel TLS setup failed: %v", tlsErr)
+			}
+			hub.SetTLSConfig(tlsCfg)
+		}
+
 		go func() {
 			addr := fmt.Sprintf(":%d", cfg.Tunnel.Port)
 			if err := hub.ListenAndServe(addr); err != nil {
@@ -252,6 +370,11 @@ func runServer(args []string) {
 	// Initialize services
 	authService := keystone.NewAuthService(cfg.Keystone.JWTSecret, cfg.Keystone.TokenTTL, cacheInstance)
 	keystoneService := keystone.NewService(authService, cacheInstance)
+
+	// Rate-limit token creation: 10 requests per minute per IP (brute-force protection).
+	keystoneService.SetAuthRateLimiter(
+		middleware.RateLimitMiddleware(middleware.NewRateLimiter(10, time.Minute)),
+	)
 
 	// Load policy rules from DB (best-effort; table may not exist before migration 067)
 	if err := keystoneService.LoadPoliciesFromDB(ctx); err != nil {
@@ -383,8 +506,16 @@ func runServer(args []string) {
 	)
 	log.Printf("Glance initialized in %s mode", glanceStorageMode)
 
+	// Metadata and Placement ports are not in Config yet; use defaults.
+	metadataPort := defaultPorts.Metadata
+	placementPort := defaultPorts.Placement
+	if *portFlag > 0 {
+		metadataPort = *portFlag + 775
+		placementPort = *portFlag + 778
+	}
+
 	// Initialize metadata service
-	metadataService := metadata.NewService("localhost:8775")
+	metadataService := metadata.NewService(fmt.Sprintf("localhost:%d", metadataPort))
 	log.Println("Metadata service initialized")
 
 	// Initialize placement service
@@ -398,8 +529,8 @@ func runServer(args []string) {
 		createNeutronServer(cfg, neutronService, authService),
 		createCinderServer(cfg, cinderService, authService),
 		createGlanceServer(cfg, glanceService, authService),
-		createPlacementServer(cfg, placementService, authService),
-		createMetadataServer(cfg, metadataService),
+		createPlacementServer(cfg, placementService, authService, placementPort),
+		createMetadataServer(cfg, metadataService, metadataPort),
 	}
 
 	// Channel for shutdown signaling (from OS signals or server failures)
@@ -419,13 +550,13 @@ func runServer(args []string) {
 	}
 
 	log.Println("O3K started successfully")
-	log.Println("  - Keystone (Identity):    http://localhost:35357/v3")
-	log.Println("  - Nova (Compute):         http://localhost:8774/v2.1")
-	log.Println("  - Neutron (Network):      http://localhost:9696/v2.0")
-	log.Println("  - Cinder (Block Storage): http://localhost:8776/v3")
-	log.Println("  - Glance (Image):         http://localhost:9292/v2")
-	log.Println("  - Placement:              http://localhost:8778")
-	log.Println("  - Metadata Service:       http://localhost:8775")
+	log.Printf("  - Keystone (Identity):    http://localhost:%d/v3", cfg.Keystone.Port)
+	log.Printf("  - Nova (Compute):         http://localhost:%d/v2.1", cfg.Nova.Port)
+	log.Printf("  - Neutron (Network):      http://localhost:%d/v2.0", cfg.Neutron.Port)
+	log.Printf("  - Cinder (Block Storage): http://localhost:%d/v3", cfg.Cinder.Port)
+	log.Printf("  - Glance (Image):         http://localhost:%d/v2", cfg.Glance.Port)
+	log.Printf("  - Placement:              http://localhost:%d", placementPort)
+	log.Printf("  - Metadata Service:       http://localhost:%d", metadataPort)
 
 	// Wait for shutdown signal
 	<-quit
@@ -471,6 +602,7 @@ func runAgent(args []string) {
 	tokenFile := fs.String("token-file", "", "path to file containing join token")
 	nodeIDFile := fs.String("node-id-file", "", "path to persist node UUID (default: {data-dir}/agent/node-id)")
 	mode := fs.String("mode", "stub", "compute mode: stub or real")
+	tunnelTLS := fs.Bool("tunnel-tls", true, "use TLS when connecting to the hub (set false for plaintext dev mode)")
 	_ = fs.Parse(args)
 
 	if *serverAddr == "" {
@@ -520,6 +652,18 @@ func runAgent(args []string) {
 	fmt.Println("═══════════════════════════════════════════")
 
 	client := tunnel.NewAgentClientWithExecutor(*serverAddr, nodeID, tokenHash, *mode)
+
+	// Configure TLS for the agent when tunnel-tls is enabled (default true).
+	// The agent uses InsecureSkipVerify because the server uses a self-signed cert.
+	// For production, pass a CA cert file via --tunnel-ca instead (future work).
+	if *tunnelTLS {
+		tlsCfg, tlsErr := tunnel.AgentTLSConfig()
+		if tlsErr != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: tunnel TLS config: %v\n", tlsErr)
+			os.Exit(1)
+		}
+		client.SetTLSConfig(tlsCfg)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -754,7 +898,7 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	}
 }
 
-func createPlacementServer(cfg *common.Config, svc *placement.Service, authService *keystone.AuthService) *http.Server {
+func createPlacementServer(cfg *common.Config, svc *placement.Service, authService *keystone.AuthService, port int) *http.Server {
 	r := gin.New()
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
@@ -772,7 +916,7 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:         common.BindAddress(cfg, 8778),
+		Addr:         common.BindAddress(cfg, port),
 		Handler:      r,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
@@ -780,7 +924,7 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	}
 }
 
-func createMetadataServer(cfg *common.Config, svc *metadata.Service) *http.Server {
+func createMetadataServer(cfg *common.Config, svc *metadata.Service, port int) *http.Server {
 	r := gin.New()
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
@@ -797,7 +941,7 @@ func createMetadataServer(cfg *common.Config, svc *metadata.Service) *http.Serve
 	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
-		Addr:         common.BindAddress(cfg, 8775),
+		Addr:         common.BindAddress(cfg, port),
 		Handler:      r,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,

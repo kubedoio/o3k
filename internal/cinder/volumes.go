@@ -233,29 +233,50 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 		return
 	}
 
-	// Enforce project quota before allocating storage
+	// Enforce project quota before allocating storage.
+	// Quota check and INSERT are done inside a transaction to prevent two concurrent
+	// requests from both passing the check and both creating a volume.
 	const defaultMaxVolumes = 10
 	const defaultMaxGigabytes = 1000
 
-	var quotaVolumes, quotaGigabytes int
-	var usedCount int
-	var usedGB int
+	// Resolve volume_type: use request value or default
+	volumeType := req.Volume.VolumeType
+	if volumeType == "" {
+		volumeType = "__DEFAULT__"
+	}
 
-	// Load per-project quota limits (fall back to defaults when absent)
-	rowV := svc.activeDB().QueryRow(c.Request.Context(),
+	availabilityZone := req.Volume.AvailabilityZone
+	if availabilityZone == "" {
+		availabilityZone = "nova"
+	}
+	encrypted := req.Volume.Encrypted
+	now := time.Now()
+
+	tx, err := svc.activeDB().BeginTx(c.Request.Context(), database.TxOptions{})
+	if err != nil {
+		log.Error().Err(err).Str("operation", "create_volume_begin_tx").Msg("failed to begin transaction")
+		common.SendError(c, common.NewInternalServerError("failed to create volume"))
+		return
+	}
+	defer tx.Rollback(c.Request.Context()) //nolint:errcheck
+
+	// Load per-project quota limits inside the transaction (fall back to defaults).
+	var quotaVolumes, quotaGigabytes int
+	if err := tx.QueryRow(c.Request.Context(),
 		`SELECT "limit" FROM cinder_quotas WHERE project_id = $1 AND resource = 'volumes'`,
-		projectID)
-	if err := rowV.Scan(&quotaVolumes); err != nil {
+		projectID,
+	).Scan(&quotaVolumes); err != nil {
 		quotaVolumes = defaultMaxVolumes
 	}
-	rowG := svc.activeDB().QueryRow(c.Request.Context(),
+	if err := tx.QueryRow(c.Request.Context(),
 		`SELECT "limit" FROM cinder_quotas WHERE project_id = $1 AND resource = 'gigabytes'`,
-		projectID)
-	if err := rowG.Scan(&quotaGigabytes); err != nil {
+		projectID,
+	).Scan(&quotaGigabytes); err != nil {
 		quotaGigabytes = defaultMaxGigabytes
 	}
 
-	if err := svc.activeDB().QueryRow(c.Request.Context(),
+	var usedCount, usedGB int
+	if err := tx.QueryRow(c.Request.Context(),
 		`SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id = $1 AND status != 'deleted'`,
 		projectID,
 	).Scan(&usedCount, &usedGB); err != nil {
@@ -273,37 +294,31 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 		return
 	}
 
-	// Create RBD volume in Ceph
-	if err := svc.cephClient.CreateVolume(c.Request.Context(), volumeID, req.Volume.Size); err != nil {
-		log.Error().Err(err).Str("operation", "create_volume_ceph").Msg("failed to create volume in Ceph")
-		common.SendError(c, common.NewServiceUnavailableError("failed to create volume in Ceph"))
+	// Insert volume record within the same transaction so the quota check and
+	// row creation are atomic.
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO volumes (id, name, project_id, user_id, size_gb, status, bootable, volume_type, rbd_pool, rbd_image, availability_zone, encrypted, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, volumeID, req.Volume.Name, projectID, userID, req.Volume.Size, "creating", false, volumeType, svc.cephPool, "volume-"+volumeID, availabilityZone, encrypted, now, now); err != nil {
+		log.Error().Err(err).Str("operation", "create_volume_db").Msg("failed to insert volume into database")
+		common.SendError(c, common.NewInternalServerError("failed to create volume"))
 		return
 	}
 
-	// Resolve volume_type: use request value or default
-	volumeType := req.Volume.VolumeType
-	if volumeType == "" {
-		volumeType = "__DEFAULT__"
-	}
-
-	availabilityZone := req.Volume.AvailabilityZone
-	if availabilityZone == "" {
-		availabilityZone = "nova"
-	}
-	encrypted := req.Volume.Encrypted
-
-	// Insert into database
-	now := time.Now()
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
-		INSERT INTO volumes (id, name, project_id, user_id, size_gb, status, bootable, volume_type, rbd_pool, rbd_image, availability_zone, encrypted, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`, volumeID, req.Volume.Name, projectID, userID, req.Volume.Size, "creating", false, volumeType, svc.cephPool, "volume-"+volumeID, availabilityZone, encrypted, now, now)
-
-	if err != nil {
-		// Rollback: delete from Ceph
-		_ = svc.cephClient.DeleteVolume(c.Request.Context(), volumeID)
-		log.Error().Err(err).Str("operation", "create_volume_db").Msg("failed to insert volume into database")
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		log.Error().Err(err).Str("operation", "create_volume_commit").Msg("failed to commit volume creation")
 		common.SendError(c, common.NewInternalServerError("failed to create volume"))
+		return
+	}
+
+	// Create RBD volume in Ceph after the DB row is committed.
+	// On Ceph failure, the DB row stays in 'creating'; an operator can clean it up.
+	if err := svc.cephClient.CreateVolume(c.Request.Context(), volumeID, req.Volume.Size); err != nil {
+		log.Error().Err(err).Str("operation", "create_volume_ceph").Msg("failed to create volume in Ceph")
+		// Best-effort cleanup of the committed DB row.
+		svc.activeDB().Exec(c.Request.Context(),
+			"DELETE FROM volumes WHERE id = $1", volumeID)
+		common.SendError(c, common.NewServiceUnavailableError("failed to create volume in Ceph"))
 		return
 	}
 

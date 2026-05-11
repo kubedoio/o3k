@@ -18,9 +18,10 @@ import (
 
 // Service handles Keystone API endpoints
 type Service struct {
-	authService *AuthService
-	cache       *cache.Cache
-	db          database.DBIF
+	authService    *AuthService
+	cache          *cache.Cache
+	db             database.DBIF
+	authRateLimiter gin.HandlerFunc // applied only to POST /v3/auth/tokens; nil means no limit
 }
 
 // requireAdmin returns true if the caller has the admin role, and writes a 403 if not.
@@ -56,6 +57,12 @@ func NewServiceWithDB(db database.DBIF, authService *AuthService, cacheInstance 
 	return svc
 }
 
+// SetAuthRateLimiter attaches a rate-limit middleware to POST /v3/auth/tokens.
+// Call before RegisterRoutes. Pass nil to disable (default).
+func (svc *Service) SetAuthRateLimiter(h gin.HandlerFunc) {
+	svc.authRateLimiter = h
+}
+
 // activeDB returns the injected DB or falls back to the global.
 func (svc *Service) activeDB() database.DBIF {
 	if svc.db != nil {
@@ -73,7 +80,12 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup, adminMiddleware ...gin.Ha
 		v3.GET("", svc.GetVersion)
 
 		// Authentication (unauthenticated — AuthMiddleware skips POST /v3/auth/tokens)
-		v3.POST("/auth/tokens", svc.AuthenticateToken)
+		// Rate limiting is applied to token creation only (brute-force protection).
+		if svc.authRateLimiter != nil {
+			v3.POST("/auth/tokens", svc.authRateLimiter, svc.AuthenticateToken)
+		} else {
+			v3.POST("/auth/tokens", svc.AuthenticateToken)
+		}
 		v3.GET("/auth/tokens", svc.ValidateToken)
 		v3.DELETE("/auth/tokens", svc.RevokeToken)
 		v3.GET("/auth/projects", svc.ListAuthProjects)
@@ -632,6 +644,11 @@ func (svc *Service) ListProjects(c *gin.Context) {
 			"description": description,
 			"enabled":     enabled,
 			"domain_id":   domainID,
+			"is_domain":   false,
+			"parent_id":   "default",
+			"tags":        []string{},
+			"options":     map[string]interface{}{},
+			"links":       gin.H{"self": "/v3/projects/" + id},
 		})
 	}
 
@@ -675,6 +692,11 @@ func (svc *Service) GetProject(c *gin.Context) {
 		"description": description,
 		"enabled":     enabled,
 		"domain_id":   domainID,
+		"is_domain":   false,
+		"parent_id":   "default",
+		"tags":        []string{},
+		"options":     map[string]interface{}{},
+		"links":       gin.H{"self": "/v3/projects/" + id},
 	}})
 }
 
@@ -731,6 +753,10 @@ func (svc *Service) CreateProject(c *gin.Context) {
 		"description": req.Project.Description,
 		"domain_id":   domainID,
 		"enabled":     enabled,
+		"is_domain":   false,
+		"parent_id":   "default",
+		"tags":        []string{},
+		"options":     map[string]interface{}{},
 		"links": gin.H{
 			"self": c.Request.Host + "/v3/projects/" + projectID,
 		},
@@ -813,6 +839,10 @@ func (svc *Service) UpdateProject(c *gin.Context) {
 		"description": description,
 		"domain_id":   domainID,
 		"enabled":     enabled,
+		"is_domain":   false,
+		"parent_id":   "default",
+		"tags":        []string{},
+		"options":     map[string]interface{}{},
 		"links": gin.H{
 			"self": c.Request.Host + "/v3/projects/" + projectID,
 		},
@@ -1079,6 +1109,21 @@ func (svc *Service) UnassignRole(c *gin.Context) {
 func (svc *Service) ListUserProjectRoles(c *gin.Context) {
 	projectID := c.Param("id")
 	userID := c.Param("user_id")
+
+	// Non-admin callers may only inspect their own roles within their own project.
+	callerProjectID := c.GetString("project_id")
+	callerUserID := c.GetString("user_id")
+	isAdmin := c.GetBool("is_admin")
+	if !isAdmin {
+		if projectID != callerProjectID {
+			common.SendError(c, common.NewForbiddenError("cannot list roles for another project"))
+			return
+		}
+		if userID != callerUserID {
+			common.SendError(c, common.NewForbiddenError("cannot list roles for another user"))
+			return
+		}
+	}
 
 	rows, err := svc.activeDB().Query(c.Request.Context(),
 		`SELECT r.id, r.name
