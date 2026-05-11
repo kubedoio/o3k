@@ -218,9 +218,23 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 	callerProjectID := c.GetString("project_id")
 	for _, role := range req.ApplicationCredential.Roles {
 		roleID, _ := role["id"].(string)
+		roleName, _ := role["name"].(string)
+
+		// If no ID provided, look up by name
 		if roleID == "" {
-			continue
+			if roleName == "" {
+				common.SendError(c, common.NewBadRequestError("role must have id or name"))
+				return
+			}
+			err := svc.activeDB().QueryRow(ctx,
+				`SELECT id FROM roles WHERE name = $1`, roleName,
+			).Scan(&roleID)
+			if err != nil {
+				common.SendError(c, common.NewNotFoundError("role"))
+				return
+			}
 		}
+
 		var exists bool
 		err := svc.activeDB().QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM role_assignments WHERE user_id=$1 AND project_id=$2 AND role_id=$3)`,

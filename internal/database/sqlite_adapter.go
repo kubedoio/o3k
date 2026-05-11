@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, no CGO required
@@ -172,3 +175,103 @@ func (t *sqlTx) Query(ctx context.Context, query string, args ...any) (Rows, err
 
 func (t *sqlTx) Commit(_ context.Context) error   { return t.tx.Commit() }
 func (t *sqlTx) Rollback(_ context.Context) error { return t.tx.Rollback() }
+
+// migrationVersionRegex extracts the numeric prefix from migration filenames like "001_initial_schema.up.sql".
+var migrationVersionRegex = regexp.MustCompile(`^(\d+)_.+\.up\.sql$`)
+
+// MigrateSQLite applies SQLite migration files from {migrationsPath}/sqlite/ in sorted order.
+// It tracks applied migrations in a schema_migrations table and is idempotent.
+func MigrateSQLite(migrationsPath string) error {
+	adapter, ok := DB.(*SQLiteAdapter)
+	if !ok {
+		return fmt.Errorf("MigrateSQLite called but DB is not SQLite")
+	}
+	db := adapter.db
+
+	sqliteDir := filepath.Join(migrationsPath, "sqlite")
+	if _, err := os.Stat(sqliteDir); os.IsNotExist(err) {
+		return fmt.Errorf("sqlite migrations directory does not exist: %s", sqliteDir)
+	}
+
+	// Create schema_migrations tracking table if not exists.
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version TEXT PRIMARY KEY,
+		applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
+	}
+
+	// Read migration files.
+	entries, err := os.ReadDir(sqliteDir)
+	if err != nil {
+		return fmt.Errorf("read sqlite migrations directory: %w", err)
+	}
+
+	// Filter and sort *.up.sql files by numeric version prefix.
+	type migration struct {
+		version  string
+		filename string
+	}
+	var migrations []migration
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matches := migrationVersionRegex.FindStringSubmatch(entry.Name())
+		if matches == nil {
+			continue
+		}
+		migrations = append(migrations, migration{version: matches[1], filename: entry.Name()})
+	}
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].version < migrations[j].version
+	})
+
+	// Apply each migration that hasn't been applied yet.
+	applied := 0
+	for _, m := range migrations {
+		var exists string
+		err := db.QueryRow("SELECT version FROM schema_migrations WHERE version = ?", m.version).Scan(&exists)
+		if err == nil {
+			// Already applied.
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check migration %s: %w", m.version, err)
+		}
+
+		// Read and execute migration inside a transaction.
+		content, err := os.ReadFile(filepath.Join(sqliteDir, m.filename))
+		if err != nil {
+			return fmt.Errorf("read migration file %s: %w", m.filename, err)
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin transaction for migration %s: %w", m.version, err)
+		}
+
+		if _, err := tx.Exec(string(content)); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("execute migration %s: %w", m.version, err)
+		}
+
+		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", m.version); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %s: %w", m.version, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %s: %w", m.version, err)
+		}
+		applied++
+	}
+
+	if applied == 0 {
+		fmt.Println("SQLite database is already up to date")
+	} else {
+		fmt.Printf("Applied %d SQLite migration(s)\n", applied)
+	}
+	return nil
+}
