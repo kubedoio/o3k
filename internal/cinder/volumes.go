@@ -777,14 +777,7 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 		}
 	}
 
-	// Delete from Ceph
-	if err := svc.cephClient.DeleteVolume(c.Request.Context(), actualVolumeID); err != nil {
-		log.Error().Err(err).Str("operation", "delete_volume_ceph").Str("volume_id", actualVolumeID).Msg("failed to delete volume from Ceph")
-		common.SendError(c, common.NewServiceUnavailableError("failed to delete volume from Ceph"))
-		return
-	}
-
-	// Delete from database
+	// Delete from database first (recoverable if Ceph cleanup fails)
 	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM volumes WHERE id = $1 AND project_id = $2",
 		actualVolumeID, projectID,
@@ -793,6 +786,11 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 		log.Error().Err(err).Str("operation", "delete_volume_db").Str("volume_id", volumeID).Msg("failed to delete volume from database")
 		common.SendError(c, common.NewInternalServerError("failed to delete volume"))
 		return
+	}
+
+	// Clean up Ceph (best-effort — orphaned backend data is preferable to data loss)
+	if err := svc.cephClient.DeleteVolume(c.Request.Context(), actualVolumeID); err != nil {
+		log.Error().Err(err).Str("operation", "delete_volume_ceph").Str("volume_id", actualVolumeID).Msg("failed to delete volume from Ceph (orphaned)")
 	}
 
 	c.Status(http.StatusNoContent)
@@ -813,12 +811,13 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		return
 	}
 
-	// Fetch current volume status once for all state-guarded actions
+	// Fetch current volume status and size once for all state-guarded actions
 	var currentStatus string
+	var currentSizeGB int
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+		"SELECT status, size_gb FROM volumes WHERE id = $1 AND project_id = $2",
 		volumeID, projectID,
-	).Scan(&currentStatus)
+	).Scan(&currentStatus, &currentSizeGB)
 	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("volume"))
 		return
@@ -942,6 +941,12 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			newSize = parsed
 		default:
 			common.SendError(c, common.NewBadRequestError(fmt.Sprintf("invalid new_size type: %T", newSizeVal)))
+			return
+		}
+
+		if newSize <= currentSizeGB {
+			common.SendError(c, common.NewBadRequestError(
+				fmt.Sprintf("New size must be greater than current size (%d GB)", currentSizeGB)))
 			return
 		}
 
@@ -1259,16 +1264,27 @@ func (svc *Service) CreateSnapshot(c *gin.Context) {
 	}
 	snapshotID := uuid.New().String()
 
-	// Get volume info
+	// Get volume info and verify status allows snapshotting
 	var volumeID string
 	var size int
+	var volStatus string
 	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id, size_gb FROM volumes WHERE id = $1 AND project_id = $2",
+		"SELECT id, size_gb, status FROM volumes WHERE id = $1 AND project_id = $2",
 		req.Snapshot.VolumeID, projectID,
-	).Scan(&volumeID, &size)
+	).Scan(&volumeID, &size, &volStatus)
 
 	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("volume"))
+		return
+	}
+	if err != nil {
+		log.Error().Err(err).Str("operation", "create_snapshot_query_vol").Str("volume_id", req.Snapshot.VolumeID).Msg("failed to query volume")
+		common.SendError(c, common.NewInternalServerError("failed to query volume"))
+		return
+	}
+	if volStatus != "available" && volStatus != "in-use" {
+		common.SendError(c, common.NewConflictError(
+			fmt.Sprintf("Volume %s status must be available or in-use to snapshot, currently %s", req.Snapshot.VolumeID, volStatus)))
 		return
 	}
 
@@ -1526,14 +1542,7 @@ func (svc *Service) DeleteSnapshot(c *gin.Context) {
 		return
 	}
 
-	// Delete from Ceph
-	if err := svc.cephClient.DeleteSnapshot(c.Request.Context(), volumeID, snapshotID); err != nil {
-		log.Error().Err(err).Str("operation", "delete_snapshot_ceph").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot from Ceph")
-		common.SendError(c, common.NewServiceUnavailableError("failed to delete snapshot"))
-		return
-	}
-
-	// Delete from database
+	// Delete from database first (recoverable if Ceph cleanup fails)
 	_, err = svc.activeDB().Exec(c.Request.Context(),
 		"DELETE FROM snapshots WHERE id = $1 AND project_id = $2",
 		snapshotID, projectID,
@@ -1542,6 +1551,11 @@ func (svc *Service) DeleteSnapshot(c *gin.Context) {
 		log.Error().Err(err).Str("operation", "delete_snapshot_db").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot from database")
 		common.SendError(c, common.NewInternalServerError("failed to delete snapshot"))
 		return
+	}
+
+	// Clean up Ceph (best-effort — orphaned backend data is preferable to data loss)
+	if err := svc.cephClient.DeleteSnapshot(c.Request.Context(), volumeID, snapshotID); err != nil {
+		log.Error().Err(err).Str("operation", "delete_snapshot_ceph").Str("snapshot_id", snapshotID).Msg("failed to delete snapshot from Ceph (orphaned)")
 	}
 
 	c.Status(http.StatusNoContent)

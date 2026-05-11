@@ -4,10 +4,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
 // StageImageData stages image data before import
@@ -38,15 +39,25 @@ func (svc *Service) StageImageData(c *gin.Context) {
 		return
 	}
 
-	// Read staged data with size limit (5GB max)
-	const maxUploadSize = 5 * 1024 * 1024 * 1024
+	// Stream staged data with size limit (5GB max)
+	const maxUploadSize int64 = 5 * 1024 * 1024 * 1024
 	limitedReader := io.LimitReader(c.Request.Body, maxUploadSize+1)
-	stagedData, err := io.ReadAll(limitedReader)
+
+	// Stream to temp file to avoid holding entire image in memory
+	tmpFile, err := os.CreateTemp("", "o3k-stage-*")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to create staging file"})
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	written, err := io.Copy(tmpFile, limitedReader)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Failed to read image data"})
 		return
 	}
-	if int64(len(stagedData)) > maxUploadSize {
+	if written > maxUploadSize {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "Image data exceeds maximum upload size"})
 		return
 	}
@@ -56,16 +67,12 @@ func (svc *Service) StageImageData(c *gin.Context) {
 		UPDATE images
 		SET status = $1, size_bytes = $2, updated_at = $3
 		WHERE id = $4
-	`, "uploading", len(stagedData), time.Now(), imageID)
+	`, "uploading", written, time.Now(), imageID)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-
-	// In stub mode, data is discarded
-	// In real mode, would save to staging location
-	_ = stagedData
 
 	c.Status(http.StatusNoContent)
 }

@@ -257,6 +257,14 @@ func (svc *Service) ValidateToken(c *gin.Context) {
 		return
 	}
 
+	// Only the token owner or an admin can validate/inspect a token
+	callerID := c.GetString("user_id")
+	isAdmin := c.GetBool("is_admin")
+	if callerID != claims.UserID && !isAdmin {
+		common.SendError(c, common.NewForbiddenError("you are not authorized to validate this token"))
+		return
+	}
+
 	// Build full token response (same structure as POST /v3/auth/tokens)
 	tokenResp := gin.H{
 		"methods":    []string{"token"},

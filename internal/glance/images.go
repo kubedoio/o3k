@@ -291,16 +291,27 @@ func (svc *Service) ListImages(c *gin.Context) {
 			conditions = append(conditions, fmt.Sprintf("(visibility = 'private' AND project_id = $%d)", argIdx))
 			queryArgs = append(queryArgs, projectID)
 			argIdx++
-		default:
-			// shared, community, or unknown: show what the project can see
-			conditions = append(conditions, fmt.Sprintf("(visibility = 'public' OR project_id = $%d)", argIdx))
+		case "shared":
+			conditions = append(conditions, fmt.Sprintf(
+				"(id IN (SELECT image_id FROM image_members WHERE member_id = $%d AND status = 'accepted'))",
+				argIdx))
 			queryArgs = append(queryArgs, projectID)
 			argIdx++
+		default:
+			// community or unknown: show public + owned + shared with this project
+			conditions = append(conditions, fmt.Sprintf(
+				"(visibility = 'public' OR project_id = $%d OR id IN (SELECT image_id FROM image_members WHERE member_id = $%d AND status = 'accepted'))",
+				argIdx, argIdx+1))
+			queryArgs = append(queryArgs, projectID, projectID)
+			argIdx += 2
 		}
 	} else {
-		conditions = append(conditions, fmt.Sprintf("(visibility = 'public' OR project_id = $%d)", argIdx))
-		queryArgs = append(queryArgs, projectID)
-		argIdx++
+		// No visibility param: show public + owned + shared with this project
+		conditions = append(conditions, fmt.Sprintf(
+			"(visibility = 'public' OR project_id = $%d OR id IN (SELECT image_id FROM image_members WHERE member_id = $%d AND status = 'accepted'))",
+			argIdx, argIdx+1))
+		queryArgs = append(queryArgs, projectID, projectID)
+		argIdx += 2
 	}
 
 	// Marker-based pagination
@@ -357,7 +368,7 @@ func (svc *Service) ListImages(c *gin.Context) {
 	queryArgs = append(queryArgs, limit, offset)
 
 	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
-		SELECT id, name, status, visibility, size_bytes, disk_format, container_format, min_disk_gb, min_ram_mb, created_at, updated_at, COALESCE(project_id, '')
+		SELECT id, name, status, visibility, size_bytes, disk_format, container_format, min_disk_gb, min_ram_mb, COALESCE(protected, false), created_at, updated_at, COALESCE(project_id, '')
 		FROM images
 		%s
 		ORDER BY created_at DESC
@@ -376,10 +387,11 @@ func (svc *Service) ListImages(c *gin.Context) {
 		var id, name, status, visibility, diskFormat, containerFormat string
 		var sizeBytes sql.NullInt64
 		var minDisk, minRAM int
+		var protected bool
 		var createdAt, updatedAt time.Time
 		var imageOwner string
 
-		if err := rows.Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &createdAt, &updatedAt, &imageOwner); err != nil {
+		if err := rows.Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &protected, &createdAt, &updatedAt, &imageOwner); err != nil {
 			continue
 		}
 
@@ -393,7 +405,7 @@ func (svc *Service) ListImages(c *gin.Context) {
 			"min_disk":         minDisk,
 			"min_ram":          minRAM,
 			"owner":            imageOwner,
-			"protected":        false,
+			"protected":        protected,
 			"created_at":       createdAt.Format(time.RFC3339),
 			"updated_at":       updatedAt.Format(time.RFC3339),
 			"self":             fmt.Sprintf("/v2/images/%s", id),
@@ -445,17 +457,18 @@ func (svc *Service) GetImage(c *gin.Context) {
 	var checksum sql.NullString
 	var sizeBytes sql.NullInt64
 	var minDisk, minRAM int
+	var protected bool
 	var createdAt, updatedAt time.Time
 	var imageOwner string
 
 	// Try by UUID first, then by name if UUID parsing fails
 	// Use CAST to handle non-UUID strings gracefully
 	err := svc.activeDB().QueryRow(ctx, `
-		SELECT id, name, status, visibility, size_bytes, disk_format, container_format, min_disk_gb, min_ram_mb, checksum, created_at, updated_at, COALESCE(project_id, '')
+		SELECT id, name, status, visibility, size_bytes, disk_format, container_format, min_disk_gb, min_ram_mb, COALESCE(protected, false), checksum, created_at, updated_at, COALESCE(project_id, '')
 		FROM images
 		WHERE (id::text = $1 OR name = $1) AND (visibility = 'public' OR project_id = $2)
 		LIMIT 1
-	`, imageID, projectID).Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &checksum, &createdAt, &updatedAt, &imageOwner)
+	`, imageID, projectID).Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &protected, &checksum, &createdAt, &updatedAt, &imageOwner)
 
 	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("image"))
@@ -477,7 +490,7 @@ func (svc *Service) GetImage(c *gin.Context) {
 		"min_disk":         minDisk,
 		"min_ram":          minRAM,
 		"owner":            imageOwner,
-		"protected":        false,
+		"protected":        protected,
 		"locations":        []interface{}{},
 		"virtual_size":     nil,
 		"created_at":       createdAt.Format(time.RFC3339),
@@ -591,6 +604,7 @@ var imageUpdateFields = map[string]string{
 	"/visibility": "visibility",
 	"/min_disk":   "min_disk_gb",
 	"/min_ram":    "min_ram_mb",
+	"/protected":  "protected",
 }
 
 func allowedImageUpdateField(path string) (string, bool) {
@@ -608,6 +622,32 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 	if err := c.ShouldBindJSON(&updates); err != nil {
 		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
+	}
+
+	// Check if image is protected
+	var protected bool
+	err := svc.activeDB().QueryRow(c.Request.Context(),
+		"SELECT COALESCE(protected, false) FROM images WHERE id = $1 AND project_id = $2",
+		imageID, projectID,
+	).Scan(&protected)
+	if errors.Is(err, database.ErrNoRows) {
+		common.SendError(c, common.NewNotFoundError("image"))
+		return
+	}
+	if err != nil {
+		common.SendError(c, common.NewInternalServerError("failed to query image"))
+		return
+	}
+	if protected {
+		// Only allow unprotecting the image (single replace of /protected to false)
+		allowUnprotect := len(updates) == 1 &&
+			updates[0]["op"] == "replace" &&
+			updates[0]["path"] == "/protected" &&
+			updates[0]["value"] == false
+		if !allowUnprotect {
+			common.SendError(c, common.NewForbiddenError("image is protected and cannot be modified"))
+			return
+		}
 	}
 
 	// Apply updates (simplified - only handles replace operations)
@@ -643,27 +683,28 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 	imageID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	// Check if image exists and is in queued status
-	var status string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT status FROM images WHERE id = $1 AND project_id = $2",
-		imageID, projectID,
-	).Scan(&status)
-
-	if errors.Is(err, database.ErrNoRows) {
-		common.SendError(c, common.NewNotFoundError("image"))
+	// Atomically transition status from queued to saving to prevent concurrent uploads
+	result, err := svc.activeDB().Exec(c.Request.Context(),
+		"UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4 AND status = 'queued'",
+		"saving", time.Now(), imageID, projectID)
+	if err != nil {
+		log.Error().Err(err).Str("operation", "upload_image").Str("image_id", imageID).Msg("failed to update image status")
+		common.SendError(c, common.NewInternalServerError("failed to update image status"))
 		return
 	}
-
-	if status != "queued" {
-		common.SendError(c, common.NewConflictError("image data already exists"))
+	if result.RowsAffected() == 0 {
+		// Either image doesn't exist or it's not in queued state
+		var status string
+		checkErr := svc.activeDB().QueryRow(c.Request.Context(),
+			"SELECT status FROM images WHERE id = $1 AND project_id = $2", imageID, projectID,
+		).Scan(&status)
+		if errors.Is(checkErr, database.ErrNoRows) {
+			common.SendError(c, common.NewNotFoundError("image"))
+		} else {
+			common.SendError(c, common.NewConflictError("image data already exists"))
+		}
 		return
 	}
-
-	// Update status to saving
-	_, _ = svc.activeDB().Exec(c.Request.Context(),
-		"UPDATE images SET status = $1, updated_at = $2 WHERE id = $3",
-		"saving", time.Now(), imageID)
 
 	// Upload to storage (limit to 5GB), tee through MD5 hasher
 	const maxImageUpload int64 = 5 * 1024 * 1024 * 1024

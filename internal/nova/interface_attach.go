@@ -75,9 +75,17 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 			return
 		}
 
-		// Parse fixed_ips from JSONB
-		// For simplicity, just extract first IP
-		fixedIP = "192.168.1.10" // Placeholder, would parse from fixedIPsJSON
+		// Parse fixed_ips from JSONB to extract the first IP address
+		var portFixedIPs []map[string]interface{}
+		if err := json.Unmarshal(fixedIPsJSON, &portFixedIPs); err == nil && len(portFixedIPs) > 0 {
+			if ip, ok := portFixedIPs[0]["ip_address"].(string); ok && ip != "" {
+				fixedIP = ip
+			}
+		}
+		if fixedIP == "" {
+			common.SendError(c, common.NewInternalServerError("port has no fixed IP"))
+			return
+		}
 	} else if req.InterfaceAttachment.NetID != "" {
 		// Create new port on the specified network
 		networkID = req.InterfaceAttachment.NetID

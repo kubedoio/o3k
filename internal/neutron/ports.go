@@ -71,9 +71,12 @@ func (svc *Service) CreatePort(c *gin.Context) {
 	).Scan(&subnetID, &cidr)
 
 	var fixedIPs []map[string]interface{}
+	var ipTx database.Tx
 	if err == nil {
 		// Allocate IP from subnet using DB-aware allocation
-		allocatedIP, allocErr := svc.allocateIPFromSubnet(c.Request.Context(), subnetID, cidr)
+		var allocErr error
+		var allocatedIP string
+		allocatedIP, ipTx, allocErr = svc.allocateIPFromSubnet(c.Request.Context(), subnetID, cidr)
 		if allocErr != nil {
 			log.Error().Err(allocErr).Str("subnet_id", subnetID).Msg("IP allocation failed")
 			common.SendError(c, common.NewInternalServerError("failed to allocate IP address"))
@@ -95,34 +98,75 @@ func (svc *Service) CreatePort(c *gin.Context) {
 	}
 	allowedAddressPairsJSON, _ := json.Marshal(allowedAddressPairs)
 
-	// Create TAP device in namespace
-	nsName := svc.nsManager.GetNamespaceName(projectID)
-	if err := svc.tapManager.CreateTAPDevice(tapName, true, nsName); err != nil {
-		log.Error().Err(err).Str("operation", "create_tap_device").Str("tap", tapName).Msg("failed to create TAP device")
-		common.SendError(c, common.NewInternalServerError("failed to create TAP device"))
-		return
+	// Create TAP device and attach to bridge (skip in stub mode)
+	var tapCreated bool
+	var nsName string
+	cleanupTAP := func() {
+		if tapCreated {
+			if err := svc.tapManager.DeleteTAPDevice(tapName, true, nsName); err != nil {
+				log.Warn().Err(err).Str("tap", tapName).Msg("failed to clean up leaked TAP device")
+			}
+		}
 	}
 
-	// Attach TAP to bridge
-	bridgeName := "br-" + req.Port.NetworkID[:8]
-	if err := svc.brManager.AttachToBridge(tapName, bridgeName, true, nsName); err != nil {
-		log.Error().Err(err).Str("operation", "attach_tap_to_bridge").Str("tap", tapName).Msg("failed to attach TAP to bridge")
-		common.SendError(c, common.NewInternalServerError("failed to attach TAP to bridge"))
-		return
+	if svc.mode != "stub" {
+		nsName = svc.nsManager.GetNamespaceName(projectID)
+		if err := svc.tapManager.CreateTAPDevice(tapName, true, nsName); err != nil {
+			if ipTx != nil {
+				_ = ipTx.Rollback(c.Request.Context())
+			}
+			log.Error().Err(err).Str("operation", "create_tap_device").Str("tap", tapName).Msg("failed to create TAP device")
+			common.SendError(c, common.NewInternalServerError("failed to create TAP device"))
+			return
+		}
+		tapCreated = true
+
+		// Attach TAP to bridge
+		bridgeName := "br-" + req.Port.NetworkID[:8]
+		if err := svc.brManager.AttachToBridge(tapName, bridgeName, true, nsName); err != nil {
+			if ipTx != nil {
+				_ = ipTx.Rollback(c.Request.Context())
+			}
+			cleanupTAP()
+			log.Error().Err(err).Str("operation", "attach_tap_to_bridge").Str("tap", tapName).Msg("failed to attach TAP to bridge")
+			common.SendError(c, common.NewInternalServerError("failed to attach TAP to bridge"))
+			return
+		}
 	}
 
-	// Insert into database
+	// Insert port within the IP allocation transaction to prevent duplicate IPs
 	now := time.Now()
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
-		INSERT INTO ports (id, name, network_id, project_id, device_id, device_owner, mac_address, admin_state_up, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, portID, req.Port.Name, req.Port.NetworkID, projectID, sql.NullString{String: req.Port.DeviceID, Valid: req.Port.DeviceID != ""},
-		sql.NullString{String: req.Port.DeviceOwner, Valid: req.Port.DeviceOwner != ""}, macAddress, adminStateUp, "ACTIVE", fixedIPsJSON, allowedAddressPairsJSON, now, now)
-
-	if err != nil {
-		log.Error().Err(err).Str("operation", "create_port").Msg("database error")
-		common.SendError(c, common.NewInternalServerError("failed to create port"))
-		return
+	if ipTx != nil {
+		_, err = ipTx.Exec(c.Request.Context(), `
+			INSERT INTO ports (id, name, network_id, project_id, device_id, device_owner, mac_address, admin_state_up, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		`, portID, req.Port.Name, req.Port.NetworkID, projectID, sql.NullString{String: req.Port.DeviceID, Valid: req.Port.DeviceID != ""},
+			sql.NullString{String: req.Port.DeviceOwner, Valid: req.Port.DeviceOwner != ""}, macAddress, adminStateUp, "ACTIVE", fixedIPsJSON, allowedAddressPairsJSON, now, now)
+		if err != nil {
+			_ = ipTx.Rollback(c.Request.Context())
+			cleanupTAP()
+			log.Error().Err(err).Str("operation", "create_port").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to create port"))
+			return
+		}
+		if err := ipTx.Commit(c.Request.Context()); err != nil {
+			cleanupTAP()
+			log.Error().Err(err).Str("operation", "create_port").Msg("failed to commit port creation")
+			common.SendError(c, common.NewInternalServerError("failed to create port"))
+			return
+		}
+	} else {
+		_, err = svc.activeDB().Exec(c.Request.Context(), `
+			INSERT INTO ports (id, name, network_id, project_id, device_id, device_owner, mac_address, admin_state_up, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		`, portID, req.Port.Name, req.Port.NetworkID, projectID, sql.NullString{String: req.Port.DeviceID, Valid: req.Port.DeviceID != ""},
+			sql.NullString{String: req.Port.DeviceOwner, Valid: req.Port.DeviceOwner != ""}, macAddress, adminStateUp, "ACTIVE", fixedIPsJSON, allowedAddressPairsJSON, now, now)
+		if err != nil {
+			cleanupTAP()
+			log.Error().Err(err).Str("operation", "create_port").Msg("database error")
+			common.SendError(c, common.NewInternalServerError("failed to create port"))
+			return
+		}
 	}
 
 	// Apply security groups (default to "default" security group if none specified)
@@ -150,8 +194,9 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		).Scan(&exists)
 
 		if err != nil || !exists {
-			// Clean up port on failure
+			// Clean up port and TAP on failure
 			svc.activeDB().Exec(c.Request.Context(), "DELETE FROM ports WHERE id = $1", portID)
+			cleanupTAP()
 			common.SendError(c, common.NewNotFoundError(fmt.Sprintf("security group %s", sgID)))
 			return
 		}
@@ -161,8 +206,9 @@ func (svc *Service) CreatePort(c *gin.Context) {
 			portID, sgID,
 		)
 		if err != nil {
-			// Clean up port on failure
+			// Clean up port and TAP on failure
 			svc.activeDB().Exec(c.Request.Context(), "DELETE FROM ports WHERE id = $1", portID)
+			cleanupTAP()
 			log.Error().Err(err).Str("operation", "associate_security_group").Str("sg_id", sgID).Msg("failed to associate security group")
 			common.SendError(c, common.NewInternalServerError("failed to associate security group"))
 			return
@@ -636,19 +682,21 @@ func (svc *Service) UpdatePort(c *gin.Context) {
 
 // allocateIPFromSubnet allocates a unique IP from a subnet using a serializable
 // transaction with SELECT FOR UPDATE to prevent TOCTOU races under concurrency.
-func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr string) (string, error) {
+// The returned transaction is left open — the caller MUST commit after inserting
+// the port record (ensuring the IP reservation and port creation are atomic) or
+// roll back on failure.
+func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr string) (string, database.Tx, error) {
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return "", fmt.Errorf("invalid CIDR: %w", err)
+		return "", nil, fmt.Errorf("invalid CIDR: %w", err)
 	}
 
 	tx, err := svc.activeDB().BeginTx(ctx, database.TxOptions{
 		IsoLevel: "serializable",
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to begin transaction: %w", err)
+		return "", nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Lock and fetch allocated IPs only for ports that have a fixed IP in this subnet.
 	// Using a JSONB containment text check narrows the FOR UPDATE lock scope so we
@@ -658,7 +706,8 @@ func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr str
 		subnetID,
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to query existing IPs: %w", err)
+		_ = tx.Rollback(ctx)
+		return "", nil, fmt.Errorf("failed to query existing IPs: %w", err)
 	}
 	defer rows.Close()
 
@@ -680,7 +729,8 @@ func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr str
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("failed to iterate IPs: %w", err)
+		_ = tx.Rollback(ctx)
+		return "", nil, fmt.Errorf("failed to iterate IPs: %w", err)
 	}
 
 	// Reserve .1 for gateway, .2-.9 for infrastructure; start at .10
@@ -691,14 +741,12 @@ func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr str
 			break
 		}
 		if !usedIPs[candidate.String()] {
-			if err := tx.Commit(ctx); err != nil {
-				return "", fmt.Errorf("failed to commit IP allocation: %w", err)
-			}
-			return candidate.String(), nil
+			return candidate.String(), tx, nil
 		}
 	}
 
-	return "", fmt.Errorf("no available IPs in subnet %s", subnetID)
+	_ = tx.Rollback(ctx)
+	return "", nil, fmt.Errorf("no available IPs in subnet %s", subnetID)
 }
 
 // Security Groups implementation
@@ -1106,6 +1154,28 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 		return
 	}
 
+	// Verify caller owns the security group
+	projectID := c.GetString("project_id")
+	var sgProjectID string
+	err := svc.activeDB().QueryRow(c.Request.Context(),
+		"SELECT project_id FROM security_groups WHERE id = $1",
+		req.SecurityGroupRule.SecurityGroupID,
+	).Scan(&sgProjectID)
+	if errors.Is(err, database.ErrNoRows) {
+		common.SendError(c, common.NewNotFoundError("security group"))
+		return
+	}
+	if err != nil {
+		common.SendError(c, common.NewInternalServerError("failed to verify security group ownership"))
+		return
+	}
+	isAdmin, _ := c.Get("is_admin")
+	isAdminBool, _ := isAdmin.(bool)
+	if sgProjectID != projectID && !isAdminBool {
+		common.SendError(c, common.NewForbiddenError("security group does not belong to this project"))
+		return
+	}
+
 	ruleID := uuid.New().String()
 
 	var protocolVal interface{}
@@ -1170,7 +1240,7 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().Exec(c.Request.Context(), `
 		INSERT INTO security_group_rules (id, security_group_id, direction, ethertype, protocol, port_range_min, port_range_max, remote_ip_prefix, remote_group_id, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, ruleID, req.SecurityGroupRule.SecurityGroupID, req.SecurityGroupRule.Direction, etherType,
@@ -1358,7 +1428,7 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 	}
 
 	// Allocate IP from subnet using DB-aware allocation
-	allocatedIP, allocErr := svc.allocateIPFromSubnet(ctx, subnetID, cidr)
+	allocatedIP, ipTx, allocErr := svc.allocateIPFromSubnet(ctx, subnetID, cidr)
 	if allocErr != nil {
 		return nil, fmt.Errorf("failed to allocate IP from subnet %s: %w", subnetID, allocErr)
 	}
@@ -1377,6 +1447,7 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 
 		// Create TAP device in default namespace
 		if err := svc.tapManager.CreateTAPDevice(tapName, false, ""); err != nil {
+			_ = ipTx.Rollback(ctx)
 			return nil, fmt.Errorf("failed to create TAP device: %w", err)
 		}
 
@@ -1389,20 +1460,26 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 
 		// Attach TAP to bridge in default namespace
 		if err := svc.brManager.AttachToBridge(tapName, bridgeName, false, ""); err != nil {
+			_ = ipTx.Rollback(ctx)
 			return nil, fmt.Errorf("failed to attach TAP to bridge: %w", err)
 		}
 	}
 
-	// Insert into database
+	// Insert port within the IP allocation transaction to prevent duplicate IPs
 	now := time.Now()
-	_, err = svc.activeDB().Exec(ctx, `
+	_, err = ipTx.Exec(ctx, `
 		INSERT INTO ports (id, name, network_id, project_id, device_id, device_owner, mac_address, admin_state_up, status, fixed_ips, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, portID, fmt.Sprintf("port-for-%s", instanceID[:8]), networkID, projectID, instanceID,
 		"compute:nova", macAddress, true, "ACTIVE", fixedIPsJSON, now, now)
 
 	if err != nil {
+		_ = ipTx.Rollback(ctx)
 		return nil, fmt.Errorf("failed to insert port into database: %w", err)
+	}
+
+	if err := ipTx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit port creation: %w", err)
 	}
 
 	// Distribute FDB entry if VXLAN is enabled

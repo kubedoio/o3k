@@ -106,6 +106,16 @@ func runServer(args []string) {
 		fmt.Println("═══════════════════════════════════════════")
 	}
 
+	// In zero-config mode, always start the tunnel hub on default port with the bootstrap token.
+	if bootstrapResult != nil {
+		if cfg.Tunnel.Port == 0 {
+			cfg.Tunnel.Port = 6443
+		}
+		if cfg.Tunnel.TokenSecret == "" {
+			cfg.Tunnel.TokenSecret = bootstrapResult.AgentToken
+		}
+	}
+
 	// Validate JWT secret now that bootstrap may have set it.
 	if cfg.Keystone.JWTSecret == "" || cfg.Keystone.JWTSecret == "change-me-in-production" {
 		env := os.Getenv("O3K_ENV")
@@ -185,7 +195,10 @@ func runServer(args []string) {
 			log.Fatalf("Failed to run migrations: %v", err)
 		}
 	} else {
-		log.Println("SQLite mode: skipping PostgreSQL migrations")
+		log.Println("Running SQLite migrations...")
+		if err := database.MigrateSQLite(*migrationsPath); err != nil {
+			log.Fatalf("Failed to run SQLite migrations: %v", err)
+		}
 	}
 
 	// Seed defaults when running in zero-config (bootstrap) mode.
@@ -383,13 +396,18 @@ func runServer(args []string) {
 		createMetadataServer(metadataService),
 	}
 
+	// Channel for shutdown signaling (from OS signals or server failures)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
 	// Start all servers
 	for _, srv := range servers {
 		srv := srv // capture loop variable
 		go func() {
 			log.Printf("Starting server on %s", srv.Addr)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("Server failed: %v", err)
+				log.Printf("Server on %s failed: %v — initiating shutdown", srv.Addr, err)
+				quit <- syscall.SIGTERM
 			}
 		}()
 	}
@@ -403,9 +421,7 @@ func runServer(args []string) {
 	log.Println("  - Placement:              http://localhost:8778")
 	log.Println("  - Metadata Service:       http://localhost:8775")
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	// Wait for shutdown signal
 	<-quit
 
 	log.Println("Shutting down servers...")

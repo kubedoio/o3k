@@ -741,7 +741,8 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	baseQuery := `
 		SELECT i.id, i.name, i.status, i.power_state, i.project_id, i.user_id,
 		       i.flavor_id, i.image_id, i.created_at, i.updated_at, i.launched_at,
-		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name, i.host, i.locked
+		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name, i.host, i.locked,
+		       i.task_state
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
 		WHERE 1=1`
@@ -819,10 +820,11 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		var launchedAt *time.Time
 		var host sql.NullString
 		var locked bool
+		var taskStateDB sql.NullString
 
 		if err := rows.Scan(&id, &name, &status, &powerState, &projectID, &userID,
 			&flavorID, &imageID, &createdAt, &updatedAt, &launchedAt,
-			&vcpus, &ramMB, &diskGB, &flavorName, &host, &locked); err != nil {
+			&vcpus, &ramMB, &diskGB, &flavorName, &host, &locked, &taskStateDB); err != nil {
 			log.Warn().Err(err).Msg("failed to scan server detail row")
 			continue
 		}
@@ -839,12 +841,18 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		// Get addresses for this instance
 		addresses := svc.getInstanceAddresses(c.Request.Context(), id, projectID)
 
-		// Derive OS-EXT-STS fields from status
+		// Derive OS-EXT-STS fields
+		// Use task_state from DB if set; otherwise derive from status
 		var taskState interface{}
+		if taskStateDB.Valid && taskStateDB.String != "" {
+			taskState = taskStateDB.String
+		}
 		vmState := "active"
 		switch status {
 		case "BUILD", "BUILDING":
-			taskState = "spawning"
+			if taskState == nil {
+				taskState = "spawning"
+			}
 			vmState = "building"
 		case "ACTIVE":
 			vmState = "active"
@@ -987,7 +995,7 @@ func (svc *Service) getServerSecurityGroups(ctx context.Context, serverID string
 	rows, err := svc.activeDB().Query(ctx, `
 		SELECT sg.name FROM security_groups sg
 		JOIN server_security_groups ssg ON sg.id = ssg.security_group_id
-		WHERE ssg.instance_id = $1`, serverID)
+		WHERE ssg.server_id = $1`, serverID)
 	if err != nil {
 		return []gin.H{{"name": "default"}}
 	}
@@ -1019,19 +1027,21 @@ func (svc *Service) GetServer(c *gin.Context) {
 	var locked bool
 	var vcpus, ramMB, diskGB int
 	var flavorName sql.NullString
+	var taskStateDB sql.NullString
 
 	// Try to find by ID first, then by name
 	// Use separate conditions to avoid type mismatch when id is UUID and param might be a name
 	err := svc.activeDB().QueryRow(c.Request.Context(), `
 		SELECT i.id, i.name, i.status, i.power_state, i.project_id, i.user_id,
 		       i.flavor_id, i.image_id, i.created_at, i.updated_at, i.host, i.launched_at,
-		       i.locked, COALESCE(f.vcpus, 0), COALESCE(f.ram_mb, 0), COALESCE(f.disk_gb, 0), f.name
+		       i.locked, COALESCE(f.vcpus, 0), COALESCE(f.ram_mb, 0), COALESCE(f.disk_gb, 0), f.name,
+		       i.task_state
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
 		WHERE i.project_id = $2 AND (
 			(i.id::text = $1) OR (i.name = $1)
 		)
-	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt, &locked, &vcpus, &ramMB, &diskGB, &flavorName)
+	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt, &locked, &vcpus, &ramMB, &diskGB, &flavorName, &taskStateDB)
 
 	if errors.Is(err, database.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
@@ -1046,12 +1056,18 @@ func (svc *Service) GetServer(c *gin.Context) {
 	// Get addresses from ports
 	addresses := svc.getInstanceAddresses(c.Request.Context(), id, projectID)
 
-	// Derive OS-EXT-STS fields from status
+	// Derive OS-EXT-STS fields
+	// Use task_state from DB if set; otherwise derive from status
 	var getTaskState interface{}
+	if taskStateDB.Valid && taskStateDB.String != "" {
+		getTaskState = taskStateDB.String
+	}
 	getVMState := "active"
 	switch status {
 	case "BUILD", "BUILDING":
-		getTaskState = "spawning"
+		if getTaskState == nil {
+			getTaskState = "spawning"
+		}
 		getVMState = "building"
 	case "ACTIVE":
 		getVMState = "active"
@@ -1500,6 +1516,9 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			common.SendError(c, common.NewInternalServerError("failed to stop server"))
 			return
 		}
+		_, _ = svc.activeDB().Exec(ctx,
+			"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+			"SHUTOFF", 4, time.Now(), instanceID, projectID)
 	} else if _, ok := req["os-start"]; ok {
 		if instanceStatus != "SHUTOFF" {
 			c.JSON(http.StatusConflict, gin.H{
@@ -1515,6 +1534,9 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			common.SendError(c, common.NewInternalServerError("failed to start server"))
 			return
 		}
+		_, _ = svc.activeDB().Exec(ctx,
+			"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+			"ACTIVE", 1, time.Now(), instanceID, projectID)
 	} else {
 		common.SendError(c, common.NewBadRequestError("unknown action"))
 		return
