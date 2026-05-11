@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"time"
 )
 
@@ -128,4 +129,70 @@ func ClientTLSConfig(ca *CA, clientCert *SignedCert) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      pool,
 	}, nil
+}
+
+// HubTLSConfig returns a *tls.Config for the tunnel gRPC server.
+//
+// If certFile and keyFile are both non-empty, they are loaded from disk.
+// Otherwise a self-signed certificate valid for localhost/127.0.0.1 is generated
+// in memory (zero-config mode).
+func HubTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load tunnel TLS keypair: %w", err)
+		}
+		return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+	}
+
+	// Auto-generate a self-signed certificate for zero-config mode.
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		return nil, fmt.Errorf("generate self-signed tunnel cert: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+}
+
+// AgentTLSConfig returns a *tls.Config for the tunnel gRPC client.
+//
+// It uses InsecureSkipVerify so that agents can connect to a hub that presents a
+// self-signed certificate.  For production deployments, pass an explicit CA cert
+// instead (future: add a --tunnel-ca flag).
+func AgentTLSConfig() (*tls.Config, error) {
+	return &tls.Config{InsecureSkipVerify: true}, nil //nolint:gosec // self-signed cert in zero-config mode
+}
+
+// generateSelfSignedCert creates an in-memory ECDSA P-256 server certificate
+// valid for localhost and 127.0.0.1 for one year.
+func generateSelfSignedCert() (tls.Certificate, error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate key: %w", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "o3k-tunnel"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create cert: %w", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshal key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	return tls.X509KeyPair(certPEM, keyPEM)
 }

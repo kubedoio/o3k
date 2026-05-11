@@ -869,7 +869,7 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 func (s *AuthService) ValidateToken(tokenString string) (*TokenClaims, error) {
 	// Check revocation first
 	if s.IsTokenRevoked(tokenString) {
-		return nil, common.NewUnauthorizedError("token has been revoked")
+		return nil, common.NewUnauthorizedError("Token has been revoked")
 	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &TokenClaims{}, func(token *jwt.Token) (interface{}, error) {
@@ -880,14 +880,23 @@ func (s *AuthService) ValidateToken(tokenString string) (*TokenClaims, error) {
 	})
 
 	if err != nil {
-		return nil, common.NewUnauthorizedError("invalid token")
+		switch {
+		case errors.Is(err, jwt.ErrTokenExpired):
+			return nil, common.NewUnauthorizedError("Token has expired")
+		case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+			return nil, common.NewUnauthorizedError("Token signature invalid")
+		case errors.Is(err, jwt.ErrTokenMalformed):
+			return nil, common.NewUnauthorizedError("Token is invalid")
+		default:
+			return nil, common.NewUnauthorizedError("Token is invalid")
+		}
 	}
 
 	if claims, ok := token.Claims.(*TokenClaims); ok && token.Valid {
 		return claims, nil
 	}
 
-	return nil, common.NewUnauthorizedError("invalid token claims")
+	return nil, common.NewUnauthorizedError("Token is invalid")
 }
 
 // RevokeToken adds a token to the denylist
