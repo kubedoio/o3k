@@ -765,6 +765,9 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 						"links": []gin.H{
 							{"rel": "self", "href": baseURL},
 						},
+						"media-types": []gin.H{
+							{"type": "application/vnd.openstack.identity-v3+json", "base": "application/json"},
+						},
 					},
 				},
 			},

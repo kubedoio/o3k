@@ -61,6 +61,10 @@ func (svc *Service) ListKeypairs(c *gin.Context) {
 				"name":        name,
 				"public_key":  publicKey,
 				"fingerprint": fingerprint,
+				"type":        "ssh",
+				"created_at":  createdAt.Format(time.RFC3339),
+				"user_id":     uid,
+				"is_deleted":  false,
 			},
 		})
 	}
@@ -106,8 +110,10 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 			"name":        name,
 			"public_key":  publicKey,
 			"fingerprint": fingerprint,
+			"type":        "ssh",
 			"created_at":  createdAt.Format(time.RFC3339),
 			"user_id":     userID,
+			"is_deleted":  false,
 		},
 	})
 }
@@ -179,7 +185,10 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 		"name":        req.Keypair.Name,
 		"public_key":  publicKey,
 		"fingerprint": fingerprint,
+		"type":        "ssh",
+		"created_at":  now.Format(time.RFC3339),
 		"user_id":     userID,
+		"is_deleted":  false,
 	}
 
 	// Include private key if generated

@@ -935,6 +935,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			},
 			"flavor": gin.H{
 				"id":            flavorID,
+				"name":          flavorName,
 				"vcpus":         vcpus,
 				"ram":           ramMB,
 				"disk":          diskGB,
@@ -1199,6 +1200,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 		}
 		response["flavor"] = gin.H{
 			"id":            flavorID,
+			"name":          fn,
 			"vcpus":         vcpus,
 			"ram":           ramMB,
 			"disk":          diskGB,
@@ -1637,11 +1639,50 @@ func (svc *Service) ServerAction(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 
-// ListFlavors lists all flavors (brief)
+// ListFlavors lists all flavors (brief) with optional filtering
 func (svc *Service) ListFlavors(c *gin.Context) {
-	rows, err := svc.activeDB().Query(c.Request.Context(),
-		"SELECT id, name FROM flavors WHERE is_public = true ORDER BY ram_mb",
-	)
+	query := "SELECT id, name FROM flavors WHERE is_public = true"
+	var args []interface{}
+	argIdx := 1
+
+	if minRAM := c.Query("min_ram"); minRAM != "" {
+		if v, err := strconv.Atoi(minRAM); err == nil {
+			query += fmt.Sprintf(" AND ram_mb >= $%d", argIdx)
+			args = append(args, v)
+			argIdx++
+		}
+	}
+	if minDisk := c.Query("min_disk"); minDisk != "" {
+		if v, err := strconv.Atoi(minDisk); err == nil {
+			query += fmt.Sprintf(" AND disk_gb >= $%d", argIdx)
+			args = append(args, v)
+			argIdx++
+		}
+	}
+
+	sortKey := c.Query("sort_key")
+	sortDir := c.Query("sort_dir")
+	allowedSortKeys := map[string]string{
+		"id": "id", "name": "name", "ram": "ram_mb", "disk": "disk_gb", "vcpus": "vcpus",
+	}
+	col, ok := allowedSortKeys[sortKey]
+	if !ok {
+		col = "ram_mb"
+	}
+	if sortDir != "desc" {
+		sortDir = "asc"
+	}
+	query += fmt.Sprintf(" ORDER BY %s %s", col, sortDir)
+
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
+			query += fmt.Sprintf(" LIMIT $%d", argIdx)
+			args = append(args, v)
+			argIdx++
+		}
+	}
+
+	rows, err := svc.activeDB().Query(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_flavors").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to list flavors"))
@@ -1680,10 +1721,25 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 	marker := c.Query("marker")
 	limitStr := c.Query("limit")
 
-	// Build query with pagination support
+	// Build query with filtering and pagination support
 	query := "SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE is_public = true"
 	var args []interface{}
 	argIndex := 1
+
+	if minRAM := c.Query("min_ram"); minRAM != "" {
+		if v, err := strconv.Atoi(minRAM); err == nil {
+			query += fmt.Sprintf(" AND ram_mb >= $%d", argIndex)
+			args = append(args, v)
+			argIndex++
+		}
+	}
+	if minDisk := c.Query("min_disk"); minDisk != "" {
+		if v, err := strconv.Atoi(minDisk); err == nil {
+			query += fmt.Sprintf(" AND disk_gb >= $%d", argIndex)
+			args = append(args, v)
+			argIndex++
+		}
+	}
 
 	// Add marker filter using created_at cursor (avoids broken UUID lexicographic ordering)
 	if marker != "" {
@@ -1698,7 +1754,20 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 		// If the marker flavor is not found, ignore the marker and return from the start.
 	}
 
-	query += " ORDER BY created_at, id"
+	// Sort key and direction
+	allowedSortKeys := map[string]string{
+		"id": "id", "name": "name", "ram": "ram_mb", "disk": "disk_gb", "vcpus": "vcpus",
+	}
+	sortKey := c.Query("sort_key")
+	sortDir := c.Query("sort_dir")
+	col, ok := allowedSortKeys[sortKey]
+	if !ok {
+		col = "created_at"
+	}
+	if sortDir != "desc" {
+		sortDir = "asc"
+	}
+	query += fmt.Sprintf(" ORDER BY %s %s, id %s", col, sortDir, sortDir)
 
 	// Add limit
 	if limitStr != "" {
