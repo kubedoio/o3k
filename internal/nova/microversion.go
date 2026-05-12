@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const novaMaxVersion = "2.93"
+const novaMaxVersion = "2.90"
 
 // MicroversionMiddleware sets Nova API microversion response headers on every response.
 func MicroversionMiddleware() gin.HandlerFunc {
@@ -29,7 +29,7 @@ func MicroversionMiddleware() gin.HandlerFunc {
 			// Parse "2.X" format and compare minor version as integer
 			parts := strings.Split(version, ".")
 			if len(parts) == 2 && parts[0] == "2" {
-				if minor, err := strconv.Atoi(parts[1]); err == nil && minor > 93 {
+				if minor, err := strconv.Atoi(parts[1]); err == nil && minor > 90 {
 					version = novaMaxVersion
 				}
 			} else {

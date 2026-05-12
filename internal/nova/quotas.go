@@ -101,15 +101,19 @@ func (svc *Service) GetQuotaSet(c *gin.Context) {
 		`SELECT COUNT(*) FROM volume_snapshots WHERE project_id = $1`, projectID,
 	).Scan(&snapshotCount)
 
-	// Network resource usage
+	// Network resource usage — all counts in a single round-trip.
 	var networkCount, subnetCount, portCount, routerCount, floatingipCount, sgCount, sgrCount int
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM networks WHERE project_id = $1`, projectID).Scan(&networkCount)
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM subnets WHERE project_id = $1`, projectID).Scan(&subnetCount)
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM ports WHERE project_id = $1`, projectID).Scan(&portCount)
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM routers WHERE project_id = $1`, projectID).Scan(&routerCount)
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM floating_ips WHERE project_id = $1`, projectID).Scan(&floatingipCount)
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM security_groups WHERE project_id = $1`, projectID).Scan(&sgCount)
-	svc.activeDB().QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM security_group_rules WHERE security_group_id IN (SELECT id FROM security_groups WHERE project_id = $1)`, projectID).Scan(&sgrCount)
+	svc.activeDB().QueryRow(c.Request.Context(), `
+		SELECT
+			(SELECT COUNT(*) FROM networks       WHERE project_id = $1),
+			(SELECT COUNT(*) FROM subnets        WHERE project_id = $1),
+			(SELECT COUNT(*) FROM ports          WHERE project_id = $1),
+			(SELECT COUNT(*) FROM routers        WHERE project_id = $1),
+			(SELECT COUNT(*) FROM floating_ips   WHERE project_id = $1),
+			(SELECT COUNT(*) FROM security_groups WHERE project_id = $1),
+			(SELECT COUNT(*) FROM security_group_rules
+			 WHERE security_group_id IN (SELECT id FROM security_groups WHERE project_id = $1))
+	`, projectID).Scan(&networkCount, &subnetCount, &portCount, &routerCount, &floatingipCount, &sgCount, &sgrCount)
 
 	usages := map[string]int{
 		"instances":            instanceCount,

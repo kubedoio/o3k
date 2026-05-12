@@ -1503,13 +1503,34 @@ func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
 	}
 	limit = common.CapLimit(limit)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	conditions := []string{"project_id = $1"}
+	queryArgs := []interface{}{projectID}
+	argIdx := 2
+
+	// Marker-based pagination
+	if marker := c.Query("marker"); marker != "" {
+		var markerCreatedAt time.Time
+		err := svc.activeDB().QueryRow(c.Request.Context(),
+			"SELECT created_at FROM snapshots WHERE id = $1 AND project_id = $2",
+			marker, projectID,
+		).Scan(&markerCreatedAt)
+		if err == nil {
+			conditions = append(conditions, fmt.Sprintf("created_at < $%d", argIdx))
+			queryArgs = append(queryArgs, markerCreatedAt)
+			argIdx++
+		}
+	}
+
+	whereClause := "WHERE " + joinConditions(conditions)
+	queryArgs = append(queryArgs, limit)
+
+	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, name, volume_id, size_gb, status, created_at
 		FROM snapshots
-		WHERE project_id = $1
+		%s
 		ORDER BY created_at DESC
-		LIMIT $2
-	`, projectID, limit)
+		LIMIT $%d
+	`, whereClause, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_snapshots_detail").Msg("failed to query snapshots")
@@ -1583,13 +1604,34 @@ func (svc *Service) ListSnapshots(c *gin.Context) {
 	}
 	limit = common.CapLimit(limit)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	conditions := []string{"project_id = $1"}
+	queryArgs := []interface{}{projectID}
+	argIdx := 2
+
+	// Marker-based pagination
+	if marker := c.Query("marker"); marker != "" {
+		var markerCreatedAt time.Time
+		err := svc.activeDB().QueryRow(c.Request.Context(),
+			"SELECT created_at FROM snapshots WHERE id = $1 AND project_id = $2",
+			marker, projectID,
+		).Scan(&markerCreatedAt)
+		if err == nil {
+			conditions = append(conditions, fmt.Sprintf("created_at < $%d", argIdx))
+			queryArgs = append(queryArgs, markerCreatedAt)
+			argIdx++
+		}
+	}
+
+	whereClause := "WHERE " + joinConditions(conditions)
+	queryArgs = append(queryArgs, limit)
+
+	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, name, volume_id, size_gb, status, created_at
 		FROM snapshots
-		WHERE project_id = $1
+		%s
 		ORDER BY created_at DESC
-		LIMIT $2
-	`, projectID, limit)
+		LIMIT $%d
+	`, whereClause, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_snapshots").Msg("failed to query snapshots")

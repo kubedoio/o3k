@@ -58,7 +58,11 @@ func RateLimitMiddleware(limiter *RateLimiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
 		if !limiter.Allow(ip) {
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
+			c.Header("Retry-After", "60")
+			c.JSON(http.StatusTooManyRequests, gin.H{"overLimit": gin.H{
+				"code":    http.StatusTooManyRequests,
+				"message": "Too many requests",
+			}})
 			c.Abort()
 			return
 		}
