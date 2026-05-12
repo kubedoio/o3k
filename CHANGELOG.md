@@ -37,6 +37,59 @@ The gRPC tunnel is now a real task execution system. A single `o3k server` + `o3
 
 ---
 
+## [0.7.1] - 2026-05-12
+
+### Production Readiness (PRs #15-20)
+
+#### Added
+- Zero-config mode: binary works with no config file (`./o3k` just works)
+- `--datastore` flag: switch between SQLite (default) and PostgreSQL
+- `--port` flag: configure base port for all services
+- Health endpoints: /healthz and /readyz on all services
+- Metrics endpoint: /metrics with request counters and latency
+- Request ID: X-Request-Id and X-OpenStack-Request-Id on all responses
+- Rate limiting: 10 req/min per IP on token creation
+- TLS: auto-generated self-signed cert for gRPC tunnel
+- OpenTelemetry tracing: stdout exporter, OTLP optional
+- RBAC policy middleware: reader/member/admin role enforcement
+- Keystone regions endpoint: GET /v3/regions
+- Neutron extensions endpoint: GET /v2.0/extensions
+- Cinder availability zones: GET /v3/os-availability-zone
+- Integration tests: scheduler, cinder concurrency, rate limiter, auth flow
+- go:embed for SQLite migrations (single binary deployment)
+
+#### Fixed
+- Quota bypass via silent DB errors (nova)
+- IDOR on GetUserProjects/GetUserGroups (keystone)
+- Cross-tenant os-attach (cinder)
+- 5 race conditions: os-attach, os-detach, os-extend, floating IP, SG update
+- Task constants mismatch between tunnel sender/executor
+- Reconciler SQLite deadlock (scheduler)
+- Goroutine leaks: heartbeat, resultCh, scheduler
+- IP allocation: now CIDR-aware (was hardcoded /24)
+- Subnet deletion: 409 if ports exist
+- Domain-scoped token: returns 501 instead of silent degradation
+- App-credential re-scoping prevention
+- Error responses: OpenStack standard fault format with request_id
+- Microversion max: 2.90 (was incorrectly 2.93)
+- Duration logging: was off by 1,000,000x
+- Duplicate SQLite migration schemas (028, 031)
+- Dead code: removed 8 unused helpers
+
+#### Changed
+- Default bind address: 127.0.0.1 (was 0.0.0.0)
+- JWT secret: rejected at startup if <32 chars
+- Error format: all responses use named fault envelopes
+- All list endpoints: marker/limit pagination
+- Token validation: distinct messages for expired/invalid/revoked
+
+#### Security
+- access_rules parse failure now rejects (was silently granting all)
+- Hardcoded admin/secret still in seed migration (documented)
+- Env var overrides for all sensitive config (O3K_JWT_SECRET, O3K_DB_URL)
+
+---
+
 ## [0.7.0] - 2026-04-27
 
 ### 🚀 New Features

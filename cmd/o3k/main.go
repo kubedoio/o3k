@@ -32,7 +32,59 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
+
+// initTracer initialises the global OpenTelemetry TracerProvider.
+//
+// If O3K_OTEL_ENDPOINT is set, traces are exported to that OTLP/gRPC collector
+// (e.g. "localhost:4317"). Otherwise traces are written to stdout — no external
+// infrastructure required for development or zero-config mode.
+//
+// The caller must call Shutdown on the returned provider before process exit.
+func initTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("o3k"),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create OTel resource: %w", err)
+	}
+
+	var exporter sdktrace.SpanExporter
+
+	if endpoint := os.Getenv("O3K_OTEL_ENDPOINT"); endpoint != "" {
+		exp, err := otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(endpoint),
+			otlptracegrpc.WithInsecure(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP exporter: %w", err)
+		}
+		exporter = exp
+		log.Printf("Tracing: OTLP exporter → %s", endpoint)
+	} else {
+		exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+		if err != nil {
+			return nil, fmt.Errorf("create stdout trace exporter: %w", err)
+		}
+		exporter = exp
+		log.Println("Tracing: stdout exporter (set O3K_OTEL_ENDPOINT for OTLP)")
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+	return tp, nil
+}
 
 // isSubcommand reports whether s is a recognised o3k subcommand.
 func isSubcommand(s string) bool {
@@ -251,6 +303,19 @@ func runServer(args []string) {
 	// Connect to database with optimized pool settings
 	ctx := context.Background()
 	workerCtx, workerCancel := context.WithCancel(ctx)
+
+	// Initialize OpenTelemetry tracing.
+	// Stdout exporter is used by default; set O3K_OTEL_ENDPOINT for OTLP.
+	tp, err := initTracer(ctx)
+	if err != nil {
+		log.Fatalf("Failed to initialise tracer: %v", err)
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("Tracer shutdown error: %v", err)
+		}
+	}()
+
 	poolConfig := &database.PoolConfig{
 		MaxConns:          int32(cfg.Database.MaxConnections),
 		MinConns:          int32(cfg.Database.MinConnections),
@@ -301,6 +366,10 @@ func runServer(args []string) {
 		log.Printf("Database: PostgreSQL (pool: max=%d, min=%d)", poolConfig.MaxConns, poolConfig.MinConns)
 	}
 	defer database.Close()
+
+	// Wrap the database connection with OpenTelemetry span instrumentation.
+	// Every Exec/Query/QueryRow call will create a child span in the active trace.
+	database.DB = database.NewTracingAdapter(database.DB)
 
 	// Run migrations (PostgreSQL only — SQLite manages its own schema)
 	if database.BackendType() == "postgres" {
@@ -742,6 +811,7 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -749,6 +819,7 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("identity"))
+	r.Use(middleware.PolicyMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -790,6 +861,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -797,6 +869,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("compute"))
+	r.Use(middleware.PolicyMiddleware())
 	r.Use(nova.MicroversionMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
@@ -818,6 +891,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -825,6 +899,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("network"))
+	r.Use(middleware.PolicyMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -845,6 +920,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -852,6 +928,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("block-storage"))
+	r.Use(middleware.PolicyMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -872,6 +949,7 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -890,6 +968,7 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	authGroup := r.Group("/v2")
 	authGroup.Use(middleware.AuthMiddleware(authService))
 	authGroup.Use(middleware.EnforceAccessRules("image"))
+	authGroup.Use(middleware.PolicyMiddleware())
 	svc.RegisterRoutes(authGroup)
 
 	return &http.Server{
@@ -906,12 +985,14 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("placement"))
+	r.Use(middleware.PolicyMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -932,6 +1013,7 @@ func createMetadataServer(cfg *common.Config, svc *metadata.Service, port int) *
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.TracingMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
