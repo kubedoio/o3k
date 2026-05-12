@@ -1787,10 +1787,13 @@ func (svc *Service) ListVolumeTypes(c *gin.Context) {
 		}
 
 		types = append(types, gin.H{
-			"id":          id,
-			"name":        name,
-			"description": description,
-			"is_public":   isPublic,
+			"id":                              id,
+			"name":                            name,
+			"description":                     description,
+			"is_public":                       isPublic,
+			"extra_specs":                     map[string]string{},
+			"qos_specs_id":                    nil,
+			"os-volume-type-access:is_public": isPublic,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1831,10 +1834,13 @@ func (svc *Service) GetVolumeType(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"volume_type": gin.H{
-			"id":          id,
-			"name":        name,
-			"description": description,
-			"is_public":   isPublic,
+			"id":                              id,
+			"name":                            name,
+			"description":                     description,
+			"is_public":                       isPublic,
+			"extra_specs":                     map[string]string{},
+			"qos_specs_id":                    nil,
+			"os-volume-type-access:is_public": isPublic,
 		},
 	})
 }

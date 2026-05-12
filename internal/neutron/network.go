@@ -69,7 +69,8 @@ func (svc *Service) activeDB() database.DBIF {
 
 // RegisterRoutes registers Neutron routes
 func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
-	// Version discovery
+	// Version discovery (no auth required per OpenStack spec)
+	r.GET("/", svc.ListVersions)
 	r.GET("/v2.0", svc.GetVersion)
 
 	v2 := r.Group("/v2.0")
@@ -250,14 +251,39 @@ func (svc *Service) SetVXLANCoordinator(coordinator *VXLANCoordinator) {
 	svc.vxlanCoordinator = coordinator
 }
 
+// ListVersions returns all available Neutron API versions (root discovery endpoint)
+func (svc *Service) ListVersions(c *gin.Context) {
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	href := fmt.Sprintf("%s://%s/v2.0/", scheme, c.Request.Host)
+	c.JSON(200, gin.H{
+		"versions": []gin.H{
+			{
+				"id":     "v2.0",
+				"status": "CURRENT",
+				"links": []gin.H{
+					{"rel": "self", "href": href},
+				},
+			},
+		},
+	})
+}
+
 // GetVersion returns Neutron version information
 func (svc *Service) GetVersion(c *gin.Context) {
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	href := fmt.Sprintf("%s://%s/v2.0/", scheme, c.Request.Host)
 	c.JSON(200, gin.H{
 		"version": gin.H{
 			"id":     "v2.0",
 			"status": "CURRENT",
 			"links": []gin.H{
-				{"rel": "self", "href": "/v2.0"},
+				{"rel": "self", "href": href},
 			},
 		},
 	})
@@ -510,6 +536,7 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 			"id":                        networkID,
 			"name":                      req.Network.Name,
 			"tenant_id":                 projectID,
+			"project_id":                projectID,
 			"admin_state_up":            adminStateUp,
 			"status":                    "ACTIVE",
 			"shared":                    shared,
@@ -520,6 +547,12 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 			"router:external":           isExternal,
 			"port_security_enabled":     true,
 			"subnets":                   []string{},
+			"availability_zone_hints":   []string{},
+			"availability_zones":        []string{"nova"},
+			"ipv4_address_scope":        nil,
+			"ipv6_address_scope":        nil,
+			"is_default":                false,
+			"description":               "",
 			"created_at":                now.Format(time.RFC3339),
 			"updated_at":                now.Format(time.RFC3339),
 		},
@@ -615,6 +648,7 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 			"id":                        id,
 			"name":                      name,
 			"tenant_id":                 ownerProjectID,
+			"project_id":                ownerProjectID,
 			"admin_state_up":            adminStateUp,
 			"status":                    status,
 			"shared":                    shared,
@@ -625,6 +659,12 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 			"router:external":           isExternal,
 			"port_security_enabled":     true,
 			"subnets":                   []string{},
+			"availability_zone_hints":   []string{},
+			"availability_zones":        []string{"nova"},
+			"ipv4_address_scope":        nil,
+			"ipv6_address_scope":        nil,
+			"is_default":                false,
+			"description":               "",
 			"created_at":                createdAt.Format(time.RFC3339),
 			"updated_at":                updatedAt.Format(time.RFC3339),
 		})
@@ -696,6 +736,7 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 		"id":                        id,
 		"name":                      name,
 		"tenant_id":                 ownerProjectID,
+		"project_id":                ownerProjectID,
 		"admin_state_up":            adminStateUp,
 		"status":                    status,
 		"shared":                    shared,
@@ -706,6 +747,12 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 		"router:external":           isExternal,
 		"port_security_enabled":     true,
 		"subnets":                   []string{},
+		"availability_zone_hints":   []string{},
+		"availability_zones":        []string{"nova"},
+		"ipv4_address_scope":        nil,
+		"ipv6_address_scope":        nil,
+		"is_default":                false,
+		"description":               "",
 		"created_at":                createdAt.Format(time.RFC3339),
 		"updated_at":                updatedAt.Format(time.RFC3339),
 	}

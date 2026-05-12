@@ -135,6 +135,10 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup, adminMiddleware ...gin.Ha
 		v3.GET("/credentials", svc.ListCredentials)
 		v3.GET("/credentials/:id", svc.GetCredential)
 
+		// Regions — read (any authenticated user)
+		v3.GET("/regions", svc.ListRegions)
+		v3.GET("/regions/:id", svc.GetRegion)
+
 		// Application Credentials (lookup by ID without user_id) — read
 		v3.GET("/application_credentials/:id", svc.GetApplicationCredentialByID)
 	}
@@ -1673,6 +1677,42 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"projects": projects})
+}
+
+// ListRegions handles GET /v3/regions
+func (svc *Service) ListRegions(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"regions": []gin.H{
+			{
+				"id":               "RegionOne",
+				"description":      "Default Region",
+				"parent_region_id": nil,
+				"links":            gin.H{"self": common.BaseURL(c, 35357) + "/v3/regions/RegionOne"},
+			},
+		},
+		"links": gin.H{
+			"self":     common.BaseURL(c, 35357) + "/v3/regions",
+			"previous": nil,
+			"next":     nil,
+		},
+	})
+}
+
+// GetRegion handles GET /v3/regions/:id
+func (svc *Service) GetRegion(c *gin.Context) {
+	regionID := c.Param("id")
+	if regionID != "RegionOne" {
+		common.SendError(c, common.NewNotFoundError("region"))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"region": gin.H{
+			"id":               "RegionOne",
+			"description":      "Default Region",
+			"parent_region_id": nil,
+			"links":            gin.H{"self": common.BaseURL(c, 35357) + "/v3/regions/RegionOne"},
+		},
+	})
 }
 
 // GetUserGroups returns groups for a user (GET /v3/users/:id/groups)

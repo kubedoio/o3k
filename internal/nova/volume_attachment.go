@@ -166,6 +166,7 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 			"volumeId":   req.VolumeAttachment.VolumeID,
 			"serverId":   instanceID,
 			"device":     device,
+			"tag":        nil,
 			"attachedAt": now.Format(time.RFC3339),
 		},
 	})
@@ -304,6 +305,7 @@ func (svc *Service) ListVolumeAttachments(c *gin.Context) {
 			"volumeId":   volumeID,
 			"serverId":   instanceID,
 			"device":     device,
+			"tag":        nil,
 			"attachedAt": attachedAt.Format(time.RFC3339),
 		})
 	}
