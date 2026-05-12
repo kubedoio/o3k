@@ -23,15 +23,48 @@ func (e *OpenStackError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-// ToJSON converts the error to OpenStack-compatible JSON format.
-// For 404 Not Found errors, uses the named fault format required by Terraform:
+// httpFaultName maps an HTTP status code to the OpenStack fault envelope key.
+// See https://docs.openstack.org/api-guide/compute/faults.html
+func httpFaultName(code int) string {
+	switch code {
+	case http.StatusBadRequest:
+		return "badRequest"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "itemNotFound"
+	case http.StatusMethodNotAllowed:
+		return "badMethod"
+	case http.StatusConflict:
+		return "conflictingRequest"
+	case http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
+		return "overLimit"
+	case http.StatusInternalServerError:
+		return "computeFault"
+	case http.StatusNotImplemented:
+		return "notImplemented"
+	case http.StatusServiceUnavailable:
+		return "serviceUnavailable"
+	default:
+		return "computeFault"
+	}
+}
+
+// ToJSON converts the error to OpenStack-compatible JSON format using named
+// fault keys for every status code, e.g.:
 //
 //	{"itemNotFound": {"code": 404, "message": "..."}}
+//	{"badRequest":   {"code": 400, "message": "..."}}
 //
-// For all other errors, uses the generic envelope:
-//
-//	{"error": {"message": "...", "code": N, "title": "Title"}}
+// The Code field on the struct is used as the envelope key when set; otherwise
+// httpFaultName derives one from the status code.
 func (e *OpenStackError) ToJSON() gin.H {
+	return e.toJSONWithRequestID("")
+}
+
+func (e *OpenStackError) toJSONWithRequestID(requestID string) gin.H {
 	errorBody := gin.H{
 		"message": e.Message,
 		"code":    e.StatusCode,
@@ -42,19 +75,27 @@ func (e *OpenStackError) ToJSON() gin.H {
 		errorBody["details"] = e.Details
 	}
 
-	// 404 responses must use the named fault key so Terraform can recognise them.
-	if e.StatusCode == http.StatusNotFound {
-		return gin.H{e.Code: errorBody}
+	if requestID != "" {
+		errorBody["request_id"] = requestID
 	}
 
-	return gin.H{
-		"error": errorBody,
+	key := e.Code
+	if key == "" {
+		key = httpFaultName(e.StatusCode)
 	}
+
+	return gin.H{key: errorBody}
 }
 
-// SendError sends an OpenStack-formatted error response
+// SendError sends an OpenStack-formatted error response. It reads the
+// request_id set by the logging middleware and includes it in the body.
+// For 429 and 503 responses a Retry-After: 60 header is added automatically.
 func SendError(c *gin.Context, err *OpenStackError) {
-	c.JSON(err.StatusCode, err.ToJSON())
+	if err.StatusCode == http.StatusTooManyRequests || err.StatusCode == http.StatusServiceUnavailable {
+		c.Header("Retry-After", "60")
+	}
+	requestID := c.GetString("request_id")
+	c.JSON(err.StatusCode, err.toJSONWithRequestID(requestID))
 }
 
 // Common error constructors
@@ -242,22 +283,6 @@ func NewMethodNotAllowedError(method string) *OpenStackError {
 	}
 }
 
-func NewRateLimitError(message string) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusTooManyRequests,
-		Code:       "overLimit",
-		Message:    message,
-	}
-}
-
-func NewBuildInProgressError() *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusConflict,
-		Code:       "conflictingRequest",
-		Message:    "Cannot perform action, instance is building.",
-	}
-}
-
 func NewInvalidStateError(message string) *OpenStackError {
 	return &OpenStackError{
 		StatusCode: http.StatusConflict,
@@ -287,27 +312,3 @@ func NewPermissionDeniedError(operation, resourceType, requiredRole string) *Ope
 	}
 }
 
-// WrapError wraps a Go error into an OpenStack error
-func WrapError(err error, statusCode int, code string) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: statusCode,
-		Code:       code,
-		Message:    err.Error(),
-	}
-}
-
-// IsNotFound checks if an error is a "not found" error
-func IsNotFound(err error) bool {
-	if osErr, ok := err.(*OpenStackError); ok {
-		return osErr.StatusCode == http.StatusNotFound
-	}
-	return false
-}
-
-// IsConflict checks if an error is a conflict error
-func IsConflict(err error) bool {
-	if osErr, ok := err.(*OpenStackError); ok {
-		return osErr.StatusCode == http.StatusConflict
-	}
-	return false
-}

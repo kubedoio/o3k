@@ -322,3 +322,136 @@ func TestSQLiteAdapter_Transaction(t *testing.T) {
 
 // Compile-time check: SQLiteAdapter satisfies DBIF.
 var _ DBIF = (*SQLiteAdapter)(nil)
+
+// ---------------------------------------------------------------------------
+// castRegex and rewriteExtractEpoch targeted tests
+// ---------------------------------------------------------------------------
+
+// TestCastRegexExpandedTypes verifies that all extended PostgreSQL type-cast
+// suffixes are stripped by rewriteDialect.
+func TestCastRegexExpandedTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "::numeric(10,2)",
+			in:   "SELECT price::numeric(10,2) FROM products",
+			want: "SELECT price FROM products",
+		},
+		{
+			name: "::varchar(255)",
+			in:   "SELECT name::varchar(255) FROM t",
+			want: "SELECT name FROM t",
+		},
+		{
+			name: "::double precision",
+			in:   "SELECT val::double precision FROM t",
+			want: "SELECT val FROM t",
+		},
+		{
+			name: "::timestamp with time zone",
+			in:   "SELECT created_at::timestamp with time zone FROM t",
+			want: "SELECT created_at FROM t",
+		},
+		{
+			name: "::inet",
+			in:   "SELECT addr::inet FROM t",
+			want: "SELECT addr FROM t",
+		},
+		{
+			name: "::bytea",
+			in:   "SELECT data::bytea FROM t",
+			want: "SELECT data FROM t",
+		},
+		{
+			name: "multiple casts in one query",
+			in:   "SELECT a::int, b::text, c::numeric(5,2) FROM t",
+			want: "SELECT a, b, c FROM t",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteDialect(tt.in)
+			if got != tt.want {
+				t.Errorf("rewriteDialect(%q)\n  got  %q\n  want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractEpochDateSubtraction verifies that EXTRACT(EPOCH FROM (a - b))
+// is rewritten to the two-argument strftime subtraction form.
+func TestExtractEpochDateSubtraction(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "now minus column",
+			in:   "SELECT EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600",
+			want: "SELECT (CAST(strftime('%s', CURRENT_TIMESTAMP) AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER)) / 3600",
+		},
+		{
+			name: "column minus column",
+			in:   "SELECT EXTRACT(EPOCH FROM (updated_at - created_at))",
+			want: "SELECT (CAST(strftime('%s', updated_at) AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER))",
+		},
+		{
+			name: "spaced operands",
+			in:   "SELECT EXTRACT(EPOCH FROM (  end_time  -  start_time  ))",
+			want: "SELECT (CAST(strftime('%s', end_time) AS INTEGER) - CAST(strftime('%s', start_time) AS INTEGER))",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteDialect(tt.in)
+			if got != tt.want {
+				t.Errorf("rewriteDialect(%q)\n  got  %q\n  want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractEpochNoSubtraction verifies that EXTRACT(EPOCH FROM (col)) with
+// no subtraction still produces a single-argument strftime cast (no regression).
+func TestExtractEpochNoSubtraction(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "single column",
+			in:   "SELECT EXTRACT(EPOCH FROM (created_at))",
+			want: "SELECT CAST(strftime('%s', created_at) AS INTEGER)",
+		},
+		{
+			name: "nested function call",
+			in:   "SELECT EXTRACT(EPOCH FROM (COALESCE(updated_at, created_at)))",
+			want: "SELECT CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteDialect(tt.in)
+			if got != tt.want {
+				t.Errorf("rewriteDialect(%q)\n  got  %q\n  want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractEpochMultipleWithSubtraction verifies that a query with several
+// EXTRACT calls — some with subtraction, some without — are each rewritten
+// correctly without interfering with each other.
+func TestExtractEpochMultipleWithSubtraction(t *testing.T) {
+	in := "SELECT EXTRACT(EPOCH FROM (end_at - start_at)), EXTRACT(EPOCH FROM (now)), EXTRACT(EPOCH FROM (finish - begin))"
+	want := "SELECT (CAST(strftime('%s', end_at) AS INTEGER) - CAST(strftime('%s', start_at) AS INTEGER)), CAST(strftime('%s', now) AS INTEGER), (CAST(strftime('%s', finish) AS INTEGER) - CAST(strftime('%s', begin) AS INTEGER))"
+	got := rewriteDialect(in)
+	if got != want {
+		t.Errorf("rewriteDialect multiple EXTRACT\n  got  %q\n  want %q", got, want)
+	}
+}

@@ -258,9 +258,9 @@ func TestOpenStackErrorToJSONNon404(t *testing.T) {
 		t.Fatal("Expected JSON output")
 	}
 
-	// Non-404 errors still use the generic "error" envelope.
-	if _, exists := json["error"]; !exists {
-		t.Error("Expected 'error' key in JSON for non-404 responses")
+	// Non-404 errors use the named fault key (e.g. "badRequest"), not the generic "error" envelope.
+	if _, exists := json["badRequest"]; !exists {
+		t.Error("Expected 'badRequest' key in JSON for 400 responses")
 	}
 }
 
