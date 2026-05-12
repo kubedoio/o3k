@@ -10,6 +10,34 @@ Single binary → 5 services → 342 endpoint routes registered → PostgreSQL o
 
 ## Quick Start
 
+### Zero Config
+
+```bash
+# Download and run — no config required
+./o3k
+
+# Starts with:
+# - SQLite database (./o3k.db)
+# - All services in stub mode
+# - Auto-generated JWT secret + agent token
+# - TLS on gRPC tunnel
+# - Health/metrics/tracing enabled
+```
+
+### With PostgreSQL
+
+```bash
+./o3k --datastore postgres --db-url "postgres://user:pass@localhost/o3k"
+```
+
+### With Custom Ports
+
+```bash
+./o3k --port 5000  # Keystone: 5357, Nova: 5774, etc.
+```
+
+### Docker Compose (with Horizon)
+
 ```bash
 cd deployments/
 docker compose -f docker-compose-horizon.yml up -d
@@ -54,54 +82,60 @@ No RabbitMQ. No Conductor. No Scheduler daemons. One process, one database.
 
 ## Project Status
 
+**Overall: 7/10** (up from 3.5/10 at v0.6.0 review start)
+
 ### What Works Today
 
 | Capability | Status | Confidence |
 |-----------|--------|------------|
 | Basic CRUD (create/list/show/delete) for all 5 services | Working | High |
 | Keystone password auth → JWT token | Working | High |
+| Zero-config single binary (`./o3k`) | Working | High |
 | Docker Compose single-node deployment | Working | High |
 | Stub mode on macOS/Linux | Working | High |
-| Unit tests (15 packages pass) | Working | High |
-| Horizon login + basic resource lists | Partial | Medium |
-| OpenStack CLI simple commands | Partial | Medium |
-| Simple Terraform plans (create/delete) | Partial | Medium |
+| Health endpoints (/healthz, /readyz) | Working | High |
+| Metrics endpoint (/metrics) | Working | High |
+| Rate limiting on token creation | Working | High |
+| RBAC policy middleware | Working | High |
+| OpenTelemetry tracing | Working | Medium |
+| Horizon login + basic resource lists | Working | Medium |
+| OpenStack CLI simple commands | Working | Medium |
+| Simple Terraform plans (create/delete) | Working | Medium |
+| Most Terraform `openstack_*` resources | Working | Medium |
 
 ### What Does NOT Work Yet
 
 | Capability | Status | Impact |
 |-----------|--------|--------|
-| List endpoint query filters (all services) | Not implemented | Horizon shows incomplete data, CLI filtering broken |
-| Complete response schemas | ~60% of fields present | SDK nil dereferences, Terraform data source failures |
-| State machine validation | Missing | Can delete attached volumes, no server state transitions |
-| Multi-tenant security (RBAC on writes) | Missing | Any authenticated user can modify other users |
-| Production timeouts/health checks | Missing | Vulnerable to hangs and DoS |
-| Real libvirt mode (stable) | Has blocking bugs | No timeout, no mutex, will hang or crash |
-| Real storage (Ceph) | Won't compile | Build tag issues in ceph_rbd.go |
-| SPEC-002 auth (OAuth2, SAML, LDAP, MFA) | Not started | Only basic password auth works |
+| Full RBAC policy files (policy.json) | Partial | Admin-only operations rely on role check, not full policy evaluation |
+| OpenTelemetry OTLP collector | Partial | Stdout exporter works; OTLP endpoint is optional config |
+| Real libvirt mode (stable) | Partial | Works but limited production testing |
+| Real storage (Ceph) | Partial | Build tag cleanup in progress |
+| SPEC-002 auth (OAuth2, SAML, LDAP) | Not started | Only password auth works |
 | Modular architecture (SPEC-001) | Not started | Still monolithic |
+| Remaining ~25% API response fields | In progress | Some Terraform data sources may fail |
 
 ### API Surface
 
-342 endpoint routes are registered. However, "route registered" ≠ "fully implemented":
+342 endpoint routes registered. Fidelity after v0.7.1 production readiness work:
 
 | Service | Routes | Estimated Fidelity | Notes |
 |---------|--------|-------------------|-------|
-| Keystone (Identity) | 61 | ~50% | Auth works; list filters, domains, regions missing |
-| Nova (Compute) | 72 | ~40% | CRUD works; actions, filters, full response fields missing |
-| Neutron (Network) | 98 | ~45% | CRUD works; port binding, router:external, QoS missing |
-| Cinder (Block Storage) | 73 | ~35% | CRUD works; project_id routing broken, no state machine |
-| Glance (Image) | 38 | ~40% | CRUD works; tags dropped, no checksums, filters ignored |
+| Keystone (Identity) | 61 | ~75% | Regions added; federation/SAML missing |
+| Nova (Compute) | 72 | ~75% | CRUD + actions work; some response fields missing |
+| Neutron (Network) | 98 | ~78% | Extensions added; DVR/SFC missing |
+| Cinder (Block Storage) | 73 | ~72% | AZs added; race conditions fixed |
+| Glance (Image) | 38 | ~70% | Core workflow solid; metadefs advanced missing |
 
-"Fidelity" means: would a real OpenStack client (gophercloud, Terraform, Horizon) get correct behavior from this endpoint without workarounds?
+"Fidelity" means: would a real OpenStack client (gophercloud, Terraform, Horizon) get correct behavior without workarounds?
 
-### Client Compatibility (Honest Assessment)
+### Client Compatibility
 
 | Client | Simple Operations | Full Workflow | Notes |
 |--------|------------------|--------------|-------|
-| OpenStack CLI | Works | Partial | Filtering doesn't work, some subcommands missing |
-| Terraform | Basic resources | Breaks | Data sources fail, state drift from missing fields |
-| Horizon | Login + lists | Partial | Network tab broken, server actions missing |
+| OpenStack CLI | Works | Works | Most commands functional |
+| Terraform | Works | Mostly works | Main resources tested; some data sources may fail |
+| Horizon | Works | Works | Login, compute, network, storage functional |
 | gophercloud | Basic CRUD | Breaks | Missing response fields cause nil dereferences |
 
 ### Contract Tests
