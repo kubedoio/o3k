@@ -127,6 +127,10 @@ jobs:
           cache: true
 
       - name: Start services
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password-not-secret
+          O3K_JWT_SECRET: ci-jwt-secret-32chars-or-more-padded-out-here
+          O3K_ADMIN_PASSWORD: secret
         run: |
           docker compose -f deployments/docker-compose.yml up -d
           timeout 120 bash -c 'until curl -sf http://localhost:35357/v3 > /dev/null; do sleep 3; done'
@@ -141,21 +145,31 @@ jobs:
           OS_PROJECT_NAME: "default"
           OS_USER_DOMAIN_NAME: "Default"
           OS_PROJECT_DOMAIN_NAME: "Default"
-        continue-on-error: true
 
       - name: Check pass rate
+        if: always()
         run: |
-          PASSED=$(grep -c "^--- PASS:" /tmp/results.txt || echo "0")
-          FAILED=$(grep -c "^--- FAIL:" /tmp/results.txt || echo "0")
-          TOTAL=$((PASSED + FAILED))
-          if [ $TOTAL -gt 0 ]; then
-            RATE=$((PASSED * 100 / TOTAL))
-            echo "Pass rate: ${RATE}% ($PASSED/$TOTAL)"
-            if [ $RATE -lt 85 ]; then
-              echo "::error::Contract tests below 85% threshold (${RATE}%)"
-              exit 1
-            fi
+          if [ ! -f /tmp/results.txt ]; then
+            echo "::error::Contract test results missing"
+            exit 1
           fi
+          PASSED=$(grep -c "^--- PASS:" /tmp/results.txt || true)
+          FAILED=$(grep -c "^--- FAIL:" /tmp/results.txt || true)
+          TOTAL=$((PASSED + FAILED))
+          if [ $TOTAL -eq 0 ]; then
+            echo "::error::No contract tests ran"
+            exit 1
+          fi
+          RATE=$((PASSED * 100 / TOTAL))
+          echo "Pass rate: ${RATE}% ($PASSED/$TOTAL)"
+          if [ $RATE -lt 85 ]; then
+            echo "::error::Contract tests below 85% threshold (${RATE}%, $PASSED/$TOTAL)"
+            exit 1
+          fi
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose -f deployments/docker-compose.yml logs --tail=200
 
       - name: Cleanup
         if: always()
@@ -170,8 +184,10 @@ jobs:
       - name: Check results
         run: |
           if [ "${{ needs.build.result }}" != "success" ] || \
-             [ "${{ needs.test.result }}" != "success" ]; then
-            echo "::error::Required checks failed (build or test)"
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.contract-tests.result }}" != "success" ] || \
+             [ "${{ needs.compat-check.result }}" != "success" ]; then
+            echo "::error::Required checks failed (build, test, contract-tests, or compat-check)"
             exit 1
           fi
           echo "All required checks passed"
