@@ -50,8 +50,11 @@ a stable release, this policy will be revised.
   been audited for tenant escape.
 - **Network-level isolation in stub mode**: Stub mode does not create
   network namespaces or iptables rules.
-- **Default credentials**: The seed migration creates `admin`/`secret`.
-  Operators must change this before any non-development use.
+- **Default credentials**: The bootstrap path generates a random admin
+  password on first start (printed once to stderr or written to
+  `$O3K_DATA_DIR/initial-password`). If `O3K_ADMIN_PASSWORD` is set, that
+  value is used verbatim; operators are responsible for rotating it. No
+  default password is shipped in the seed migrations.
 - **Secrets at rest**: JWT secret and database credentials are read
   from config / env vars; we do not yet integrate with a KMS.
 - **Rate limiting and abuse**: There is no built-in request quota or
@@ -67,7 +70,7 @@ reviewed before any deployment beyond local development:
 | Setting | Risk if left at default |
 |---|---|
 | `keystone.jwt_secret` | Forgeable tokens — anyone with the default secret can impersonate any user |
-| Seed credentials (`admin`/`secret`) | Trivially guessable admin access |
+| Seed credentials (`O3K_ADMIN_PASSWORD` or generated) | Operators must rotate the bootstrap password and remove the `initial-password` file once a real password is set |
 | `database.url` (with embedded password) | Credential leak via process listing or config dump |
 | TLS termination | O3K speaks plain HTTP by default; terminate TLS at a reverse proxy |
 
