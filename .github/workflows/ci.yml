@@ -185,10 +185,18 @@ jobs:
 
       - name: Dump service logs on failure
         if: failure()
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password-not-secret
+          O3K_JWT_SECRET: ci-jwt-secret-32chars-or-more-padded-out-here
+          O3K_ADMIN_PASSWORD: secret
         run: docker compose -f deployments/docker-compose.yml logs --tail=200
 
       - name: Cleanup
         if: always()
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password-not-secret
+          O3K_JWT_SECRET: ci-jwt-secret-32chars-or-more-padded-out-here
+          O3K_ADMIN_PASSWORD: secret
         run: docker compose -f deployments/docker-compose.yml down -v
 
   ebpf-smoke:
@@ -268,6 +276,14 @@ jobs:
           done
           sudo microceph.ceph osd pool create rbd 8 8
           sudo microceph.ceph osd pool application enable rbd rbd
+          # Single-OSD cluster: drop replication from default size=3,
+          # min_size=2 down to size=1 so writes don't block waiting for
+          # replicas that don't exist. Also lower the cluster default for
+          # any pool created later by tests.
+          sudo microceph.ceph osd pool set rbd size 1
+          sudo microceph.ceph osd pool set rbd min_size 1
+          sudo microceph.ceph config set global osd_pool_default_size 1
+          sudo microceph.ceph config set global osd_pool_default_min_size 1
 
       - name: Expose Ceph config + keyring to test
         run: |
