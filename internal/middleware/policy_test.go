@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/cobaltcore-dev/o3k/internal/keystone"
+	"github.com/cobaltcore-dev/o3k/internal/keystone/policy"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,14 +20,27 @@ func setRoles(roles []string, isAdmin bool) gin.HandlerFunc {
 	}
 }
 
+// resetPolicyEngine swaps in a fresh engine for the duration of a test and
+// restores the original on cleanup. Tests that need to load specific rules
+// should call this and then keystone.PolicyEngine.LoadPolicy(...).
+func resetPolicyEngine(t *testing.T) {
+	t.Helper()
+	original := keystone.PolicyEngine
+	keystone.PolicyEngine = policy.NewEngine()
+	t.Cleanup(func() {
+		keystone.PolicyEngine = original
+	})
+}
+
 func TestPolicyMiddleware_AdminRoleAllowsAllMethods(t *testing.T) {
+	resetPolicyEngine(t)
 	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			r := gin.New()
 			r.Use(setRoles([]string{"admin"}, false))
-			r.Use(PolicyMiddleware())
+			r.Use(PolicyMiddleware("compute"))
 			r.Handle(method, "/resource", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 			w := httptest.NewRecorder()
@@ -40,9 +55,10 @@ func TestPolicyMiddleware_AdminRoleAllowsAllMethods(t *testing.T) {
 }
 
 func TestPolicyMiddleware_IsAdminFlagAllowsAllMethods(t *testing.T) {
+	resetPolicyEngine(t)
 	r := gin.New()
 	r.Use(setRoles([]string{}, true)) // is_admin=true, no roles listed
-	r.Use(PolicyMiddleware())
+	r.Use(PolicyMiddleware("compute"))
 	r.POST("/resource", func(c *gin.Context) { c.Status(http.StatusCreated) })
 
 	w := httptest.NewRecorder()
@@ -55,13 +71,14 @@ func TestPolicyMiddleware_IsAdminFlagAllowsAllMethods(t *testing.T) {
 }
 
 func TestPolicyMiddleware_MemberRoleAllowsAllMethods(t *testing.T) {
+	resetPolicyEngine(t)
 	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			r := gin.New()
 			r.Use(setRoles([]string{"member"}, false))
-			r.Use(PolicyMiddleware())
+			r.Use(PolicyMiddleware("compute"))
 			r.Handle(method, "/resource", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 			w := httptest.NewRecorder()
@@ -76,6 +93,7 @@ func TestPolicyMiddleware_MemberRoleAllowsAllMethods(t *testing.T) {
 }
 
 func TestPolicyMiddleware_ReaderRoleAllowsGetHead(t *testing.T) {
+	resetPolicyEngine(t)
 	tests := []struct {
 		method string
 		want   int
@@ -92,7 +110,7 @@ func TestPolicyMiddleware_ReaderRoleAllowsGetHead(t *testing.T) {
 		t.Run(tt.method, func(t *testing.T) {
 			r := gin.New()
 			r.Use(setRoles([]string{"reader"}, false))
-			r.Use(PolicyMiddleware())
+			r.Use(PolicyMiddleware("compute"))
 			r.Handle(tt.method, "/resource", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 			w := httptest.NewRecorder()
@@ -107,13 +125,14 @@ func TestPolicyMiddleware_ReaderRoleAllowsGetHead(t *testing.T) {
 }
 
 func TestPolicyMiddleware_NoRoleBlocksEverything(t *testing.T) {
+	resetPolicyEngine(t)
 	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			r := gin.New()
 			r.Use(setRoles([]string{}, false)) // authenticated but no roles
-			r.Use(PolicyMiddleware())
+			r.Use(PolicyMiddleware("compute"))
 			r.Handle(method, "/resource", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 			w := httptest.NewRecorder()
@@ -128,11 +147,12 @@ func TestPolicyMiddleware_NoRoleBlocksEverything(t *testing.T) {
 }
 
 func TestPolicyMiddleware_UnauthenticatedPassThrough(t *testing.T) {
+	resetPolicyEngine(t)
 	// When roles are not set at all (e.g. version discovery skipped auth),
 	// the middleware must not block the request.
 	r := gin.New()
 	// Deliberately do NOT set roles in context.
-	r.Use(PolicyMiddleware())
+	r.Use(PolicyMiddleware("compute"))
 	r.GET("/", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -141,6 +161,120 @@ func TestPolicyMiddleware_UnauthenticatedPassThrough(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("got %d, want %d (unauthenticated public endpoint must pass through)", w.Code, http.StatusOK)
+	}
+}
+
+// --- Policy engine integration tests ---
+
+// TestPolicyMiddleware_PolicyRulePermitsRequest verifies that when a policy
+// rule is loaded, the engine's verdict overrides the role-based fallback —
+// here a "reader" identity is granted POST access via an explicit policy.
+func TestPolicyMiddleware_PolicyRulePermitsRequest(t *testing.T) {
+	resetPolicyEngine(t)
+	keystone.PolicyEngine.LoadPolicy(map[string]string{
+		"compute:create": "role:reader",
+	})
+
+	r := gin.New()
+	r.Use(setRoles([]string{"reader"}, false))
+	r.Use(PolicyMiddleware("compute"))
+	r.POST("/servers", func(c *gin.Context) { c.Status(http.StatusCreated) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/servers", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("policy rule allowing reader to POST: got %d, want %d", w.Code, http.StatusCreated)
+	}
+}
+
+// TestPolicyMiddleware_PolicyRuleDeniesRequest verifies that an explicit
+// policy rule denies access even when role-based fallback would have
+// permitted the request — here "member" is normally permitted, but the
+// loaded rule restricts compute:create to admins only.
+func TestPolicyMiddleware_PolicyRuleDeniesRequest(t *testing.T) {
+	resetPolicyEngine(t)
+	keystone.PolicyEngine.LoadPolicy(map[string]string{
+		"compute:create": "role:admin",
+	})
+
+	r := gin.New()
+	r.Use(setRoles([]string{"member"}, false))
+	r.Use(PolicyMiddleware("compute"))
+	r.POST("/servers", func(c *gin.Context) { c.Status(http.StatusCreated) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/servers", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("policy rule denying member POST: got %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
+// TestPolicyMiddleware_FallbackWhenRuleAbsent verifies that if no rule
+// matches the service+method, the middleware falls back to the coarse
+// role-based check.
+func TestPolicyMiddleware_FallbackWhenRuleAbsent(t *testing.T) {
+	resetPolicyEngine(t)
+	// Load rules for a different service/method combination only.
+	keystone.PolicyEngine.LoadPolicy(map[string]string{
+		"network:delete": "role:admin",
+	})
+
+	r := gin.New()
+	r.Use(setRoles([]string{"member"}, false))
+	r.Use(PolicyMiddleware("compute"))
+	r.POST("/servers", func(c *gin.Context) { c.Status(http.StatusCreated) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/servers", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("absent rule should fall back to role check: got %d, want %d", w.Code, http.StatusCreated)
+	}
+}
+
+// TestPolicyMiddleware_OrExpressionPermitsEither verifies the policy engine
+// handles disjunction so operators can write rules like "admin or member".
+func TestPolicyMiddleware_OrExpressionPermitsEither(t *testing.T) {
+	resetPolicyEngine(t)
+	keystone.PolicyEngine.LoadPolicy(map[string]string{
+		"compute:delete": "role:admin or role:member",
+	})
+
+	r := gin.New()
+	r.Use(setRoles([]string{"member"}, false))
+	r.Use(PolicyMiddleware("compute"))
+	r.DELETE("/servers/:id", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/servers/abc", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("OR expression matching member: got %d, want %d", w.Code, http.StatusNoContent)
+	}
+}
+
+// TestPolicyMiddleware_BuildPolicyRule documents the method→verb mapping.
+func TestPolicyMiddleware_BuildPolicyRule(t *testing.T) {
+	cases := map[string]string{
+		http.MethodGet:    "compute:list",
+		http.MethodHead:   "compute:list",
+		http.MethodPost:   "compute:create",
+		http.MethodPut:    "compute:update",
+		http.MethodPatch:  "compute:update",
+		http.MethodDelete: "compute:delete",
+	}
+	for method, want := range cases {
+		t.Run(method, func(t *testing.T) {
+			if got := buildPolicyRule("compute", method); got != want {
+				t.Errorf("buildPolicyRule(compute, %s) = %q, want %q", method, got, want)
+			}
+		})
 	}
 }
 

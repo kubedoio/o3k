@@ -469,28 +469,48 @@ Horizon allows users to switch projects via dropdown:
 
 ### Role-Based Access Control (RBAC)
 
-Roles determine what actions users can perform:
+O3K enforces RBAC in two layers:
 
-| Role | Permissions |
-|------|-------------|
-| **admin** | Full access: create, read, update, delete all resources; admin-only operations (os-resetState, os-evacuate) |
-| **member** | Standard access: create, read, update, delete own resources; cannot perform admin operations |
-| **reader** | Read-only: can view resources but not modify |
+1. **Policy engine** (preferred). When the operator has loaded policy rules
+   via `POST /v3/policies`, the `PolicyMiddleware` consults the engine first
+   and uses its verdict. Rules are written in oslo.policy syntax and support
+   `role:<name>`, `project_id:%(project_id)s`, `user_id:%(user_id)s`, plus
+   `or` / `and` / `not`. The engine looks up rules by
+   `<service>:<verb>` where verb is `list` (GET/HEAD), `create` (POST),
+   `update` (PUT/PATCH), or `delete`.
+2. **Coarse role fallback**. When no rule is loaded for the
+   service+method combination, the middleware falls back to the role table
+   below. This preserves zero-config behaviour and keeps the system usable
+   before any policies are authored.
 
-**Role Check Example** (Nova os-resetState):
-```go
-roles := c.GetStringSlice("roles")
-isAdmin := false
-for _, role := range roles {
-    if role == "admin" {
-        isAdmin = true
-        break
-    }
-}
-if !isAdmin {
-    return 403 Forbidden
-}
+| Role | Fallback permissions when no policy rule is loaded |
+|------|-----------------------------------------------------|
+| **admin** | Full access: all methods, all services |
+| **member** / **\_member\_** | Full access: all methods (project-scoped at handler level) |
+| **reader** | Read-only: GET / HEAD only; writes return 403 |
+
+**Authoring custom policies**
+
+Operators can tighten enforcement by submitting a policy blob to Keystone:
+
+```bash
+curl -X POST $OS_AUTH_URL/v3/policies \
+  -H "X-Auth-Token: $TOKEN" \
+  -d '{"policy":{"type":"application/json","blob":"{\"compute:create\":\"role:admin\",\"compute:delete\":\"role:admin\"}"}}'
 ```
+
+Once loaded, `compute:create` becomes admin-only and the engine's verdict
+overrides the role fallback. Project- and user-scoped rules work too:
+
+```json
+{"compute:delete": "role:admin or project_id:%(project_id)s"}
+```
+
+**Per-handler enforcement** is also supported. Handlers like
+`os-resetState` (Nova), volume detach (Cinder), and network delete
+(Neutron) call `keystone.PolicyEngine.Enforce(rule, target, creds)`
+directly to apply finer-grained checks beyond the middleware-level
+service+method rule.
 
 ---
 
