@@ -191,10 +191,46 @@ jobs:
         if: always()
         run: docker compose -f deployments/docker-compose.yml down -v
 
+  ebpf-smoke:
+    name: eBPF Compile + Load
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Install eBPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev linux-headers-$(uname -r) || \
+            sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev
+
+      - name: Verify clang version
+        run: clang --version
+
+      - name: Compile eBPF program
+        run: make build-ebpf
+
+      - name: Verify object file exists
+        run: |
+          test -f pkg/networking/ebpf/secgroup.o
+          file pkg/networking/ebpf/secgroup.o | grep -q "ELF.*BPF"
+
+      - name: Run eBPF load smoke test
+        # Requires CAP_BPF / CAP_SYS_ADMIN to actually load into the kernel.
+        # GitHub Actions ubuntu runners support this via sudo.
+        run: |
+          cd pkg/networking/ebpf
+          sudo -E env "PATH=$PATH" "HOME=$HOME" \
+            $(which go) test -tags ebpf_integration -v -run TestEBPFLoad -count=1 .
+
   status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [build, test, lint, vulncheck, compat-check, contract-tests]
+    needs: [build, test, lint, vulncheck, compat-check, contract-tests, ebpf-smoke]
     if: always()
     steps:
       - name: Check results
@@ -204,8 +240,9 @@ jobs:
              [ "${{ needs.lint.result }}" != "success" ] || \
              [ "${{ needs.vulncheck.result }}" != "success" ] || \
              [ "${{ needs.contract-tests.result }}" != "success" ] || \
-             [ "${{ needs.compat-check.result }}" != "success" ]; then
-            echo "::error::Required checks failed (build, test, lint, vulncheck, contract-tests, or compat-check)"
+             [ "${{ needs.compat-check.result }}" != "success" ] || \
+             [ "${{ needs.ebpf-smoke.result }}" != "success" ]; then
+            echo "::error::Required checks failed (build, test, lint, vulncheck, contract-tests, compat-check, or ebpf-smoke)"
             exit 1
           fi
           echo "All required checks passed"
