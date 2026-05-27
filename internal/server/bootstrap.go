@@ -107,3 +107,9 @@ func generateSecret(n int) (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// GenerateAdminPassword returns a freshly generated random admin password.
+// Used by main when no O3K_ADMIN_PASSWORD env var is set in non-zero-config mode.
+func GenerateAdminPassword() (string, error) {
+	return generateSecret(16)
+}

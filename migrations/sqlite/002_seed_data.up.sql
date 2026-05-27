@@ -1,11 +1,7 @@
--- Insert default admin user (password: secret, bcrypt hash)
-INSERT INTO users (id, name, password_hash, enabled)
-VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'admin',
-    '$2a$10$/DyBs44Yot8zgjC4j.n03Ox/QG94ftrksEXKKvadKcixLbGll0dR2', -- bcrypt hash of 'secret'
-    1
-) ON CONFLICT (name) DO NOTHING;
+-- Schema fixtures only. The admin user, admin role assignment, and admin
+-- password are created at runtime by internal/server/seed.go using a
+-- bootstrap-generated random password (see internal/server/bootstrap.go).
+-- Do NOT add hardcoded user credentials here.
 
 -- Insert default project
 INSERT INTO projects (id, name, description, enabled)
@@ -23,14 +19,6 @@ VALUES
     ('00000000-0000-0000-0000-000000000004', 'member'),
     ('00000000-0000-0000-0000-000000000005', 'reader')
 ON CONFLICT (name) DO NOTHING;
-
--- Assign admin role to admin user on default project
-INSERT INTO role_assignments (user_id, project_id, role_id)
-VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    '00000000-0000-0000-0000-000000000002',
-    '00000000-0000-0000-0000-000000000003'
-) ON CONFLICT (user_id, project_id, role_id) DO NOTHING;
 
 -- Insert default flavors
 INSERT INTO flavors (id, name, vcpus, ram_mb, disk_gb, is_public)

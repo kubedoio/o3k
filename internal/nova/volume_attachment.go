@@ -95,10 +95,12 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 		if err != nil {
 			log.Error().Err(err).Str("operation", "get_next_device").Msg("device assignment error")
 			// Roll back the atomic status change so the volume is available again.
-			svc.activeDB().Exec(c.Request.Context(),
+			if _, derr := svc.activeDB().Exec(c.Request.Context(),
 				"UPDATE volumes SET status = 'available', attached_to_instance_id = NULL WHERE id = $1",
 				volumeID,
-			)
+			); derr != nil {
+				log.Error().Err(derr).Str("volume_id", volumeID).Msg("failed to roll back volume status after device assignment failure")
+			}
 			common.SendError(c, common.NewInternalServerError("failed to assign device"))
 			return
 		}
@@ -115,10 +117,12 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_volume_attachment").Msg("database error")
 		// Roll back the atomic status change so the volume is available again.
-		svc.activeDB().Exec(c.Request.Context(),
+		if _, derr := svc.activeDB().Exec(c.Request.Context(),
 			"UPDATE volumes SET status = 'available', attached_to_instance_id = NULL WHERE id = $1",
 			volumeID,
-		)
+		); derr != nil {
+			log.Error().Err(derr).Str("volume_id", volumeID).Msg("failed to roll back volume status after attachment record creation failure")
+		}
 		common.SendError(c, common.NewInternalServerError("failed to create volume attachment"))
 		return
 	}
@@ -145,17 +149,20 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 
 			// Attach disk to VM
 			diskXML := hypervisor.GenerateDiskXML(hypervisor.DiskSpec{
-				Device:   device,
-				Type:     "network", // or "file" for local
-				Source:   fmt.Sprintf("%s/%s", rbdPool, rbdImage),
-				Protocol: "rbd",
+				Device:       device,
+				Type:         "network", // or "file" for local
+				Source:       fmt.Sprintf("%s/%s", rbdPool, rbdImage),
+				Protocol:     "rbd",
+				CephMonitors: svc.cephMonitors,
 			})
 
 			if err := svc.vmManager.AttachDevice(ctx, libvirtDomainID, diskXML); err != nil {
 				// Update attachment status to error (don't delete, admin can retry)
-				svc.activeDB().Exec(ctx,
+				if _, derr := svc.activeDB().Exec(ctx,
 					"UPDATE volume_attachments SET device = $1 WHERE id = $2",
-					device+"(error)", attachmentID)
+					device+"(error)", attachmentID); derr != nil {
+					log.Warn().Err(derr).Str("attachment_id", attachmentID).Msg("failed to mark volume attachment errored after libvirt attach failure")
+				}
 			}
 		}()
 	}
@@ -216,10 +223,11 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 
 		if err == nil {
 			diskXML := hypervisor.GenerateDiskXML(hypervisor.DiskSpec{
-				Device:   device,
-				Type:     "network",
-				Source:   fmt.Sprintf("%s/%s", rbdPool, rbdImage),
-				Protocol: "rbd",
+				Device:       device,
+				Type:         "network",
+				Source:       fmt.Sprintf("%s/%s", rbdPool, rbdImage),
+				Protocol:     "rbd",
+				CephMonitors: svc.cephMonitors,
 			})
 
 			if err := svc.vmManager.DetachDevice(ctx, libvirtDomainID, diskXML); err != nil {

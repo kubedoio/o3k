@@ -29,6 +29,16 @@ func (e *Engine) LoadPolicy(policies map[string]string) {
 	e.cache.Flush()
 }
 
+// HasRule returns true when a rule with the given name has been loaded.
+// This lets callers (notably middleware) decide whether to invoke Enforce
+// or fall back to a coarser default policy when no rule is configured.
+func (e *Engine) HasRule(rule string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.policies[rule]
+	return ok
+}
+
 func (e *Engine) Enforce(rule string, target, credentials map[string]interface{}) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

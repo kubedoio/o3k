@@ -269,7 +269,7 @@ if [ $TESTS_FAILED -eq 0 ]; then
     echo "Next steps:"
     echo "1. Deploy Horizon following quickstart.md Step 2"
     echo "2. Access dashboard at http://localhost/dashboard"
-    echo "3. Login with admin/secret"
+    echo "3. Login as admin (password: O3K_ADMIN_PASSWORD env var or whatever bootstrap printed)"
     exit 0
 else
     echo -e "${RED}✗ Some tests failed.${NC}"

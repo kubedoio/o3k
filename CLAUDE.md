@@ -69,9 +69,13 @@ O3K is a lightweight OpenStack implementation in Go, inspired by K3s. It provide
 ./o3k
 
 # Or with Docker Compose (PostgreSQL mode):
+# Set required env vars first (use a strong password in production!)
+export POSTGRES_PASSWORD=$(openssl rand -base64 24)
+export O3K_JWT_SECRET=$(openssl rand -base64 48)
+export O3K_ADMIN_PASSWORD=secret  # dev only; omit to auto-generate
 docker compose -f deployments/docker-compose.yml up -d
 export OS_AUTH_URL=http://localhost:35357/v3
-export OS_USERNAME=admin OS_PASSWORD=secret
+export OS_USERNAME=admin OS_PASSWORD="$O3K_ADMIN_PASSWORD"
 export OS_PROJECT_NAME=default OS_USER_DOMAIN_NAME=Default OS_PROJECT_DOMAIN_NAME=Default
 
 # Test it works
@@ -317,13 +321,15 @@ Configuration loaded from `config/o3k.yaml` (or via `--config` flag).
 - Configure `compute.node_id` and `compute.tunnel_ip`
 - Enables cross-node VM networking via VXLAN overlay
 
-### Default Credentials
+### Initial Admin Credentials
 Seed data creates:
 - **User**: `admin`
-- **Password**: `secret`
 - **Project**: `default`
+- **Password**: generated at first boot.
+  - Zero-config mode: written to `$O3K_DATA_DIR/initial-password` (defaults to `~/.o3k/initial-password`).
+  - PostgreSQL/docker-compose mode: set `O3K_ADMIN_PASSWORD` env var, or one is generated and printed once to stderr on first boot.
 
-*Change these in production environments.*
+No default password is shipped. Test scripts assume `O3K_ADMIN_PASSWORD=secret` for local dev — set it explicitly when starting the server.
 
 ## Common Patterns and Idioms
 

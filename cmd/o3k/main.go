@@ -183,6 +183,8 @@ func runServer(args []string) {
 	datastoreFlag := fs.String("datastore", "", "Database backend: sqlite (default, zero-config) or postgres")
 	dbURLFlag := fs.String("db-url", "", "Database URL for postgres datastore (overrides DATABASE_URL env var)")
 	portFlag := fs.Int("port", 0, "Base port for all services (0 = standard OpenStack ports: Keystone 35357, Nova 8774, …)")
+	tlsCertFlag := fs.String("tls-cert-file", "", "Path to PEM-encoded TLS certificate (enables HTTPS for all HTTP services when paired with --tls-key-file)")
+	tlsKeyFlag := fs.String("tls-key-file", "", "Path to PEM-encoded TLS private key (paired with --tls-cert-file)")
 	_ = fs.Parse(args)
 
 	// Load configuration (file not found = zero-config mode, returns empty Config).
@@ -216,6 +218,17 @@ func runServer(args []string) {
 		default:
 			log.Fatalf("--datastore must be 'sqlite' or 'postgres', got %q", *datastoreFlag)
 		}
+	}
+
+	// CLI TLS flags override config-file values for HTTP services.
+	if *tlsCertFlag != "" {
+		cfg.Server.TLSCertFile = *tlsCertFlag
+	}
+	if *tlsKeyFlag != "" {
+		cfg.Server.TLSKeyFile = *tlsKeyFlag
+	}
+	if (cfg.Server.TLSCertFile == "") != (cfg.Server.TLSKeyFile == "") {
+		log.Fatalf("FATAL: --tls-cert-file and --tls-key-file must both be set or both empty")
 	}
 
 	// Validate configuration before bootstrapping anything.
@@ -384,9 +397,32 @@ func runServer(args []string) {
 		}
 	}
 
-	// Seed defaults when running in zero-config (bootstrap) mode.
-	if bootstrapResult != nil {
-		if err := server.SeedDefaults(ctx, database.DB, bootstrapResult.AdminPassword); err != nil {
+	// Seed defaults. In zero-config mode, the bootstrap-generated admin
+	// password is used. Otherwise, O3K_ADMIN_PASSWORD must be set, or a
+	// random password is generated and printed once to stderr.
+	{
+		var adminPassword string
+		if bootstrapResult != nil {
+			adminPassword = bootstrapResult.AdminPassword
+		} else {
+			adminPassword = os.Getenv("O3K_ADMIN_PASSWORD")
+			if adminPassword == "" {
+				generated, err := server.GenerateAdminPassword()
+				if err != nil {
+					log.Fatalf("FATAL: generate admin password: %v", err)
+				}
+				adminPassword = generated
+				fmt.Fprintln(os.Stderr, "═══════════════════════════════════════════")
+				fmt.Fprintln(os.Stderr, "  O3K — generated initial admin password")
+				fmt.Fprintln(os.Stderr, "═══════════════════════════════════════════")
+				fmt.Fprintf(os.Stderr, "  User:     admin\n")
+				fmt.Fprintf(os.Stderr, "  Password: %s\n", adminPassword)
+				fmt.Fprintln(os.Stderr, "  Set O3K_ADMIN_PASSWORD to use a fixed password.")
+				fmt.Fprintln(os.Stderr, "  This is shown ONCE. Store it now.")
+				fmt.Fprintln(os.Stderr, "═══════════════════════════════════════════")
+			}
+		}
+		if err := server.SeedDefaults(ctx, database.DB, adminPassword); err != nil {
 			log.Printf("WARNING: seed defaults: %v", err)
 		}
 	}
@@ -456,6 +492,7 @@ func runServer(args []string) {
 		libvirtMode = "stub"
 	}
 	novaService := nova.NewService(cfg.Nova.LibvirtURI, libvirtMode, cacheInstance)
+	novaService.SetCephMonitors(cfg.Nova.CephMonitors)
 
 	// Initialize hypervisor
 	if err := novaService.InitHypervisor(); err != nil {
@@ -607,11 +644,27 @@ func runServer(args []string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start all servers
+	tlsEnabled := cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile != ""
+	if tlsEnabled {
+		log.Printf("HTTPS enabled for all HTTP services (cert=%s)", cfg.Server.TLSCertFile)
+	} else {
+		log.Printf("WARNING: HTTP services running WITHOUT TLS. Set server.tls_cert_file/tls_key_file or front O3K with a TLS-terminating reverse proxy in production.")
+	}
 	for _, srv := range servers {
 		srv := srv // capture loop variable
 		go func() {
-			log.Printf("Starting server on %s", srv.Addr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			scheme := "http"
+			if tlsEnabled {
+				scheme = "https"
+			}
+			log.Printf("Starting server on %s://%s", scheme, srv.Addr)
+			var err error
+			if tlsEnabled {
+				err = srv.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+			} else {
+				err = srv.ListenAndServe()
+			}
+			if err != nil && err != http.ErrServerClosed {
 				log.Printf("Server on %s failed: %v — initiating shutdown", srv.Addr, err)
 				quit <- syscall.SIGTERM
 			}
@@ -819,7 +872,7 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("identity"))
-	r.Use(middleware.PolicyMiddleware())
+	r.Use(middleware.PolicyMiddleware("identity"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -869,7 +922,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("compute"))
-	r.Use(middleware.PolicyMiddleware())
+	r.Use(middleware.PolicyMiddleware("compute"))
 	r.Use(nova.MicroversionMiddleware())
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
@@ -899,7 +952,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("network"))
-	r.Use(middleware.PolicyMiddleware())
+	r.Use(middleware.PolicyMiddleware("network"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -928,7 +981,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	r.Use(middleware.CORSMiddlewareWithConfig(cfg.Server.CORSAllowedOrigins))
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("block-storage"))
-	r.Use(middleware.PolicyMiddleware())
+	r.Use(middleware.PolicyMiddleware("volume"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
@@ -968,7 +1021,7 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	authGroup := r.Group("/v2")
 	authGroup.Use(middleware.AuthMiddleware(authService))
 	authGroup.Use(middleware.EnforceAccessRules("image"))
-	authGroup.Use(middleware.PolicyMiddleware())
+	authGroup.Use(middleware.PolicyMiddleware("image"))
 	svc.RegisterRoutes(authGroup)
 
 	return &http.Server{
@@ -992,7 +1045,7 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.AuthMiddleware(authService))
 	r.Use(middleware.EnforceAccessRules("placement"))
-	r.Use(middleware.PolicyMiddleware())
+	r.Use(middleware.PolicyMiddleware("placement"))
 	r.NoRoute(middleware.NotFoundHandler())
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())

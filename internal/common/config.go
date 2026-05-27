@@ -35,6 +35,12 @@ type TaskConfig struct {
 type ServerConfig struct {
 	CORSAllowedOrigins []string `yaml:"cors_allowed_origins"`
 	BindHost           string   `yaml:"bind_host"` // Default bind address for all services; defaults to "127.0.0.1"
+	// TLSCertFile and TLSKeyFile, when both set, enable HTTPS for all
+	// HTTP services (Keystone, Nova, Neutron, Cinder, Glance, Placement,
+	// Metadata). When empty, services serve plain HTTP and operators MUST
+	// front O3K with a TLS-terminating reverse proxy in production.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 type DatabaseConfig struct {
@@ -63,11 +69,16 @@ type KeystoneConfig struct {
 }
 
 type NovaConfig struct {
-	Port          int    `yaml:"port"`
-	LibvirtURI    string `yaml:"libvirt_uri"`
-	DefaultFlavor string `yaml:"default_flavor"`
-	LibvirtMode   string `yaml:"libvirt_mode"` // "stub" or "real"
-	AsyncCompute  bool   `yaml:"async_compute"`
+	Port          int      `yaml:"port"`
+	LibvirtURI    string   `yaml:"libvirt_uri"`
+	DefaultFlavor string   `yaml:"default_flavor"`
+	LibvirtMode   string   `yaml:"libvirt_mode"` // "stub" or "real"
+	AsyncCompute  bool     `yaml:"async_compute"`
+	// CephMonitors lists Ceph monitor endpoints (host:port) used when
+	// emitting libvirt XML for RBD-backed boot disks and volume
+	// attachments. Empty falls back to 127.0.0.1:6789 for backward
+	// compatibility with single-node dev clusters.
+	CephMonitors []string `yaml:"ceph_monitors"`
 }
 
 // TunnelConfig holds configuration for the agent tunnel / join-token system.

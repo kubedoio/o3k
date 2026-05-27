@@ -18,17 +18,43 @@ func xmlEscape(s string) string {
 	return s
 }
 
+// renderRBDHosts emits one <host name='...' port='...'/> element per
+// monitor. Each monitor is parsed as host:port; entries without a port
+// default to 6789 (the standard Ceph mon port). An empty list falls back
+// to a single 127.0.0.1:6789 element so callers that haven't been wired
+// for multi-mon config keep the previous behaviour.
+func renderRBDHosts(monitors []string) string {
+	if len(monitors) == 0 {
+		return "        <host name='127.0.0.1' port='6789'/>\n"
+	}
+	var sb strings.Builder
+	for _, m := range monitors {
+		host, port := m, "6789"
+		if idx := strings.LastIndex(m, ":"); idx > 0 && idx < len(m)-1 {
+			host, port = m[:idx], m[idx+1:]
+		}
+		sb.WriteString(fmt.Sprintf("        <host name='%s' port='%s'/>\n",
+			xmlEscape(host), xmlEscape(port)))
+	}
+	return sb.String()
+}
+
 // VMSpec defines VM specifications
 type VMSpec struct {
-	UUID        string
-	Name        string
-	VCPUs       int
-	MemoryMB    int
-	DiskGB      int
-	ImagePath   string   // Path to image (RBD or local)
-	Networks    []NetworkConfig
-	Volumes     []VolumeConfig
-	CloudInit   *CloudInitConfig
+	UUID         string
+	Name         string
+	VCPUs        int
+	MemoryMB     int
+	DiskGB       int
+	ImagePath    string // Path to image (RBD or local)
+	Networks     []NetworkConfig
+	Volumes      []VolumeConfig
+	CloudInit    *CloudInitConfig
+	// CephMonitors is the list of Ceph monitor endpoints in host:port form
+	// (e.g. ["mon1.ceph.local:6789", "10.0.0.5:6789"]). Used when ImagePath is
+	// an rbd: URL or any Volumes are RBD-backed. Empty means "fall back to
+	// 127.0.0.1:6789", matching the previous hardcoded default.
+	CephMonitors []string
 }
 
 // NetworkConfig defines network interface configuration
@@ -107,11 +133,10 @@ func GenerateVMXML(spec VMSpec) string {
     <disk type='network' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback'/>
       <source protocol='rbd' name='%s/%s'>
-        <host name='127.0.0.1' port='6789'/>
-      </source>
+%s      </source>
       <target dev='vda' bus='virtio'/>
     </disk>
-`, xmlEscape(pool), xmlEscape(image)))
+`, xmlEscape(pool), xmlEscape(image), renderRBDHosts(spec.CephMonitors)))
 	} else {
 		// Local file
 		sb.WriteString(fmt.Sprintf(`
@@ -134,11 +159,10 @@ func GenerateVMXML(spec VMSpec) string {
     <disk type='network' device='disk'>
       <driver name='qemu' type='raw'/>
       <source protocol='rbd' name='%s/%s'>
-        <host name='127.0.0.1' port='6789'/>
-      </source>
+%s      </source>
       <target dev='%s' bus='virtio'/>
     </disk>
-`, xmlEscape(vol.RBDPool), xmlEscape(vol.RBDImage), xmlEscape(device)))
+`, xmlEscape(vol.RBDPool), xmlEscape(vol.RBDImage), renderRBDHosts(spec.CephMonitors), xmlEscape(device)))
 	}
 
 	// Network interfaces
@@ -302,6 +326,9 @@ type DiskSpec struct {
 	Type     string // "network" for RBD, "file" for local
 	Source   string // RBD: "pool/image", File: "/path/to/file.qcow2"
 	Protocol string // "rbd" for Ceph RBD
+	// CephMonitors lists the Ceph monitor endpoints (host:port) for RBD-backed
+	// disks. Empty means "fall back to 127.0.0.1:6789".
+	CephMonitors []string
 }
 
 // GenerateDiskXML generates libvirt XML for a disk device
@@ -316,10 +343,9 @@ func GenerateDiskXML(spec DiskSpec) string {
 		sb.WriteString(fmt.Sprintf(`<disk type='network' device='disk'>
   <driver name='qemu' type='raw' cache='writeback'/>
   <source protocol='rbd' name='%s'>
-    <host name='127.0.0.1' port='6789'/>
-  </source>
+%s  </source>
   <target dev='%s' bus='virtio'/>
-</disk>`, xmlEscape(spec.Source), xmlEscape(device)))
+</disk>`, xmlEscape(spec.Source), renderRBDHosts(spec.CephMonitors), xmlEscape(device)))
 	} else {
 		// Local file disk
 		sb.WriteString(fmt.Sprintf(`<disk type='file' device='disk'>
