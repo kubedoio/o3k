@@ -145,10 +145,11 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 
 			// Attach disk to VM
 			diskXML := hypervisor.GenerateDiskXML(hypervisor.DiskSpec{
-				Device:   device,
-				Type:     "network", // or "file" for local
-				Source:   fmt.Sprintf("%s/%s", rbdPool, rbdImage),
-				Protocol: "rbd",
+				Device:       device,
+				Type:         "network", // or "file" for local
+				Source:       fmt.Sprintf("%s/%s", rbdPool, rbdImage),
+				Protocol:     "rbd",
+				CephMonitors: svc.cephMonitors,
 			})
 
 			if err := svc.vmManager.AttachDevice(ctx, libvirtDomainID, diskXML); err != nil {
@@ -216,10 +217,11 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 
 		if err == nil {
 			diskXML := hypervisor.GenerateDiskXML(hypervisor.DiskSpec{
-				Device:   device,
-				Type:     "network",
-				Source:   fmt.Sprintf("%s/%s", rbdPool, rbdImage),
-				Protocol: "rbd",
+				Device:       device,
+				Type:         "network",
+				Source:       fmt.Sprintf("%s/%s", rbdPool, rbdImage),
+				Protocol:     "rbd",
+				CephMonitors: svc.cephMonitors,
 			})
 
 			if err := svc.vmManager.DetachDevice(ctx, libvirtDomainID, diskXML); err != nil {

@@ -69,11 +69,16 @@ type KeystoneConfig struct {
 }
 
 type NovaConfig struct {
-	Port          int    `yaml:"port"`
-	LibvirtURI    string `yaml:"libvirt_uri"`
-	DefaultFlavor string `yaml:"default_flavor"`
-	LibvirtMode   string `yaml:"libvirt_mode"` // "stub" or "real"
-	AsyncCompute  bool   `yaml:"async_compute"`
+	Port          int      `yaml:"port"`
+	LibvirtURI    string   `yaml:"libvirt_uri"`
+	DefaultFlavor string   `yaml:"default_flavor"`
+	LibvirtMode   string   `yaml:"libvirt_mode"` // "stub" or "real"
+	AsyncCompute  bool     `yaml:"async_compute"`
+	// CephMonitors lists Ceph monitor endpoints (host:port) used when
+	// emitting libvirt XML for RBD-backed boot disks and volume
+	// attachments. Empty falls back to 127.0.0.1:6789 for backward
+	// compatibility with single-node dev clusters.
+	CephMonitors []string `yaml:"ceph_monitors"`
 }
 
 // TunnelConfig holds configuration for the agent tunnel / join-token system.

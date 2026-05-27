@@ -492,6 +492,7 @@ func runServer(args []string) {
 		libvirtMode = "stub"
 	}
 	novaService := nova.NewService(cfg.Nova.LibvirtURI, libvirtMode, cacheInstance)
+	novaService.SetCephMonitors(cfg.Nova.CephMonitors)
 
 	// Initialize hypervisor
 	if err := novaService.InitHypervisor(); err != nil {

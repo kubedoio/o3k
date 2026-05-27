@@ -39,6 +39,10 @@ type Service struct {
 	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
+	// cephMonitors is the configured set of Ceph monitor endpoints
+	// (host:port) used when emitting libvirt XML for RBD-backed disks.
+	// Empty falls back to 127.0.0.1:6789 inside the XML template.
+	cephMonitors []string
 	// quotaMu serialises quota check + INSERT per project to prevent TOCTOU races.
 	quotaMu sync.Map // map[projectID]*sync.Mutex
 }
@@ -108,6 +112,13 @@ func (svc *Service) SetNeutronService(neutron NeutronService) {
 // SetDispatcher wires the tunnel Dispatcher for async task dispatch.
 func (svc *Service) SetDispatcher(d *tunnel.Dispatcher) {
 	svc.dispatcher = d
+}
+
+// SetCephMonitors configures the Ceph monitor endpoints (host:port) that
+// should be embedded in libvirt XML for RBD-backed disks. Empty restores
+// the legacy 127.0.0.1:6789 fallback.
+func (svc *Service) SetCephMonitors(monitors []string) {
+	svc.cephMonitors = monitors
 }
 
 // InitHypervisor initializes the hypervisor connection
@@ -554,14 +565,15 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			// Generate VM XML
 			log.Debug().Str("instance_id", instanceID).Msg("Generating VM XML")
 			spec := hypervisor.VMSpec{
-				UUID:      instanceID,
-				Name:      fmt.Sprintf("instance-%s", instanceID[:8]),
-				VCPUs:     flavor.VCPUs,
-				MemoryMB:  flavor.RAMMB,
-				DiskGB:    flavor.DiskGB,
-				ImagePath: fmt.Sprintf("/var/lib/o3k/images/%s.qcow2", req.Server.ImageRef),
-				Networks:  networks,
-				CloudInit: cloudInit,
+				UUID:         instanceID,
+				Name:         fmt.Sprintf("instance-%s", instanceID[:8]),
+				VCPUs:        flavor.VCPUs,
+				MemoryMB:     flavor.RAMMB,
+				DiskGB:       flavor.DiskGB,
+				ImagePath:    fmt.Sprintf("/var/lib/o3k/images/%s.qcow2", req.Server.ImageRef),
+				Networks:     networks,
+				CloudInit:    cloudInit,
+				CephMonitors: svc.cephMonitors,
 			}
 
 			log.Debug().Str("image_path", spec.ImagePath).Int("network_count", len(spec.Networks)).Msg("VM spec prepared")
