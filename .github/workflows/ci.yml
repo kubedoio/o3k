@@ -278,9 +278,12 @@ jobs:
           sudo microceph.ceph osd pool application enable rbd rbd
           # Single-OSD cluster: drop replication from default size=3,
           # min_size=2 down to size=1 so writes don't block waiting for
-          # replicas that don't exist. Also lower the cluster default for
+          # replicas that don't exist. Ceph blocks size=1 by default
+          # (mon_allow_pool_size_one=false) — flip it on cluster-wide
+          # before touching any pool. Also lower the cluster default for
           # any pool created later by tests.
-          sudo microceph.ceph osd pool set rbd size 1
+          sudo microceph.ceph config set global mon_allow_pool_size_one true
+          sudo microceph.ceph osd pool set rbd size 1 --yes-i-really-mean-it
           sudo microceph.ceph osd pool set rbd min_size 1
           sudo microceph.ceph config set global osd_pool_default_size 1
           sudo microceph.ceph config set global osd_pool_default_min_size 1
