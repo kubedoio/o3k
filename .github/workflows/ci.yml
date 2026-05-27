@@ -205,8 +205,11 @@ jobs:
       - name: Install eBPF toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev linux-headers-$(uname -r) || \
-            sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev
+          # gcc-multilib provides gnu/stubs-32.h pulled in transitively by
+          # asm/types.h on ubuntu-noble. Without it, clang -target bpf fails
+          # to find the 32-bit stubs header even though we never link 32-bit.
+          sudo apt-get install -y clang llvm libbpf-dev gcc-multilib linux-headers-$(uname -r) || \
+            sudo apt-get install -y clang llvm libbpf-dev gcc-multilib linux-libc-dev
 
       - name: Verify clang version
         run: clang --version
