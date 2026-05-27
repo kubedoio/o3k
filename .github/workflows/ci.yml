@@ -227,10 +227,72 @@ jobs:
           sudo -E env "PATH=$PATH" "HOME=$HOME" \
             $(which go) test -tags ebpf_integration -v -run TestEBPFLoad -count=1 .
 
+  glance-rbd:
+    name: Glance RBD (microceph)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Install Ceph client headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librados-dev librbd-dev libcephfs-dev pkg-config
+
+      - name: Bootstrap microceph
+        # microceph gives us a single-node Ceph in ~60s. Flake risk is
+        # accepted; if this is a recurring problem we move to a dedicated
+        # ceph runner.
+        run: |
+          sudo snap install microceph --channel=squid/stable
+          sudo microceph cluster bootstrap
+          sudo microceph disk add loop,2G,1
+          sudo microceph enable rgw || true
+          # Wait for the cluster to reach HEALTH_OK or HEALTH_WARN (single-OSD
+          # clusters often sit at WARN; both are fine for our test).
+          for i in $(seq 1 30); do
+            STATUS=$(sudo microceph.ceph -s 2>&1 || true)
+            if echo "$STATUS" | grep -qE "HEALTH_OK|HEALTH_WARN"; then
+              echo "Cluster ready:"
+              echo "$STATUS"
+              break
+            fi
+            sleep 2
+          done
+          sudo microceph.ceph osd pool create rbd 8 8
+          sudo microceph.ceph osd pool application enable rbd rbd
+
+      - name: Expose Ceph config + keyring to test
+        run: |
+          sudo mkdir -p /etc/ceph
+          sudo cp /var/snap/microceph/current/conf/ceph.conf /etc/ceph/ceph.conf
+          sudo cp /var/snap/microceph/current/conf/ceph.keyring /etc/ceph/ceph.keyring
+          sudo chmod a+r /etc/ceph/ceph.conf /etc/ceph/ceph.keyring
+          cat /etc/ceph/ceph.conf
+
+      - name: Run RBD integration tests
+        env:
+          O3K_TEST_CEPH_POOL: rbd
+          O3K_TEST_CEPH_CONF: /etc/ceph/ceph.conf
+        run: |
+          go test -tags 'ceph rbd_integration' -v -count=1 -timeout 5m \
+            -run TestRBDIntegration ./pkg/storage/...
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          sudo microceph.ceph -s || true
+          sudo microceph.ceph osd tree || true
+          sudo microceph.ceph osd pool ls detail || true
+
   status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [build, test, lint, vulncheck, compat-check, contract-tests, ebpf-smoke]
+    needs: [build, test, lint, vulncheck, compat-check, contract-tests, ebpf-smoke, glance-rbd]
     if: always()
     steps:
       - name: Check results
@@ -241,8 +303,9 @@ jobs:
              [ "${{ needs.vulncheck.result }}" != "success" ] || \
              [ "${{ needs.contract-tests.result }}" != "success" ] || \
              [ "${{ needs.compat-check.result }}" != "success" ] || \
-             [ "${{ needs.ebpf-smoke.result }}" != "success" ]; then
-            echo "::error::Required checks failed (build, test, lint, vulncheck, contract-tests, compat-check, or ebpf-smoke)"
+             [ "${{ needs.ebpf-smoke.result }}" != "success" ] || \
+             [ "${{ needs.glance-rbd.result }}" != "success" ]; then
+            echo "::error::Required checks failed (build, test, lint, vulncheck, contract-tests, compat-check, ebpf-smoke, or glance-rbd)"
             exit 1
           fi
           echo "All required checks passed"
