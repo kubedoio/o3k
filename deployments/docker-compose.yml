@@ -8,7 +8,9 @@ services:
     environment:
       POSTGRES_DB: lightstack
       POSTGRES_USER: lightstack
-      POSTGRES_PASSWORD: secret
+      # POSTGRES_PASSWORD must be set externally (e.g., .env file or shell).
+      # No default — fail-fast if missing.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -58,10 +60,11 @@ services:
       - "9292:9292"    # Glance (Image)
       - "8775:8775"    # Metadata Service
     environment:
-      O3K_DB_URL: "postgres://lightstack:secret@postgres:5432/lightstack?sslmode=disable"
+      O3K_DB_URL: "postgres://lightstack:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/lightstack?sslmode=disable"
       O3K_REDIS_URL: "redis://redis:6379/0"
       O3K_CACHE_ENABLED: "true"
-      O3K_JWT_SECRET: "${O3K_JWT_SECRET:-change-me-in-production}"
+      O3K_JWT_SECRET: "${O3K_JWT_SECRET:?O3K_JWT_SECRET must be set (min 32 chars)}"
+      O3K_ADMIN_PASSWORD: "${O3K_ADMIN_PASSWORD:-}"
       O3K_LOG_LEVEL: "info"
       O3K_LOG_FORMAT: "json"
       O3K_ENDPOINT_HOST: "localhost"  # Use localhost for service catalog URLs (accessible from host)

@@ -26,12 +26,11 @@ func SeedDefaults(ctx context.Context, db database.DBIF, adminPassword string) e
 	}
 
 	const (
+		adminUserID  = "00000000-0000-0000-0000-000000000001"
 		projectID    = "00000000-0000-0000-0000-000000000002"
 		adminRoleID  = "00000000-0000-0000-0000-000000000003"
 		memberRoleID = "00000000-0000-0000-0000-000000000004"
 	)
-
-	adminUserID := uuid.New().String()
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
 	if err != nil {

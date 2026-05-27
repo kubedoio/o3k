@@ -384,9 +384,32 @@ func runServer(args []string) {
 		}
 	}
 
-	// Seed defaults when running in zero-config (bootstrap) mode.
-	if bootstrapResult != nil {
-		if err := server.SeedDefaults(ctx, database.DB, bootstrapResult.AdminPassword); err != nil {
+	// Seed defaults. In zero-config mode, the bootstrap-generated admin
+	// password is used. Otherwise, O3K_ADMIN_PASSWORD must be set, or a
+	// random password is generated and printed once to stderr.
+	{
+		var adminPassword string
+		if bootstrapResult != nil {
+			adminPassword = bootstrapResult.AdminPassword
+		} else {
+			adminPassword = os.Getenv("O3K_ADMIN_PASSWORD")
+			if adminPassword == "" {
+				generated, err := server.GenerateAdminPassword()
+				if err != nil {
+					log.Fatalf("FATAL: generate admin password: %v", err)
+				}
+				adminPassword = generated
+				fmt.Fprintln(os.Stderr, "═══════════════════════════════════════════")
+				fmt.Fprintln(os.Stderr, "  O3K — generated initial admin password")
+				fmt.Fprintln(os.Stderr, "═══════════════════════════════════════════")
+				fmt.Fprintf(os.Stderr, "  User:     admin\n")
+				fmt.Fprintf(os.Stderr, "  Password: %s\n", adminPassword)
+				fmt.Fprintln(os.Stderr, "  Set O3K_ADMIN_PASSWORD to use a fixed password.")
+				fmt.Fprintln(os.Stderr, "  This is shown ONCE. Store it now.")
+				fmt.Fprintln(os.Stderr, "═══════════════════════════════════════════")
+			}
+		}
+		if err := server.SeedDefaults(ctx, database.DB, adminPassword); err != nil {
 			log.Printf("WARNING: seed defaults: %v", err)
 		}
 	}
