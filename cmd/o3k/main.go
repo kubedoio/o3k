@@ -183,6 +183,8 @@ func runServer(args []string) {
 	datastoreFlag := fs.String("datastore", "", "Database backend: sqlite (default, zero-config) or postgres")
 	dbURLFlag := fs.String("db-url", "", "Database URL for postgres datastore (overrides DATABASE_URL env var)")
 	portFlag := fs.Int("port", 0, "Base port for all services (0 = standard OpenStack ports: Keystone 35357, Nova 8774, …)")
+	tlsCertFlag := fs.String("tls-cert-file", "", "Path to PEM-encoded TLS certificate (enables HTTPS for all HTTP services when paired with --tls-key-file)")
+	tlsKeyFlag := fs.String("tls-key-file", "", "Path to PEM-encoded TLS private key (paired with --tls-cert-file)")
 	_ = fs.Parse(args)
 
 	// Load configuration (file not found = zero-config mode, returns empty Config).
@@ -216,6 +218,17 @@ func runServer(args []string) {
 		default:
 			log.Fatalf("--datastore must be 'sqlite' or 'postgres', got %q", *datastoreFlag)
 		}
+	}
+
+	// CLI TLS flags override config-file values for HTTP services.
+	if *tlsCertFlag != "" {
+		cfg.Server.TLSCertFile = *tlsCertFlag
+	}
+	if *tlsKeyFlag != "" {
+		cfg.Server.TLSKeyFile = *tlsKeyFlag
+	}
+	if (cfg.Server.TLSCertFile == "") != (cfg.Server.TLSKeyFile == "") {
+		log.Fatalf("FATAL: --tls-cert-file and --tls-key-file must both be set or both empty")
 	}
 
 	// Validate configuration before bootstrapping anything.
@@ -630,11 +643,27 @@ func runServer(args []string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start all servers
+	tlsEnabled := cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile != ""
+	if tlsEnabled {
+		log.Printf("HTTPS enabled for all HTTP services (cert=%s)", cfg.Server.TLSCertFile)
+	} else {
+		log.Printf("WARNING: HTTP services running WITHOUT TLS. Set server.tls_cert_file/tls_key_file or front O3K with a TLS-terminating reverse proxy in production.")
+	}
 	for _, srv := range servers {
 		srv := srv // capture loop variable
 		go func() {
-			log.Printf("Starting server on %s", srv.Addr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			scheme := "http"
+			if tlsEnabled {
+				scheme = "https"
+			}
+			log.Printf("Starting server on %s://%s", scheme, srv.Addr)
+			var err error
+			if tlsEnabled {
+				err = srv.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+			} else {
+				err = srv.ListenAndServe()
+			}
+			if err != nil && err != http.ErrServerClosed {
 				log.Printf("Server on %s failed: %v — initiating shutdown", srv.Addr, err)
 				quit <- syscall.SIGTERM
 			}

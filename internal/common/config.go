@@ -35,6 +35,12 @@ type TaskConfig struct {
 type ServerConfig struct {
 	CORSAllowedOrigins []string `yaml:"cors_allowed_origins"`
 	BindHost           string   `yaml:"bind_host"` // Default bind address for all services; defaults to "127.0.0.1"
+	// TLSCertFile and TLSKeyFile, when both set, enable HTTPS for all
+	// HTTP services (Keystone, Nova, Neutron, Cinder, Glance, Placement,
+	// Metadata). When empty, services serve plain HTTP and operators MUST
+	// front O3K with a TLS-terminating reverse proxy in production.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 type DatabaseConfig struct {
