@@ -158,6 +158,22 @@ func seedVXLANNetwork(t *testing.T, db database.DBIF, ctx context.Context, proje
 	return networkID
 }
 
+// seedPort inserts a port row so vxlan_fdb_entries.port_id has a valid
+// FK target. The FDB sync test would otherwise fail with SQLSTATE 23503
+// because DistributeFDBEntry inserts into vxlan_fdb_entries directly.
+func seedPort(t *testing.T, db database.DBIF, ctx context.Context, networkID, projectID, mac string) string {
+	t.Helper()
+	portID := uuid.NewString()
+	_, err := db.Exec(ctx, `
+		INSERT INTO ports (id, name, network_id, project_id, mac_address, status)
+		VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+	`, portID, "port-"+portID[:8], networkID, projectID, mac)
+	if err != nil {
+		t.Fatalf("seed port: %v", err)
+	}
+	return portID
+}
+
 // TestVXLANMultiNode_TwoNodesRegister verifies both nodes appear in
 // ListActiveNodes after registration and heartbeat.
 func TestVXLANMultiNode_TwoNodesRegister(t *testing.T) {
@@ -263,8 +279,8 @@ func TestVXLANMultiNode_FDBSyncBetweenNodes(t *testing.T) {
 
 	// Node 1 advertises a port. The vtep_ip recorded in the row
 	// should match n1's tunnel IP.
-	portID := uuid.NewString()
 	mac := "fa:16:3e:aa:bb:01"
+	portID := seedPort(t, db, ctx, netID, projectID, mac)
 	if err := n1.coord.DistributeFDBEntry(ctx, netID, portID, mac); err != nil {
 		t.Fatalf("DistributeFDBEntry: %v", err)
 	}
