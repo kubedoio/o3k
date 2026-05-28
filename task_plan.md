@@ -175,4 +175,11 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 - (none yet)
 
 ## Status
-**Currently in Phase 0** — Plan created, awaiting branch creation and Phase 1 implementation
+**Phase 3 Slice 6 — CADF audit logging shipped.** Slices 1–6 of Phase 3:
+- Slice 1 (SCS-0103 mandatory flavors) — merged PR #24
+- Slice 2 (SCS-0102 image metadata) — PR #25 open
+- Slice 3 (SCS-0100-v3 flavor name validator) — PR #26 open
+- Slice 4 (SCS-0104 standard images) — PR #27 open
+- Slice 5 (SCS-0114 volume types) — merged PR #28
+- Slice 6 (CADF audit logging) — middleware mounted across all 6 auth-bearing services, 7 tests passing, scs-alignment.md updated, PR pending
+Next: open Slice 6 PR, then start Slice 7 (SPEC-002 federated identity — OIDC/OAuth2/LDAP).
