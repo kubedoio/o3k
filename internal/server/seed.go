@@ -156,6 +156,43 @@ func SeedDefaults(ctx context.Context, db database.DBIF, adminPassword string) e
 		}
 	}
 
+	// SCS-0114-v1 default volume types. Mirrors migration 076 so zero-config
+	// (in-code seed) installs match docker-compose installs.
+	// See: https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/
+	type scsVolumeType struct {
+		id          string
+		name        string
+		description string
+		extraSpecs  string // JSON document — postgres stores JSONB, sqlite stores TEXT
+	}
+	scsVolumeTypes := []scsVolumeType{
+		{
+			"00000000-0000-0000-0000-0000000006c1",
+			"scs-default",
+			"SCS default volume type — unencrypted, single-AZ",
+			`{"scs:encrypted":"false","scs:replicated":"false","scs:availability-zone":"nova"}`,
+		},
+		{
+			"00000000-0000-0000-0000-0000000006c2",
+			"scs-encrypted",
+			"SCS encrypted volume type [scs:encrypted]",
+			`{"scs:encrypted":"true","scs:replicated":"false","scs:availability-zone":"nova"}`,
+		},
+		{
+			"00000000-0000-0000-0000-0000000006c3",
+			"scs-replicated",
+			"SCS replicated volume type [scs:replicated]",
+			`{"scs:encrypted":"false","scs:replicated":"true","scs:availability-zone":"nova"}`,
+		},
+	}
+	for _, vt := range scsVolumeTypes {
+		stmts = append(stmts, stmt{
+			`INSERT INTO volume_types (id, name, description, is_public, extra_specs)
+			 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING`,
+			[]any{vt.id, vt.name, vt.description, true, vt.extraSpecs},
+		})
+	}
+
 	for _, s := range stmts {
 		if _, err := db.Exec(ctx, s.sql, s.args...); err != nil {
 			return fmt.Errorf("seed: %w", err)
