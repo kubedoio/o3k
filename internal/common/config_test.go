@@ -164,3 +164,118 @@ database:
 		t.Error("Expected error for invalid YAML, got nil")
 	}
 }
+
+// TestValidateConfigProductionStubGuard exercises the production-environment
+// stub-mode refusal. When O3K_ENV=production, ValidateConfig must reject any
+// service still running in stub mode — stub backends return fake data and a
+// production deployment that slips into stub by config drift would silently
+// lose every API call.
+func TestValidateConfigProductionStubGuard(t *testing.T) {
+	// Save and restore O3K_ENV so the test doesn't leak state.
+	origEnv := os.Getenv("O3K_ENV")
+	defer os.Setenv("O3K_ENV", origEnv)
+	os.Setenv("O3K_ENV", "production")
+
+	// nonStub is the baseline production-safe config the per-service cases
+	// mutate one field at a time. Each field is set to a non-stub value that
+	// passes the existing enum validation.
+	nonStub := func() *Config {
+		return &Config{
+			Database: DatabaseConfig{Datastore: "postgres://localhost/o3k"},
+			Nova:     NovaConfig{LibvirtMode: "real", LibvirtURI: "qemu:///system"},
+			Neutron:  NeutronConfig{NetworkingMode: "iptables"},
+			Cinder:   CinderConfig{StorageMode: "rbd"},
+			Glance:   GlanceConfig{StorageMode: "rbd"},
+		}
+	}
+
+	t.Run("happy path - no stub modes", func(t *testing.T) {
+		if err := ValidateConfig(nonStub()); err != nil {
+			t.Errorf("expected nil error for production-safe config, got: %v", err)
+		}
+	})
+
+	t.Run("nova stub refused", func(t *testing.T) {
+		cfg := nonStub()
+		cfg.Nova.LibvirtMode = "stub"
+		err := ValidateConfig(cfg)
+		if err == nil {
+			t.Fatal("expected error for nova.libvirt_mode=stub in production, got nil")
+		}
+		if !contains(err.Error(), "nova.libvirt_mode") {
+			t.Errorf("expected error to mention nova.libvirt_mode, got: %v", err)
+		}
+	})
+
+	t.Run("neutron stub refused", func(t *testing.T) {
+		cfg := nonStub()
+		cfg.Neutron.NetworkingMode = "stub"
+		err := ValidateConfig(cfg)
+		if err == nil {
+			t.Fatal("expected error for neutron.networking_mode=stub in production, got nil")
+		}
+		if !contains(err.Error(), "neutron.networking_mode") {
+			t.Errorf("expected error to mention neutron.networking_mode, got: %v", err)
+		}
+	})
+
+	t.Run("cinder stub refused", func(t *testing.T) {
+		cfg := nonStub()
+		cfg.Cinder.StorageMode = "stub"
+		err := ValidateConfig(cfg)
+		if err == nil {
+			t.Fatal("expected error for cinder.storage_mode=stub in production, got nil")
+		}
+		if !contains(err.Error(), "cinder.storage_mode") {
+			t.Errorf("expected error to mention cinder.storage_mode, got: %v", err)
+		}
+	})
+
+	t.Run("glance stub refused", func(t *testing.T) {
+		cfg := nonStub()
+		cfg.Glance.StorageMode = "stub"
+		err := ValidateConfig(cfg)
+		if err == nil {
+			t.Fatal("expected error for glance.storage_mode=stub in production, got nil")
+		}
+		if !contains(err.Error(), "glance.storage_mode") {
+			t.Errorf("expected error to mention glance.storage_mode, got: %v", err)
+		}
+	})
+
+	t.Run("stub allowed when O3K_ENV unset", func(t *testing.T) {
+		os.Setenv("O3K_ENV", "")
+		defer os.Setenv("O3K_ENV", "production")
+		cfg := nonStub()
+		cfg.Nova.LibvirtMode = "stub"
+		cfg.Neutron.NetworkingMode = "stub"
+		cfg.Cinder.StorageMode = "stub"
+		cfg.Glance.StorageMode = "stub"
+		if err := ValidateConfig(cfg); err != nil {
+			t.Errorf("expected stub modes to pass when O3K_ENV is unset, got: %v", err)
+		}
+	})
+
+	t.Run("stub allowed when O3K_ENV=development", func(t *testing.T) {
+		os.Setenv("O3K_ENV", "development")
+		defer os.Setenv("O3K_ENV", "production")
+		cfg := nonStub()
+		cfg.Nova.LibvirtMode = "stub"
+		if err := ValidateConfig(cfg); err != nil {
+			t.Errorf("expected stub modes to pass in development, got: %v", err)
+		}
+	})
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}

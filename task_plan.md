@@ -150,6 +150,10 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 
 ### 4.4 Hardening: Defaults
 - **Action:** Bind to 127.0.0.1 by default (not 0.0.0.0). Require strong JWT secret (reject weak/empty). Disable stub mode in production builds.
+- **Status:** ✅ Done.
+  - `BindAddress()` defaults to `127.0.0.1` when `server.bind_host` is unset (`internal/common/config.go:333-342`).
+  - JWT-secret strength gate refuses default `change-me-in-production` unless `O3K_ENV=development|test` (`internal/common/config.go:260-267`); strength check (≥32 chars) lives in `cmd/o3k/main.go:300-303`.
+  - Production stub-mode guard added in `ValidateConfig()` — `O3K_ENV=production` refuses `nova.libvirt_mode=stub`, `neutron.networking_mode=stub`, `cinder.storage_mode=stub`, `glance.storage_mode=stub`. Tests in `internal/common/config_test.go::TestValidateConfigProductionStubGuard`.
 
 ### 4.5 Community: Issue/PR templates + CoC
 - **Files:** `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `CODE_OF_CONDUCT.md`
