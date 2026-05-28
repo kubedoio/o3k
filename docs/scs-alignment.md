@@ -27,7 +27,8 @@ Behaviour parity is incremental and tracked per spec below.
 | [SCS-0103-v1](https://docs.scs.community/standards/scs-0103-v1-standard-flavors) — Mandatory & Recommended Flavors | Compute | ✅ 15 mandatory flavors seeded (migration 075) |
 | [SCS-0102](https://docs.scs.community/standards/scs-0102-v1-image-metadata) — Image Metadata | Glance | ⬜ Phase 3 follow-up |
 | [SCS-0104](https://docs.scs.community/standards/scs-0104-v1-standard-images) — Standard Images | Glance | ⬜ Phase 3 follow-up |
-| SCS-0110 — Volume Types | Cinder | ⬜ Phase 3 follow-up |
+| SCS-0110 — Volume Types | Cinder | ✅ 3 reference volume types seeded (migration 076) — covered by [SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/) |
+| [SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/) — Volume Type Standard | Cinder | ✅ description tags + queryable `scs:*` extra-specs (migration 076) |
 | SPEC-002 — Federated Identity (OIDC/OAuth2/LDAP) | Keystone | ⬜ Phase 3 follow-up |
 | SCS audit logging | Keystone/all | ⬜ Phase 3 follow-up |
 
@@ -99,6 +100,44 @@ backwards compatibility with existing tests and tutorials. They are not part
 of the SCS standard and operators may safely disable them by deleting the
 rows after first boot.
 
+## SCS-0114-v1 — Volume Type Standard
+
+[SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/)
+advertises encryption and replication capabilities through *description tags*
+of the form `[scs:encrypted]` and `[scs:replicated]` rather than through a
+prescribed extra-spec key. Migration `076_scs_volume_types.up.sql` (and its
+sqlite mirror) seeds three reference volume types covering the documented
+combinations, with the description tags AND a parallel set of queryable
+`scs:*` extra-specs so SCS-aware clients can filter on them through the
+standard volume-type extra-specs API.
+
+| Volume type | Description (excerpt) | `scs:encrypted` | `scs:replicated` | `scs:availability-zone` |
+|-------------|----------------------|-----------------|------------------|--------------------------|
+| `scs-default`    | "SCS default volume type — unencrypted, single-AZ" | `false` | `false` | `nova` |
+| `scs-encrypted`  | "SCS encrypted volume type [scs:encrypted]"        | `true`  | `false` | `nova` |
+| `scs-replicated` | "SCS replicated volume type [scs:replicated]"      | `false` | `true`  | `nova` |
+
+These are seeded both by the SQL migration (PostgreSQL & SQLite) and by the
+in-code seed in `internal/server/seed.go` so that zero-config installs
+(`./o3k`) and docker-compose installs see the same volume-type set. PostgreSQL
+stores `extra_specs` as `JSONB`; SQLite stores the same JSON document as
+`TEXT`.
+
+### Conformance check
+
+```bash
+openstack volume type list -f value -c Name | grep '^scs-' | sort
+# Expected: scs-default, scs-encrypted, scs-replicated
+
+openstack volume type show scs-encrypted -f json | jq '.properties'
+# Expected: {"scs:encrypted": "true", "scs:replicated": "false", "scs:availability-zone": "nova"}
+```
+
+A persistent replication-aware backend (Ceph RBD mirroring, DRBD, …) is *not*
+yet wired up — `scs-replicated` advertises replication intent but the local
+storage backend does not enforce it. Operators who need actual cross-AZ
+replication should pair this with a replicated Cinder backend.
+
 ## Forward roadmap
 
 The following are queued in [`docs/kimi-analyse-for-completion.md`](kimi-analyse-for-completion.md)
@@ -109,8 +148,6 @@ under Phase 3:
   `hw_disk_bus`, `hw_rng_model`, `hw_scsi_model`, `hypervisor_type`,
   `image_build_date`, `image_original_user`, `image_source`,
   `patchlevel`, `provided_until`, `replace_frequency`).
-- **SCS-0110 volume types** — define and seed default Cinder volume types
-  with SCS extra-specs (`scs:availability-zone`, `scs:replication`).
 - **SPEC-002 federated identity** — wire Keystone to OIDC/OAuth2/LDAP
   identity providers so federated SCS users can authenticate against an
   external IdP.
