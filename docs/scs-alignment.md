@@ -30,7 +30,7 @@ Behaviour parity is incremental and tracked per spec below.
 | SCS-0110 — Volume Types | Cinder | ✅ 3 reference volume types seeded (migration 076) — covered by [SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/) |
 | [SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/) — Volume Type Standard | Cinder | ✅ description tags + queryable `scs:*` extra-specs (migration 076) |
 | SPEC-002 — Federated Identity (OIDC/OAuth2/LDAP) | Keystone | ⬜ Phase 3 follow-up |
-| SCS audit logging | Keystone/all | ⬜ Phase 3 follow-up |
+| SCS audit logging | Keystone/all | ✅ CADF events emitted on every authenticated mutation (`internal/middleware/audit.go`) |
 
 ## SCS-0100-v3 — Flavor Naming
 
@@ -138,6 +138,72 @@ yet wired up — `scs-replicated` advertises replication intent but the local
 storage backend does not enforce it. Operators who need actual cross-AZ
 replication should pair this with a replicated Cinder backend.
 
+## SCS audit logging — CADF
+
+Every authenticated mutating request (POST/PUT/PATCH/DELETE) emits a
+structured [CADF](https://www.dmtf.org/standards/cadf) (Cloud Auditing Data
+Federation, DMTF DSP0262) event so operators can reconstruct
+who-did-what-to-which-resource without trawling raw access logs.
+
+Implementation: `internal/middleware/audit.go`, mounted on Keystone, Nova,
+Neutron, Cinder, Glance, and Placement immediately after `AuthMiddleware`.
+Read traffic (GET/HEAD/OPTIONS) is intentionally excluded — SCS audit
+guidance only requires mutations, and read events would dominate volume.
+
+Events are emitted as tagged zerolog lines with `audit_event=true`. A log
+shipper (fluent-bit, vector, …) can filter on that tag and route to a SIEM:
+
+```bash
+# Local dev — tail mutating events only
+./o3k 2>&1 | jq -c 'select(.audit_event == true)'
+```
+
+| CADF field | O3K source | Example |
+|------------|------------|---------|
+| `eventType` | constant | `activity` |
+| `id` | per-event UUID | `9d3f…` |
+| `eventTime` | wall-clock | `2026-05-28T11:22:33.123456Z` |
+| `action` | HTTP method → CADF verb | `create`, `update`, `delete` |
+| `outcome` | response status | `success` (2xx) or `failure` |
+| `initiator.id` | JWT `user_id` | UUID |
+| `initiator.name` | JWT `user_name` | `admin` |
+| `initiator.project_id` | JWT `project_id` | UUID |
+| `initiator.host.address` | client IP | `10.0.0.42` |
+| `target.typeURI` | path → `<service>/<resource>` | `compute/server` |
+| `target.id` | resource UUID in path (when targeted) | UUID |
+| `observer.id` / `observer.typeURI` | constants | `o3k` / `service/security` |
+| `requestPath` | raw request path | `/v2.1/<project>/servers/<id>` |
+| `reason.reasonCode` | HTTP status | `200`, `409` |
+| `request_id` | request_id header (when present) | UUID |
+
+Sample event for `DELETE /v2.1/<project>/servers/<id>`:
+
+```json
+{
+  "audit_event": true,
+  "eventType": "activity",
+  "id": "9d3f…",
+  "eventTime": "2026-05-28T11:22:33.123456Z",
+  "action": "delete",
+  "outcome": "success",
+  "initiator.id": "user-uuid",
+  "initiator.name": "admin",
+  "initiator.project_id": "project-uuid",
+  "initiator.host.address": "10.0.0.42",
+  "target.typeURI": "compute/server",
+  "target.id": "server-uuid",
+  "observer.id": "o3k",
+  "observer.typeURI": "service/security",
+  "requestPath": "/v2.1/project-uuid/servers/server-uuid",
+  "reason.reasonCode": 204,
+  "request_id": "req-uuid"
+}
+```
+
+The audit trail is the log stream itself — there is no `audit_events` DB
+table, matching O3K's broader "no message queue, synchronous ops" stance.
+A persisted table can follow if pilots demand searchable history.
+
 ## Forward roadmap
 
 The following are queued in [`docs/kimi-analyse-for-completion.md`](kimi-analyse-for-completion.md)
@@ -151,8 +217,6 @@ under Phase 3:
 - **SPEC-002 federated identity** — wire Keystone to OIDC/OAuth2/LDAP
   identity providers so federated SCS users can authenticate against an
   external IdP.
-- **Audit logging** — emit structured CADF-shaped audit events from the
-  Keystone middleware on every authenticated request.
 
 Each of these is its own slice; this document is the index they will hang
 off as they land.
