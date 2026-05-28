@@ -327,6 +327,26 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("nova.libvirt_uri must be set when nova.libvirt_mode is \"real\"")
 	}
 
+	// Production environment refuses stub modes. Stub backends return fake
+	// data without touching libvirt, netlink, Ceph, or S3 — fine for laptop
+	// development, catastrophic if a production deployment slips into stub
+	// by config drift. The escape hatch is to set each mode explicitly to a
+	// non-stub value (real / iptables / ebpf / local / rbd / s3 / hybrid).
+	if os.Getenv("O3K_ENV") == "production" {
+		if cfg.Nova.LibvirtMode == "stub" {
+			return fmt.Errorf("nova.libvirt_mode=\"stub\" is refused when O3K_ENV=production (set libvirt_mode to \"real\")")
+		}
+		if cfg.Neutron.NetworkingMode == "stub" {
+			return fmt.Errorf("neutron.networking_mode=\"stub\" is refused when O3K_ENV=production (set networking_mode to \"iptables\" or \"ebpf\")")
+		}
+		if cfg.Cinder.StorageMode == "stub" {
+			return fmt.Errorf("cinder.storage_mode=\"stub\" is refused when O3K_ENV=production (set storage_mode to \"local\", \"rbd\", \"s3\", or a hybrid)")
+		}
+		if cfg.Glance.StorageMode == "stub" {
+			return fmt.Errorf("glance.storage_mode=\"stub\" is refused when O3K_ENV=production (set storage_mode to \"local\", \"rbd\", \"s3\", or a hybrid)")
+		}
+	}
+
 	return nil
 }
 
