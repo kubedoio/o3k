@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write   # cosign keyless signing via Sigstore (OIDC)
 
 env:
   REGISTRY: ghcr.io
@@ -79,6 +80,62 @@ jobs:
           sha256sum * > checksums.txt
           cat checksums.txt
 
+      # ---- Supply chain: SBOMs + cosign signatures (Phase 4 Slice 4.2) ----
+      # syft scans the source tree and produces one SPDX SBOM that
+      # describes everything that goes into the binaries (Go modules,
+      # transitive deps). cosign signs the binaries and the
+      # checksums.txt with keyless OIDC, anchoring identity to this
+      # workflow run. Verification recipe lives in
+      # docs/release-verification.md.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0.17.8
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Generate SBOM (SPDX JSON)
+        run: |
+          syft scan dir:. \
+            --source-name o3k \
+            --source-version "${{ steps.version.outputs.version }}" \
+            -o spdx-json=dist/o3k-${{ steps.version.outputs.version }}.spdx.json
+          # Quick sanity check: SBOM should be ≥10KiB and parse as JSON.
+          test "$(wc -c < dist/o3k-${{ steps.version.outputs.version }}.spdx.json)" -gt 10240
+          jq -e .SPDXID dist/o3k-${{ steps.version.outputs.version }}.spdx.json > /dev/null
+
+      - name: Sign binaries and checksums (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cd dist
+          # Sign the canonical checksum manifest. Verifying checksums.txt
+          # transitively verifies every artifact listed inside it.
+          cosign sign-blob --yes \
+            --output-signature checksums.txt.sig \
+            --output-certificate checksums.txt.pem \
+            checksums.txt
+          # Also sign the SBOM directly so consumers can attest to the
+          # SBOM without needing the full release tree.
+          cosign sign-blob --yes \
+            --output-signature o3k-${{ steps.version.outputs.version }}.spdx.json.sig \
+            --output-certificate o3k-${{ steps.version.outputs.version }}.spdx.json.pem \
+            o3k-${{ steps.version.outputs.version }}.spdx.json
+          ls -la *.sig *.pem
+
+      - name: Verify signatures (self-check)
+        run: |
+          cd dist
+          # Sanity: verify what we just signed before publishing it.
+          # Identity must match this workflow's tag-triggered run.
+          cosign verify-blob \
+            --certificate checksums.txt.pem \
+            --signature   checksums.txt.sig \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/tags/v.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            checksums.txt
+
       - name: Generate release notes
         id: notes
         run: |
@@ -104,6 +161,11 @@ jobs:
             dist/compat-check-darwin-arm64
             dist/install.sh
             dist/checksums.txt
+            dist/checksums.txt.sig
+            dist/checksums.txt.pem
+            dist/o3k-${{ steps.version.outputs.version }}.spdx.json
+            dist/o3k-${{ steps.version.outputs.version }}.spdx.json.sig
+            dist/o3k-${{ steps.version.outputs.version }}.spdx.json.pem
           generate_release_notes: false
 
   docker:
@@ -139,6 +201,7 @@ jobs:
             type=sha
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -149,3 +212,40 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # ---- Supply chain: image signing + SBOM attestation ----
+      # Signs every published image tag with cosign keyless. Attaches an
+      # SPDX SBOM as a Sigstore attestation in the registry, so
+      # `cosign verify-attestation` returns the SBOM by digest.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0.17.8
+
+      - name: Sign image and attach SBOM
+        env:
+          COSIGN_YES: "true"
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS:   ${{ steps.meta.outputs.tags }}
+        run: |
+          # Sign each tag at the digest just pushed. Pinning to digest
+          # avoids the racy "tag moved between push and sign" failure mode.
+          for tag in $TAGS; do
+            ref="${tag%:*}@${DIGEST}"
+            echo "==> signing $ref"
+            cosign sign --yes "$ref"
+          done
+
+          # Generate SBOM for the image and attach it as an attestation.
+          # We attach to the first tag's digest; cosign tree shows all.
+          first_tag=$(echo "$TAGS" | head -n1)
+          ref="${first_tag%:*}@${DIGEST}"
+          syft scan "registry:${first_tag}" \
+            -o spdx-json=image.spdx.json
+          cosign attest --yes \
+            --predicate image.spdx.json \
+            --type spdxjson \
+            "$ref"
