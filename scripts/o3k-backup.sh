@@ -102,7 +102,12 @@ if [[ -d "$DATA_DIR/volumes" ]]; then
 fi
 
 # ---- Manifest ------------------------------------------------------------
-O3K_VERSION="$(o3k --version 2>/dev/null || echo unknown)"
+O3K_BIN="$(command -v o3k 2>/dev/null || true)"
+if [[ -n "$O3K_BIN" ]]; then
+  O3K_VERSION="$(go version -m "$O3K_BIN" 2>/dev/null | grep '^\s*mod\s' | awk '{print $3}' || echo unknown)"
+else
+  O3K_VERSION="unknown"
+fi
 cat > "$STAGE/payload/manifest.json" <<EOF
 {
   "schema_version": 1,
