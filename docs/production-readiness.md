@@ -133,6 +133,11 @@ of these turns an honest alpha into an unsafe one.
 
 ### 6. Operations
 
+- [ ] **Verify release artifacts before deploying.** Every tagged
+      release is cosign-signed and ships with an SPDX SBOM. The
+      verification recipe is in
+      [release-verification.md](release-verification.md). Don't
+      run unsigned binaries.
 - [ ] **Document the upgrade path.** Patch / minor / major contract is
       in [backup-restore-upgrade.md](backup-restore-upgrade.md).
       Always back up before upgrading, even patch releases.
@@ -168,7 +173,7 @@ To set realistic expectations, here is what is on the roadmap but not
 in main:
 
 - Grafana dashboards and alerting rules (Phase 4 Slice 4.3)
-- Signed releases + SBOMs (Phase 4 Slice 4.2)
+- SLSA Level 3 provenance attestations (current signing is identity-anchored only)
 - Quota enforcement and chargeback hooks
 - Live migration, evacuation, host maintenance mode
 - Cell-based scaling beyond a single control plane
@@ -219,6 +224,7 @@ the territory:
 □ PostgreSQL with sslmode=verify-full (not SQLite)
 □ Daily backup cron + off-host retention
 □ Restore drill completed at least once
+□ Release artifacts cosign-verified before deploy
 □ /metrics scraped, audit logs shipped
 □ /healthz and /readyz probed
 □ Real-mode dependencies validated (libvirt / Ceph / S3 / netlink)

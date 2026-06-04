@@ -47,9 +47,15 @@ if [[ -z "$DATA_DIR" ]]; then
 fi
 
 # Refuse to clobber a live deployment.
-if pgrep -x o3k >/dev/null 2>&1 && [[ "$FORCE" -eq 0 ]]; then
-  echo "live o3k process detected — stop it first or pass --force" >&2
-  exit 4
+if [[ "$FORCE" -eq 0 ]]; then
+  _O3K_RUNNING=0
+  pgrep -x o3k >/dev/null 2>&1 && _O3K_RUNNING=1
+  systemctl is-active --quiet lightstack 2>/dev/null && _O3K_RUNNING=1
+  if [[ "$_O3K_RUNNING" -eq 1 ]]; then
+    echo "o3k appears to be running (process or lightstack.service detected)." >&2
+    echo "Stop it first (systemctl stop lightstack) or pass --force to override." >&2
+    exit 4
+  fi
 fi
 
 # Verify checksum if present.

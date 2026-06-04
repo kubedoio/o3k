@@ -148,6 +148,13 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 ### 4.2 Supply chain: SBOMs + signed releases
 - **Action:** Generate SBOMs with `syft` in release workflow. Sign artifacts with cosign/sigstore. Publish checksums.
 - **Acceptance:** Releases include SBOM + signed checksums.
+- **Status:** ✅ Done.
+  - `.github/workflows/release.yml` — added `id-token: write` permission for OIDC keyless signing; install `syft@v0.17.8` and `cosign@v2.4.1` in both release and docker jobs.
+  - **Binaries:** `syft scan dir:.` produces `o3k-X.Y.Z.spdx.json` (SPDX 2.3, sanity-checked ≥10KiB + JSON-parses); `cosign sign-blob` signs both `checksums.txt` and the SBOM, emitting `.sig` + `.pem` certificate pairs.
+  - **Self-check step** (`cosign verify-blob` with workflow-identity regex) runs in CI before the release publishes — catches broken signing before artifacts go public.
+  - **Container image:** signed at digest with `cosign sign --yes`; SBOM attached as Sigstore attestation via `cosign attest --type spdxjson` so `cosign verify-attestation` returns the SBOM by digest.
+  - **Verification recipe:** `docs/release-verification.md` — full operator-facing guide covering binary verification, SBOM verification + scanner integration (`grype`, `trivy`), container verification, Kyverno admission-control policy. Honest "what we don't yet do" section calls out missing SLSA L3 provenance, no reproducible builds, no artifact mirror, no release-time vuln gating.
+  - Cross-linked from `docs/production-readiness.md` operations checklist + summary card.
 
 ### 4.3 Observability: Grafana dashboards + alerting
 - **Action:** Add Grafana dashboard JSON configs for Prometheus metrics. Add example alerting rules. Document SLO/SLI.
@@ -189,7 +196,25 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 - (none yet)
 
 ## Status
-**Phase 3 Slice 7 — SPEC-002 federated identity (OIDC/OAuth2/LDAP).**
+
+**Comprehensive audit-gap review (2026-06-02).** Verified all four phases against ground truth in main:
+
+| Phase | Shipped | Partial | Missing |
+|---|---|---|---|
+| 1 — Trust Cleanup | 12/12 ✅ | 0 | 0 |
+| 2 — Real Infra Proof | 3/5 | 1 (2.2 hypervisor int-tests stub-only) | 1 (2.5 `real-kvm-ceph-lab.md`) |
+| 3 — SCS Alignment | 5/7 (#24, #28, #29, #30, plus 3.1 doc) | 0 | 1 (3.6 Barbican — out of scope for now) |
+| 4 — Pilot Readiness | 5/6 (#31, #32, #33, #34, this slice 4.2) | 0 | 1 (4.3 Grafana) |
+
+**Phase 4 Slices B/C/D merged 2026-06-02** (#32 templates, #33 backup/restore, #34 production-readiness). **Slice 4.2 (SBOMs + cosign signing) on this branch.** Three Phase 3 PRs (#25, #26, #27) remain open and conflicted only on `docs/scs-alignment.md`. They are independently rebaseable.
+
+**Remaining:** Slice 4.3 (Grafana dashboards + alerting). After that, the Phase 4 pilot-readiness pillar is feature-complete pending optional SLSA L3 provenance and reproducible-build work.
+
+---
+
+### Earlier-slice context (preserved)
+
+**Phase 3 Slice 7 — SPEC-002 federated identity (OIDC/OAuth2/LDAP).** Merged PR #30.
 
 Slice 6 (CADF audit logging) merged as PR #29 — middleware mounted across all 6 auth-bearing services, 7 tests passing, `docs/scs-alignment.md` audit row flipped ⬜→✅.
 

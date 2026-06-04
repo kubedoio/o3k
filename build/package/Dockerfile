@@ -1,5 +1,5 @@
 # Multi-stage build for O3K - Multi-architecture support
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine AS builder
 
 # Build arguments for cross-compilation
 ARG TARGETOS
