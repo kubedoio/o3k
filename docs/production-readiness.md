@@ -120,8 +120,12 @@ of these turns an honest alpha into an unsafe one.
 
 ### 5. Observability
 
-- [ ] **Scrape `/metrics`** on every service from Prometheus. Grafana
-      dashboards are not yet shipped (Phase 4 Slice 4.3).
+- [ ] **Scrape `/metrics`** on every service from Prometheus. Each service
+      exposes standard Prometheus text format (`# HELP`/`# TYPE` lines,
+      per-route counters and latency histograms). Import the dashboard from
+      `docs/grafana/o3k-overview.json` and load alerting rules from
+      `docs/grafana/o3k-alerts.yaml`. See
+      [docs/grafana/README.md](grafana/README.md) for the full setup guide.
 - [ ] **Capture audit logs** from stdout into your SIEM / ELK / Loki
       stack. The CADF middleware emits structured JSON; mounted in all
       6 auth-bearing services.
@@ -172,7 +176,6 @@ If you proceed past this checklist, you are accepting:
 To set realistic expectations, here is what is on the roadmap but not
 in main:
 
-- Grafana dashboards and alerting rules (Phase 4 Slice 4.3)
 - SLSA Level 3 provenance attestations (current signing is identity-anchored only)
 - Quota enforcement and chargeback hooks
 - Live migration, evacuation, host maintenance mode
