@@ -1,106 +1,83 @@
 package middleware
 
 import (
-	"fmt"
-	"net/http"
-	"sync"
-	"sync/atomic"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// metricsStore accumulates per-route counters without external dependencies.
-// The key is "METHOD /path STATUS", e.g. "GET /v2/servers 200".
-type metricsStore struct {
-	mu       sync.RWMutex
-	counters map[string]*atomic.Int64
-	// Latency buckets (ms): each entry tracks the count of requests whose
-	// duration fell within that upper bound.
-	latencyBuckets []int64 // upper bounds in ms: 10, 50, 100, 500, 1000, +Inf
-	latencyCounts  []atomic.Int64
-}
+// registry is the per-process Prometheus registry used by all o3k services.
+// A custom registry avoids collisions when multiple service routers are
+// initialised in the same test binary or embedded process.
+var registry = prometheus.NewRegistry()
 
-var store = &metricsStore{
-	counters:       make(map[string]*atomic.Int64),
-	latencyBuckets: []int64{10, 50, 100, 500, 1000},
-}
+var (
+	httpRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "o3k_http_requests_total",
+			Help: "Total number of HTTP requests handled, partitioned by service, method, path and status code.",
+		},
+		[]string{"service", "method", "path", "status_code"},
+	)
+
+	httpRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "o3k_http_request_duration_seconds",
+			Help:    "HTTP request latency in seconds, partitioned by service, method and path.",
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5},
+		},
+		[]string{"service", "method", "path"},
+	)
+)
 
 func init() {
-	// latencyCounts has len(latencyBuckets)+1 slots: one per bucket + overflow.
-	store.latencyCounts = make([]atomic.Int64, len(store.latencyBuckets)+1)
+	registry.MustRegister(httpRequestsTotal)
+	registry.MustRegister(httpRequestDuration)
 }
 
-// MetricsMiddleware records request counts and latency for every handled route.
-// It should be added after RequestIDMiddleware but before business-logic
-// middleware so it captures the full request lifecycle.
-func MetricsMiddleware() gin.HandlerFunc {
+// Registry returns the custom Prometheus registry so callers can register
+// additional, service-specific metrics (e.g. nova instance gauges).
+func Registry() *prometheus.Registry {
+	return registry
+}
+
+// MetricsMiddleware records o3k_http_requests_total and
+// o3k_http_request_duration_seconds for every request handled by the router.
+// service identifies the owning OpenStack service (e.g. "keystone", "nova")
+// and becomes the value of the "service" label on every sample.
+//
+// Place this middleware after RequestIDMiddleware but before business-logic
+// handlers so it captures the full request lifecycle.
+func MetricsMiddleware(service string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
 
-		ms := time.Since(start).Milliseconds()
-		status := c.Writer.Status()
-		key := fmt.Sprintf("%s %s %d", c.Request.Method, c.FullPath(), status)
-
-		store.mu.RLock()
-		ctr, exists := store.counters[key]
-		store.mu.RUnlock()
-
-		if !exists {
-			store.mu.Lock()
-			if ctr, exists = store.counters[key]; !exists {
-				ctr = new(atomic.Int64)
-				store.counters[key] = ctr
-			}
-			store.mu.Unlock()
+		path := c.FullPath()
+		if path == "" {
+			// Unmatched routes — avoid high-cardinality label explosion.
+			path = "unmatched"
 		}
-		ctr.Add(1)
 
-		// Record latency bucket.
-		idx := len(store.latencyBuckets) // default: overflow bucket
-		for i, bound := range store.latencyBuckets {
-			if ms <= bound {
-				idx = i
-				break
-			}
-		}
-		store.latencyCounts[idx].Add(1)
+		method := c.Request.Method
+		status := strconv.Itoa(c.Writer.Status())
+		elapsed := time.Since(start).Seconds()
+
+		httpRequestsTotal.WithLabelValues(service, method, path, status).Inc()
+		httpRequestDuration.WithLabelValues(service, method, path).Observe(elapsed)
 	}
 }
 
-// RegisterMetricsRoute adds GET /metrics to a router with no authentication.
-// Output is plain text in a simple key=value format.
+// RegisterMetricsRoute adds GET /metrics to r using the standard Prometheus
+// text exposition format (includes # HELP and # TYPE comment lines).
+// No authentication is applied — add an IP allowlist at the reverse-proxy
+// layer if the endpoint must not be publicly reachable.
 func RegisterMetricsRoute(r *gin.Engine) {
-	r.GET("/metrics", metricsHandler)
-}
-
-func metricsHandler(c *gin.Context) {
-	store.mu.RLock()
-	snap := make(map[string]int64, len(store.counters))
-	for k, v := range store.counters {
-		snap[k] = v.Load()
-	}
-	store.mu.RUnlock()
-
-	w := c.Writer
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-
-	fmt.Fprintln(w, "# o3k request counters (method path status_code count)")
-	for key, count := range snap {
-		fmt.Fprintf(w, "o3k_requests_total{route=%q} %d\n", key, count)
-	}
-
-	fmt.Fprintln(w, "# o3k latency distribution (upper_bound_ms count)")
-	bounds := make([]int64, 0, len(store.latencyBuckets)+1)
-	bounds = append(bounds, store.latencyBuckets...)
-	bounds = append(bounds, -1) // -1 represents +Inf
-	for i, bound := range bounds {
-		label := fmt.Sprintf("%d", bound)
-		if bound == -1 {
-			label = "+Inf"
-		}
-		fmt.Fprintf(w, "o3k_request_duration_ms_bucket{le=%q} %d\n", label, store.latencyCounts[i].Load())
-	}
+	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+	r.GET("/metrics", func(c *gin.Context) {
+		h.ServeHTTP(c.Writer, c.Request)
+	})
 }

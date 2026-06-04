@@ -1,0 +1,79 @@
+groups:
+  - name: o3k.service
+    interval: 30s
+    rules:
+      # Fires when the 5xx error rate for any O3K service exceeds 5% over a 5-minute
+      # window. A sustained 5% error rate indicates a service-wide problem affecting
+      # clients — not transient noise.
+      - alert: O3KHighErrorRate
+        expr: |
+          (
+            sum by (service) (rate(o3k_http_requests_total{status_code=~"5.."}[5m]))
+            /
+            sum by (service) (rate(o3k_http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate on O3K service {{ $labels.service }}"
+          description: >
+            Service {{ $labels.service }} has a 5xx error rate of
+            {{ $value | humanizePercentage }} over the last 5 minutes.
+            Investigate logs on that service port.
+          runbook: "https://github.com/your-org/o3kio/blob/main/docs/TROUBLESHOOTING.md"
+          dashboard: "http://grafana/d/o3k-overview"
+
+      # Fires when a Prometheus scrape target for an O3K service disappears for 2
+      # minutes. Jobs are named o3k-<service> (e.g. o3k-nova). A missing target
+      # means the service process has crashed or the port is unreachable.
+      - alert: O3KServiceDown
+        expr: up{job=~"o3k-.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "O3K service unreachable: {{ $labels.job }}"
+          description: >
+            Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}.
+            The service may have crashed. Check the process and systemd/container logs.
+          runbook: "https://github.com/your-org/o3kio/blob/main/docs/TROUBLESHOOTING.md"
+          dashboard: "http://grafana/d/o3k-overview"
+
+      # Fires when P99 request latency for any O3K service exceeds 2 seconds for 5
+      # minutes. At this threshold clients will start experiencing noticeable slowness.
+      - alert: O3KHighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (service, le) (rate(o3k_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P99 latency > 2s on O3K service {{ $labels.service }}"
+          description: >
+            Service {{ $labels.service }} p99 latency is {{ $value | humanizeDuration }}
+            (threshold 2s). Check for slow database queries or backend contention.
+          runbook: "https://github.com/your-org/o3kio/blob/main/docs/TROUBLESHOOTING.md"
+          dashboard: "http://grafana/d/o3k-overview"
+
+      # Fires when P99 latency exceeds 10 seconds for 2 minutes. At this point
+      # client timeouts are likely occurring and the service is effectively degraded.
+      - alert: O3KHighLatencyP99Critical
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (service, le) (rate(o3k_http_request_duration_seconds_bucket[5m]))
+          ) > 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "P99 latency > 10s on O3K service {{ $labels.service }} — clients timing out"
+          description: >
+            Service {{ $labels.service }} p99 latency is {{ $value | humanizeDuration }}
+            (threshold 10s). Client timeouts are likely. Immediate investigation required.
+          runbook: "https://github.com/your-org/o3kio/blob/main/docs/TROUBLESHOOTING.md"
+          dashboard: "http://grafana/d/o3k-overview"
