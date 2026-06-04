@@ -11,10 +11,11 @@ Dashboard and alerting rules for the O3K observability stack.
 
 ## Requirements
 
-Both files require the real Prometheus middleware in O3K. Metrics are only
-emitted when `metrics_mode` is set to `real` (or equivalent) in `config/o3k.yaml`.
-Stub mode does not expose `/metrics`. Verify metrics are available before
-importing the dashboard:
+The `/metrics` endpoint is always exposed on every O3K service port,
+regardless of `libvirt_mode`, `networking_mode`, or any other service-mode
+setting. Stub mode and real mode both emit metrics — the only difference is
+which workloads drive traffic through the middleware. Verify metrics are
+available before importing the dashboard:
 
 ```bash
 curl -s http://localhost:8774/metrics | grep o3k_http
@@ -33,9 +34,10 @@ curl -s http://localhost:8774/metrics | grep o3k_http
 
 The dashboard opens at `Dashboards / O3K — Service Overview`.
 
-The `$service` variable in the top bar filters which service the row panels
-highlight. Each row is always visible; the variable is provided for convenience
-when linking directly to a specific service from an alert.
+The dashboard ships with a `$datasource` variable so you can pick which
+Prometheus instance backs the panels. Every service row (Keystone, Nova,
+Neutron, Cinder, Glance, Placement, Metadata) is always visible; scroll to
+the row you care about.
 
 ---
 
@@ -93,6 +95,10 @@ scrape_configs:
   - job_name: o3k-placement
     static_configs:
       - targets: ["localhost:8778"]
+
+  - job_name: o3k-metadata
+    static_configs:
+      - targets: ["localhost:8775"]
 ```
 
 Replace `localhost` with the actual host if Prometheus runs on a separate

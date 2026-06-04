@@ -825,7 +825,7 @@ func runAgent(args []string) {
 	if *tunnelTLS {
 		tlsCfg, tlsErr := tunnel.AgentTLSConfig()
 		if tlsErr != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: tunnel TLS config: %v\n", tlsErr)
+			fmt.Fprintf(os.Stderr, "ERROR: tunnel TLS config: %v\n", tlsErr)
 			os.Exit(1)
 		}
 		client.SetTLSConfig(tlsCfg)

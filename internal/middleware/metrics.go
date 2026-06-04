@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"strconv"
 	"time"
 
@@ -25,17 +26,23 @@ var (
 
 	httpRequestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "o3k_http_request_duration_seconds",
-			Help:    "HTTP request latency in seconds, partitioned by service, method and path.",
-			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5},
+			Name: "o3k_http_request_duration_seconds",
+			Help: "HTTP request latency in seconds, partitioned by service, method and path.",
+			// Bucket bounds extend beyond prometheus.DefBuckets (max 10s) because
+			// OpenStack real-mode operations (nova boot, cinder create, glance
+			// upload) regularly take 5–30 seconds; capping at 2.5s collapses the
+			// long tail into +Inf and breaks P99 alerting under realistic load.
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0},
 		},
 		[]string{"service", "method", "path"},
 	)
 )
 
+// init registers metrics on the custom registry. We intentionally do not use
+// promauto here — that would auto-register on prometheus.DefaultRegisterer,
+// defeating the test-isolation and embedding goals of the custom registry.
 func init() {
-	registry.MustRegister(httpRequestsTotal)
-	registry.MustRegister(httpRequestDuration)
+	registry.MustRegister(httpRequestsTotal, httpRequestDuration)
 }
 
 // Registry returns the custom Prometheus registry so callers can register
@@ -73,10 +80,16 @@ func MetricsMiddleware(service string) gin.HandlerFunc {
 
 // RegisterMetricsRoute adds GET /metrics to r using the standard Prometheus
 // text exposition format (includes # HELP and # TYPE comment lines).
-// No authentication is applied — add an IP allowlist at the reverse-proxy
-// layer if the endpoint must not be publicly reachable.
+//
+// No authentication is applied to /metrics by design — Prometheus scrapers do
+// not authenticate. See docs/production-readiness.md §5 (Observability) for
+// guidance on restricting access via the reverse proxy or a private interface.
 func RegisterMetricsRoute(r *gin.Engine) {
-	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{
+		// Surface gather errors instead of silently returning partial data.
+		ErrorLog:      log.Default(),
+		ErrorHandling: promhttp.ContinueOnError,
+	})
 	r.GET("/metrics", func(c *gin.Context) {
 		h.ServeHTTP(c.Writer, c.Request)
 	})

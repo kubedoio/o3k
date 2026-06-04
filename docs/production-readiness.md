@@ -176,7 +176,6 @@ If you proceed past this checklist, you are accepting:
 To set realistic expectations, here is what is on the roadmap but not
 in main:
 
-- Grafana dashboards (`docs/grafana/`) and alerting rules (`docs/grafana/o3k-alerts.yaml`): shipped in Phase 4 Slice 4.3
 - SLSA Level 3 provenance attestations (current signing is identity-anchored only)
 - Quota enforcement and chargeback hooks
 - Live migration, evacuation, host maintenance mode
