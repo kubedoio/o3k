@@ -139,22 +139,10 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 ### 4.1 Operations: Backup/restore tooling and docs
 - **Action:** Add `o3k backup` / `o3k restore` commands or scripts. Document DB backup (SQLite + PostgreSQL), image storage backup, version upgrade runbook.
 - **File:** `docs/backup-restore-upgrade.md` (new)
-- **Status:** ✅ Done.
-  - `scripts/o3k-backup.sh` — SQLite via `VACUUM INTO` (online-consistent, non-blocking) or PostgreSQL via `pg_dump --format=custom`. Captures secrets (`jwt-secret`, `initial-password`, `agent-token`), local images, local volumes. Emits `tar.gz` + `.sha256` sidecar with manifest.
-  - `scripts/o3k-restore.sh` — verifies sha256, refuses live `o3k` process without `--force`, restores DB + secrets + storage with `0600` perms on secrets. Supports both SQLite and PostgreSQL.
-  - `docs/backup-restore-upgrade.md` — what gets backed up (and what doesn't: Ceph RBD, S3, libvirt domains), backup/restore procedures for SQLite + PostgreSQL, scheduling via cron, upgrade contract (patch/minor/major), disaster-recovery checklist, known limitations.
-  - End-to-end smoke test passes locally: backup → restore → SQLite row preserved, secrets identical, images and volumes match.
 
 ### 4.2 Supply chain: SBOMs + signed releases
 - **Action:** Generate SBOMs with `syft` in release workflow. Sign artifacts with cosign/sigstore. Publish checksums.
 - **Acceptance:** Releases include SBOM + signed checksums.
-- **Status:** ✅ Done.
-  - `.github/workflows/release.yml` — added `id-token: write` permission for OIDC keyless signing; install `syft@v0.17.8` and `cosign@v2.4.1` in both release and docker jobs.
-  - **Binaries:** `syft scan dir:.` produces `o3k-X.Y.Z.spdx.json` (SPDX 2.3, sanity-checked ≥10KiB + JSON-parses); `cosign sign-blob` signs both `checksums.txt` and the SBOM, emitting `.sig` + `.pem` certificate pairs.
-  - **Self-check step** (`cosign verify-blob` with workflow-identity regex) runs in CI before the release publishes — catches broken signing before artifacts go public.
-  - **Container image:** signed at digest with `cosign sign --yes`; SBOM attached as Sigstore attestation via `cosign attest --type spdxjson` so `cosign verify-attestation` returns the SBOM by digest.
-  - **Verification recipe:** `docs/release-verification.md` — full operator-facing guide covering binary verification, SBOM verification + scanner integration (`grype`, `trivy`), container verification, Kyverno admission-control policy. Honest "what we don't yet do" section calls out missing SLSA L3 provenance, no reproducible builds, no artifact mirror, no release-time vuln gating.
-  - Cross-linked from `docs/production-readiness.md` operations checklist + summary card.
 
 ### 4.3 Observability: Grafana dashboards + alerting
 - **Action:** Add Grafana dashboard JSON configs for Prometheus metrics. Add example alerting rules. Document SLO/SLI.
@@ -162,23 +150,14 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 
 ### 4.4 Hardening: Defaults
 - **Action:** Bind to 127.0.0.1 by default (not 0.0.0.0). Require strong JWT secret (reject weak/empty). Disable stub mode in production builds.
-- **Status:** ✅ Done.
-  - `BindAddress()` defaults to `127.0.0.1` when `server.bind_host` is unset (`internal/common/config.go:333-342`).
-  - JWT-secret strength gate refuses default `change-me-in-production` unless `O3K_ENV=development|test` (`internal/common/config.go:260-267`); strength check (≥32 chars) lives in `cmd/o3k/main.go:300-303`.
-  - Production stub-mode guard added in `ValidateConfig()` — `O3K_ENV=production` refuses `nova.libvirt_mode=stub`, `neutron.networking_mode=stub`, `cinder.storage_mode=stub`, `glance.storage_mode=stub`. Tests in `internal/common/config_test.go::TestValidateConfigProductionStubGuard`.
 
-### 4.5 Community: Issue/PR templates
-- **Files:** `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/PULL_REQUEST_TEMPLATE.md`
-- **Action:** Add standard issue/PR templates. CoC + CONTRIBUTING deferred (out of scope for this slice).
-- **Status:** ✅ Done — bug/feature/config issue templates and PR template added; security reports routed to GitHub Security Advisories via `config.yml`.
+### 4.5 Community: Issue/PR templates + CoC
+- **Files:** `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `CODE_OF_CONDUCT.md`
+- **Action:** Add standard OS templates.
 
 ### 4.6 Docs: Production readiness guide
 - **File:** `docs/production-readiness.md` (new)
 - **Action:** Honest assessment of what is safe today. Pre-flight checklist (change password, enable TLS, configure Ceph, etc.).
-- **Status:** ✅ Done.
-  - `docs/production-readiness.md` — production-ready rubric (4 criteria), per-area grading table (Evaluation only / Lab only / Production-shaped / Not ready), 7-section pre-flight checklist (identity & secrets, transport security, database, real-mode dependencies, observability, operations, what-you-must-accept), explicit list of un-shipped capabilities, fit/no-fit deployment guidance, single-screen summary card.
-  - Cross-links to `SECURITY.md`, `docs/tls-configuration.md`, `docs/backup-restore-upgrade.md`.
-  - Calls out remaining Phase 4 work (4.2 SBOMs, 4.3 Grafana) so operators know what is still missing.
 
 ---
 
@@ -196,74 +175,55 @@ Close the gaps identified in the kimi readiness audit to bring O3K from 45% to 6
 - (none yet)
 
 ## Status
+**Currently in Phase 3 — SCS Alignment**
 
-**Comprehensive audit-gap review (2026-06-02).** Verified all four phases against ground truth in main:
-
-| Phase | Shipped | Partial | Missing |
-|---|---|---|---|
-| 1 — Trust Cleanup | 12/12 ✅ | 0 | 0 |
-| 2 — Real Infra Proof | 3/5 | 1 (2.2 hypervisor int-tests stub-only) | 1 (2.5 `real-kvm-ceph-lab.md`) |
-| 3 — SCS Alignment | 5/7 (#24, #28, #29, #30, plus 3.1 doc) | 0 | 1 (3.6 Barbican — out of scope for now) |
-| 4 — Pilot Readiness | 5/6 (#31, #32, #33, #34, this slice 4.2) | 0 | 1 (4.3 Grafana) |
-
-**Phase 4 Slices B/C/D merged 2026-06-02** (#32 templates, #33 backup/restore, #34 production-readiness). **Slice 4.2 (SBOMs + cosign signing) on this branch.** Three Phase 3 PRs (#25, #26, #27) remain open and conflicted only on `docs/scs-alignment.md`. They are independently rebaseable.
-
-**Remaining:** Slice 4.3 (Grafana dashboards + alerting). After that, the Phase 4 pilot-readiness pillar is feature-complete pending optional SLSA L3 provenance and reproducible-build work.
+Slice progress:
+- ✅ Slice 1: SCS-0103 mandatory flavors (PR #24, merged at 109160c)
+- ✅ Slice 2: SCS-0102 image metadata (PR #25, open)
+- ✅ Slice 3: SCS-0100-v3 flavor name validator/parser (this PR)
+- ⬜ Slice 4: SCS-0104 standard images
+- ⬜ Slice 5: SCS-0110 volume types
+- ⬜ Slice 6: Audit logging middleware
+- ⬜ Slice 7: SPEC-002 federated identity
 
 ---
 
-### Earlier-slice context (preserved)
+## Slice 3 — SCS-0100-v3 flavor name validator/parser
 
-**Phase 3 Slice 7 — SPEC-002 federated identity (OIDC/OAuth2/LDAP).** Merged PR #30.
+### Goal
+Ship a parser/validator for SCS-0100-v3 flavor names so any flavor whose name
+starts with `SCS-` is checked against the standard at create time, and the
+parsed components are available as extra-specs for SCS-aware clients.
 
-Slice 6 (CADF audit logging) merged as PR #29 — middleware mounted across all 6 auth-bearing services, 7 tests passing, `docs/scs-alignment.md` audit row flipped ⬜→✅.
+### Scope
+- New package `pkg/scs` with:
+  - `ParseFlavorName(name) (FlavorName, error)` — parse the mandatory prefix
+    `SCS-<vCPUs><cpu-type>-<RAM_GiB>[-<disk_GB><disk-type>]` plus optional
+    extension fields (hypervisor, accelerator, CPU brand, etc.).
+  - `Validate(name) error` — wrapper that returns nil for non-SCS names and
+    a descriptive error for malformed `SCS-*` names.
+- Wire into Nova's `CreateFlavor` handler: if `name` starts with `SCS-`,
+  validate; on success, mirror parsed components into `flavor_extra_specs`
+  rows (`scs:cpu-type`, `scs:disk0-type`, etc.) so behaviour matches the
+  Slice 1 seed.
+- Update `docs/scs-alignment.md`: flip SCS-0100 row from 🟡 to ✅, document
+  the validator behaviour and conformance check.
 
-### Slice 7 phases
-- [x] Phase 0: Merge Slice 6 PR #29
-- [x] Phase 1: Understand SCS-0300 — read SCS federated identity spec, scan existing keystone auth code (`internal/keystone/`, `/v3/auth/tokens` handler), identify integration surface (login flow, token issuance, user/project provisioning)
-- [x] Phase 2: Plan approach — pick provider abstraction (OIDC first via `coreos/go-oidc/v3`), config schema, JIT user provisioning policy, mapping from IdP claims to O3K roles
-- [x] Phase 3: Implement — provider interface + OIDC adapter, federated `/v3/auth/tokens` flow with `identity.methods=["openid"]`, JIT user/project create, config wiring, tests
-- [ ] Phase 4: Verify and deliver — unit tests, integration test against a stub IdP (or `go-oidc` mock), docs (`docs/scs-alignment.md` row + new federation section), PR
+### Out of scope
+- Cross-checking that vCPUs/RAM in the name match the numeric `vcpus`/`ram_mb`
+  fields (separate slice; the spec allows operators to define their own
+  flavor sizing).
+- Extension field semantics beyond parsing (e.g. validating that an
+  accelerator suffix corresponds to a real PCI device).
 
-### Phase 1 findings (2026-05-28)
-**Spec ID correction:** the actual spec is **SCS-0300-v1** "Requirements for SSO identity federation" (Effective track, IAM). The "SPEC-002" label used internally and in `docs/scs-alignment.md` row 32 is wrong — needs renaming. SCS-0301 (naming, Draft) and SCS-0302 (Domain Manager, Effective) are sibling IAM-track standards but out of scope for this slice.
+### Acceptance
+- `openstack flavor create SCS-2V-4` succeeds; `flavor show` reflects
+  `scs:cpu-type=shared-core` in extra specs.
+- `openstack flavor create SCS-bogus` returns 400 with a parser error.
+- Non-SCS names (e.g. `m1.tiny`) are unaffected.
+- Unit tests cover happy path, every cpu-type letter, every disk-type
+  letter, datasets from SCS-0103, and a representative set of malformed
+  inputs.
 
-**SCS-0300-v1 conformance surface:** the published v1 contains design considerations (Keycloak vs Zitadel) but **no formal conformance tests** — the "Conformance Tests" section is OPTIONAL and empty. Minimum viable surface is therefore an implementer's judgment call, not a spec mandate. The IAM-federation drafts (`github.com/SovereignCloudStack/standards/tree/main/Drafts/IAM-federation`, especially `keystone-keycloak-federation.md`) document the API surface to mirror.
-
-**Federation API surface to expose** (mirrored from Keystone+Keycloak reference):
-- `/v3/auth/OS-FEDERATION/identity_providers/<idp>/protocols/openid/websso` — browser flow, Authorization Code grant
-- `/v3/OS-FEDERATION/identity_providers/<idp>/protocols/mapped/auth` — CLI flow, OAuth2 bearer + JWKS verification
-- `kc_idp_hint` URL parameter for identity brokering
-- `v3oidcpassword` flow env-var contract (`OS_AUTH_TYPE`, `OS_IDENTITY_PROVIDER`, `OS_DISCOVERY_ENDPOINT`, …) for OpenStack CLI compatibility
-
-**Existing Keystone auth integration points:**
-- `internal/keystone/handlers.go:224` — `AuthenticateToken` handler dispatches on `req.Auth.Identity.{Token,ApplicationCredential,Password}`. Federated branch slots in as a fourth `else if`.
-- `internal/keystone/handlers.go:74` — `RegisterRoutes` is where new `/v3/OS-FEDERATION/...` route group hangs off.
-- `internal/keystone/auth.go:170` — `AuthRequest` struct needs a new `Federated *struct{...}` field on `Auth.Identity`.
-- `internal/keystone/auth.go:243` — `AuthenticatePassword` is the implementation template for `AuthenticateFederated` (domain lookup → user lookup → scope check → role fetch → HS256 JWT signing). Roughly 200 lines, mostly reusable; the verify step swaps from bcrypt to OIDC ID-token verification.
-- `internal/keystone/auth.go:229` — `deterministicUUID(parts...)` is the right primitive for JIT provisioning to map `(issuer, subject)` → stable O3K user UUID.
-
-### Phase 1 decisions
-
-1. **Minimum surface for v1 = OIDC only.** SCS-0300 doesn't mandate protocol coverage, OIDC is the modern default, Keycloak/Zitadel/Auth0/Okta all support it natively, and a single library (`coreos/go-oidc/v3`) covers the verification path. LDAP and OAuth2-direct become follow-up slices.
-2. **JIT auto-provisioning on first federated login.** Matches Zitadel's reference pattern, lowest operator friction. Admin pre-provisioning becomes a config knob (`auto_provision: false` per provider) for ops that want stricter control.
-3. **Claim-to-role mapping in a new DB table.** Queryable, auditable, manageable via existing role-assignment APIs. Static-config alternative would be invisible at runtime and force restarts to change. Schema sketch: `(provider_id, claim_name, claim_value, role_id, project_id?)`.
-4. **Federated session → normal O3K JWT (HS256).** `Methods` field on the issued token reads `["openid"]` (browser) or `["mapped"]` (CLI). Existing `AuthMiddleware` works unchanged because the JWT is structurally identical to a password-issued one.
-5. **Hook-in plan:**
-   - Add `Federated *struct{...}` field to `AuthRequest.Auth.Identity` in `auth.go:170`
-   - Add fourth dispatch branch in `AuthenticateToken` at `handlers.go:242`
-   - New `internal/keystone/federation.go` for `FederationProvider` interface + OIDC adapter + JIT provisioning
-   - New route group registered in `RegisterRoutes` at `handlers.go:74`
-   - New migration for `federation_providers` and `federation_role_mappings` tables
-   - Library: `github.com/coreos/go-oidc/v3` (mature, JWKS rotation, ID-token verification)
-
-### Phase 3 status
-- Slice 1 (SCS-0103 mandatory flavors) — merged PR #24
-- Slice 2 (SCS-0102 image metadata) — open PR #25
-- Slice 3 (SCS-0100-v3 flavor name validator) — open PR #26
-- Slice 4 (SCS-0104 standard images) — open PR #27
-- Slice 5 (SCS-0114 volume types) — merged PR #28
-- Slice 6 (CADF audit logging) — merged PR #29
-- Slice 7 (SPEC-002 federated identity) — **in progress, this branch**
-
-**Phases 1–3 complete.** Phase 4 in progress — federation unit tests added (`internal/keystone/federation_test.go`, 11 cases covering YAML defaults, registry lookup, validation paths, verify-failure mapping, happy-path token issuance, domain-scope rejection), docs updated (`docs/scs-alignment.md` row + new SCS-0300-v1 section), branch `slice-7-federation`. Next: open PR off main.
+## Errors Encountered (Slice 3)
+- (None yet.)
