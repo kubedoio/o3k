@@ -115,12 +115,14 @@ No RabbitMQ. No Conductor. No Scheduler daemons. One process, one database.
 
 ## Project Status
 
-External readiness audits have scored O3K around 4.5/10 (45%) against
-production OpenStack workloads. Phase 1 trust-cleanup work has lifted
-that toward roughly 6/10 for evaluation use, but production targets
-(stable real-mode operation under load, full RBAC, contract-test
-parity with Devstack) remain ahead. We track concrete gaps below
-rather than picking a single number.
+External readiness audits scored O3K at 4.5/10 in May 2026. Four phases
+of gap-closure work — trust cleanup, real-infrastructure proof, SCS
+alignment, and pilot readiness — have lifted that to roughly 6.5/10
+for evaluation and small-scale lab use. Production targets (stable
+real-mode operation under load, full RBAC, contract-test parity with
+Devstack) remain ahead. Concrete capability tables follow rather than
+a single number. See [docs/production-readiness.md](docs/production-readiness.md)
+for the operator-facing pre-flight checklist.
 
 ### What Works Today
 
@@ -128,14 +130,26 @@ rather than picking a single number.
 |-----------|--------|------------|
 | Basic CRUD (create/list/show/delete) for all 5 services | Working | High |
 | Keystone password auth → JWT token | Working | High |
+| Keystone OIDC federation (SCS-0300-v1) | Working | Medium |
+| CADF-shaped audit logging across all auth-bearing services | Working | High |
+| SCS-0100-v3 flavor name validator | Working | High |
+| SCS-0102 image metadata enforcement | Working | High |
+| SCS-0103-v1 mandatory flavor seed data | Working | High |
+| SCS-0104 standard images validator | Working | High |
+| SCS-0114-v1 volume type seed data | Working | High |
 | Zero-config single binary (`./o3k`) | Working | High |
 | Docker Compose single-node deployment | Working | High |
 | Stub mode on macOS/Linux | Working | High |
 | Health endpoints (/healthz, /readyz) | Working | High |
-| Metrics endpoint (/metrics) | Working | High |
+| Real Prometheus `/metrics` (counters + histograms per service) | Working | High |
+| Grafana dashboard + alerting rules ([docs/grafana/](docs/grafana/)) | Working | High |
 | Rate limiting on token creation | Working | High |
-| RBAC policy middleware | Working | High |
+| RBAC policy middleware (basic role checks) | Working | Medium |
 | OpenTelemetry tracing | Working | Medium |
+| Native TLS (`--tls-cert-file` / `--tls-key-file`) | Working | High |
+| Backup / restore tooling (`scripts/o3k-backup.sh`) | Working | Medium |
+| cosign-signed releases + SPDX SBOMs | Working | High |
+| `govulncheck` blocking CI/release gates | Working | High |
 | Horizon login + basic resource lists | Working | Medium |
 | OpenStack CLI simple commands | Working | Medium |
 | Simple Terraform plans (create/delete) | Working | Medium |
@@ -147,10 +161,15 @@ rather than picking a single number.
 |-----------|--------|--------|
 | Full RBAC policy files (policy.json) | Partial | Admin-only operations rely on role check, not full policy evaluation |
 | OpenTelemetry OTLP collector | Partial | Stdout exporter works; OTLP endpoint is optional config |
-| Real libvirt mode (stable) | Partial | Works but limited production testing |
-| Real storage (Ceph) | Partial | Build tag cleanup in progress |
-| SPEC-002 auth (OAuth2, SAML, LDAP) | Not started | Only password auth works |
+| Real libvirt mode (stable) | Partial | Works but limited production testing; not in CI |
+| Real storage (Ceph) | Partial | Build-tag gated; live cluster not in CI |
+| LDAP / SAML federation | Not started | Only OIDC is implemented |
+| Barbican-backed volume encryption | Not started | POC only |
+| SLSA Level 3 provenance | Not started | Releases are identity-anchored, not L3 |
 | Modular architecture (SPEC-001) | Not started | Still monolithic |
+| Multi-node coordination | Partial | Compute-node registry exists; no leader election, no fencing |
+| Live migration / evacuation | Not started | — |
+| Quotas / billing / chargeback | Not started | No usage metering |
 | Remaining ~25% API response fields | In progress | Some Terraform data sources may fail |
 
 ### API Surface
@@ -250,16 +269,22 @@ docs/                 Documentation
 
 | Topic | Guide |
 |-------|-------|
-| Getting started | [Deployment Guide](docs/DEPLOYMENT.md) |
-| Architecture | [Architecture](docs/ARCHITECTURE.md) |
-| Configuration | [Configuration](docs/CONFIGURATION.md) |
-| Operations | [Operations](docs/OPERATIONS.md) |
-| Networking | [Networking Modes](docs/NETWORKING_MODES.md) |
-| Storage | [Storage Modes](docs/STORAGE_MODES.md) |
-| Scaling | [Production Scaling](docs/SCALING.md) |
-| API | [API Reference](docs/API.md) |
-| Contributing | [Contributing](docs/CONTRIBUTING.md) |
-| Troubleshooting | [Troubleshooting](docs/TROUBLESHOOTING.md) |
+| Documentation index | [docs/INDEX.md](docs/INDEX.md) |
+| Production readiness | [docs/production-readiness.md](docs/production-readiness.md) |
+| Release verification (cosign + SBOM) | [docs/release-verification.md](docs/release-verification.md) |
+| Backup / restore / upgrade | [docs/backup-restore-upgrade.md](docs/backup-restore-upgrade.md) |
+| TLS configuration | [docs/tls-configuration.md](docs/tls-configuration.md) |
+| Grafana dashboards + alerts | [docs/grafana/README.md](docs/grafana/README.md) |
+| SCS standards alignment | [docs/scs-alignment.md](docs/scs-alignment.md) |
+| Getting started | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Configuration | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
+| Operations | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
+| Networking | [docs/NETWORKING_MODES.md](docs/NETWORKING_MODES.md) |
+| Storage | [docs/STORAGE_MODES.md](docs/STORAGE_MODES.md) |
+| API | [docs/API.md](docs/API.md) |
+| Contributing | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
 ## Default Credentials
 
@@ -283,15 +308,31 @@ In any deployment beyond local development you must:
 ## Roadmap
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full gap-closure plan.
+For the operator-facing pre-flight checklist, see
+[docs/production-readiness.md](docs/production-readiness.md).
 
-**Priority order:**
-1. Security fixes (RBAC, auth bypasses, timeouts)
-2. Response schema completeness (make clients stop crashing)
-3. Query filter implementation (make list endpoints usable)
-4. State machine validation (prevent data corruption)
-5. Missing critical endpoints (server actions, volume types, image import)
-6. Enhanced authentication (SPEC-002)
-7. Modular architecture (SPEC-001)
+**Done in 2026 (Phase 1–4):**
+
+1. ✅ Phase 1 — Trust cleanup (default credentials, TLS, RBAC wiring,
+   blocking CI, govulncheck, SECURITY.md, honest README)
+2. ✅ Phase 2 — Real infrastructure proof (CI smoke tests for
+   libvirt/eBPF/VXLAN, integration tests behind build tags)
+3. ✅ Phase 3 — SCS alignment (mandatory flavors, image metadata, volume
+   types, OIDC federation, CADF audit logging, standard images, flavor
+   name validator)
+4. ✅ Phase 4 — Pilot readiness (backup/restore, cosign-signed releases
+   + SBOMs, Grafana dashboards + alerts, hardened defaults,
+   production-readiness guide, community templates)
+
+**Next:**
+
+1. LDAP / SAML federation (SCS-0300 follow-up)
+2. Real-mode hypervisor / Ceph hardening (CI coverage, soak tests)
+3. Full `policy.json` parity with mainline OpenStack
+4. Multi-node coordination (leader election, fencing)
+5. Quotas, chargeback, live migration
+6. Modular architecture (SPEC-001)
+7. SLSA Level 3 provenance + reproducible builds
 
 ## License
 

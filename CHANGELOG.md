@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Phase 3 — SCS Alignment
+
+#### Added
+- **SCS-0103-v1**: 15 mandatory flavor seeds (`SCS-1V-4-20`, `SCS-2V-8-50`, etc.)
+  with correct vCPU/RAM/disk and `scs:cpu-type`, `scs:disk0-type` extra-specs
+  (migration `075_scs_standard_flavors.up.sql`)
+- **SCS-0114-v1**: 3 reference volume types (`scs-default`, `scs-encrypted`,
+  `scs-replicated`) with `scs:*` extra-specs (migration `076_scs_volume_types.up.sql`)
+- **SCS-0300-v1 OIDC federation**: provider abstraction + OIDC adapter using
+  `coreos/go-oidc/v3`, JIT user provisioning with deterministic UUIDs,
+  claim-to-role mapping table (`internal/keystone/federation*.go`)
+- **CADF audit logging**: DMTF DSP0262-compliant structured JSON audit events
+  across all 6 auth-bearing services (`internal/middleware/audit.go`)
+- **SCS-0102 image metadata**: enforce `os_distro`, `os_version`, `architecture`,
+  `hw_*`, `image_*` properties on Glance create
+- **SCS-0100-v3 flavor name validator**: enforce SCS flavor name grammar in Nova
+  flavor create
+- **SCS-0104 standard images validator**: enforce reference image catalog with
+  Glance create gate
+- `docs/scs-alignment.md`: standards mapping with implemented vs planned matrix
+
+### Phase 4 — Pilot Readiness
+
+#### Added
+- **Backup / restore tooling**: `scripts/o3k-backup.sh` (SQLite via `VACUUM INTO`,
+  PostgreSQL via `pg_dump --format=custom`) and `scripts/o3k-restore.sh` with
+  process-running guard (detects `o3k` process and `lightstack.service` systemd unit)
+- `docs/backup-restore-upgrade.md`: backup procedures, scheduling, upgrade contract,
+  disaster-recovery checklist
+- **Supply chain**: cosign keyless signatures on every release (binaries +
+  `checksums.txt` + SPDX SBOM), container signing at digest, SBOM attestation
+  via `cosign attest --type spdxjson`. SBOM scans the binary, not source tree
+- **`govulncheck` release gate**: blocks release workflow on any vulnerability
+  finding before binaries are built
+- Go toolchain bumped to 1.26.4 (clears GO-2026-5039 `net/textproto` HIGH and
+  GO-2026-5037 `crypto/x509` HIGH)
+- `docs/release-verification.md`: operator recipe for `cosign verify-blob`,
+  `cosign verify`, `cosign verify-attestation`, Kyverno admission policy
+- **Real Prometheus `/metrics`**: replaced hand-rolled metrics with
+  `prometheus/client_golang` — `o3k_http_requests_total` CounterVec and
+  `o3k_http_request_duration_seconds` HistogramVec with per-service labels;
+  custom registry to avoid `DefaultRegisterer` pollution; histogram buckets
+  extended to 30s for OpenStack real-mode latency
+- `docs/grafana/o3k-overview.json`: 28-panel Grafana dashboard (request rate,
+  error rate %, P99 latency per service)
+- `docs/grafana/o3k-alerts.yaml`: 4 Prometheus alerting rules
+  (`O3KHighErrorRate`, `O3KServiceDown`, `O3KHighLatencyP99`,
+  `O3KHighLatencyP99Critical`)
+- `docs/grafana/README.md`: scrape config + dashboard import + alert deployment
+- **Hardened defaults**: bind to `127.0.0.1` by default, refuse default JWT secret
+  unless `O3K_ENV=development|test`, refuse stub modes when `O3K_ENV=production`
+- `docs/production-readiness.md`: 7-section operator pre-flight checklist
+  with capability grading rubric and accept-this-risk acknowledgement
+- Community templates: `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml`
+  and `PULL_REQUEST_TEMPLATE.md`; security reports routed to GitHub Security Advisories
+
+#### Changed
+- `production-readiness.md` observability section now references shipped Grafana
+  artifacts; "what we have not built yet" no longer self-contradicts shipped work
+
+---
+
 ## [0.8.0] - 2026-05-01
 
 ### 🚀 Server/Agent Execution Loop

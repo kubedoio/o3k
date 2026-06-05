@@ -26,7 +26,7 @@ Behaviour parity is incremental and tracked per spec below.
 | [SCS-0100-v3](https://docs.scs.community/standards/scs-0100-v3-flavor-naming) — Flavor Naming | Compute | ✅ parser/validator shipped (`pkg/scs`); SCS-* names validated at create time, mirrored into `scs:*` extra-specs |
 | [SCS-0103-v1](https://docs.scs.community/standards/scs-0103-v1-standard-flavors) — Mandatory & Recommended Flavors | Compute | ✅ 15 mandatory flavors seeded (migration 075) |
 | [SCS-0102](https://docs.scs.community/standards/scs-0102-v1-image-metadata) — Image Metadata | Glance | ✅ properties accepted, validated, and round-tripped |
-| [SCS-0104](https://docs.scs.community/standards/scs-0104-v1-standard-images) — Standard Images | Glance | ⬜ Phase 3 follow-up |
+| [SCS-0104](https://docs.scs.community/standards/scs-0104-v1-standard-images) — Standard Images | Glance | ✅ standard image catalog + create-time gate (`pkg/scs/images.go`, `pkg/scs/scs_0104_images.yaml`) |
 | SCS-0110 — Volume Types | Cinder | ✅ 3 reference volume types seeded (migration 076) — covered by [SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/) |
 | [SCS-0114-v1](https://docs.scs.community/standards/scs-0114-v1-volume-type-standard/) — Volume Type Standard | Cinder | ✅ description tags + queryable `scs:*` extra-specs (migration 076) |
 | [SCS-0300-v1](https://docs.scs.community/standards/scs-0300-v1-requirements-for-sso-identity-federation) — SSO Identity Federation | Keystone | 🟡 OIDC verification + JIT provisioning shipped (`internal/keystone/federation*.go`); LDAP/OAuth2-direct deferred |
