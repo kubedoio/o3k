@@ -188,3 +188,9 @@
 /Users/I761222/git/o3k/TEST_EXECUTION_REPORT.md
 /Users/I761222/git/o3k/TESTING_SUMMARY.md
 /Users/I761222/git/o3k/docs/INDEX.md
+/Users/I761222/projects/claude/o3kio/README.md
+/Users/I761222/projects/claude/o3kio/STATUS.md
+/Users/I761222/projects/claude/o3kio/CHANGELOG.md
+/Users/I761222/projects/claude/o3kio/comprehensive-review-report.md
+/Users/I761222/projects/claude/o3kio/docs/INDEX.md
+/Users/I761222/projects/claude/o3kio/task_plan.md
