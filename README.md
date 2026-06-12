@@ -1,13 +1,49 @@
-# O3K — Lightweight OpenStack in a Single Binary
+# O3K
 
-O3K is a single Go binary that exposes the OpenStack control-plane HTTP
-APIs (Keystone, Nova, Neutron, Cinder, Glance, Placement, Metadata).
-The goal is K3s-style packaging for OpenStack: one process, no message
-queue, no separate scheduler / conductor daemons, SQLite by default.
+> Lightweight OpenStack control plane for Kubernetes-based private cloud evaluation.
 
-```
-Single binary → 7 services → 342 endpoint routes → SQLite default (PostgreSQL optional)
-```
+O3K is a technical-preview project for evaluating lightweight OpenStack-compatible services on Kubernetes. It is designed for teams exploring private cloud patterns, infrastructure control planes, and operator-friendly alternatives to large traditional OpenStack deployments.
+
+O3K is part of the broader **Kubedo.io infrastructure product family**, alongside CHV, RustShare, RustChat, and future private cloud evaluation tools.
+
+| Field   | Value                                  |
+| ------- | -------------------------------------- |
+| Status  | Technical Preview / Active Development |
+| License | Apache-2.0 core |
+| Website | [kubedo.io/o3k](https://kubedo.io/o3k) |
+
+## What this is
+
+O3K is an infrastructure evaluation platform for teams that want to explore OpenStack-style control-plane concepts in a Kubernetes-based environment.
+
+It focuses on:
+
+* lightweight OpenStack-compatible service evaluation
+* Kubernetes-based deployment patterns
+* private cloud control-plane experiments
+* API-driven infrastructure management
+* reproducible technical evaluation
+* operator-friendly infrastructure workflows
+* reduced operational complexity compared to large monolithic cloud stacks
+
+## What this is not
+
+O3K is not presented as a full OpenStack replacement.
+
+It is not a mature production private cloud platform yet. It is a technical-preview project for teams that want to evaluate lightweight private cloud patterns before adopting, extending, or operating them in serious environments.
+
+## Current direction
+
+The current work explores how far a smaller, Kubernetes-native OpenStack-style control plane can be taken while keeping the system understandable, reproducible, and easier to evaluate.
+
+The project is especially relevant for:
+
+* infrastructure teams evaluating private cloud options
+* teams looking for a lighter operational model
+* Kubernetes-first environments
+* technical evaluation and lab environments
+* operators interested in OpenStack-compatible service models without adopting a full traditional OpenStack footprint
+
 
 > **Status: Alpha. Not production-ready.** Basic CRUD works for all
 > services and the binary boots zero-config. API fidelity against real
