@@ -10,7 +10,7 @@ O3K is part of the broader **Kubedo.io infrastructure product family**, alongsid
 | ------- | -------------------------------------- |
 | Status  | Technical Preview / Active Development |
 | License | Apache-2.0 core |
-| Website | [kubedo.io/o3k](https://kubedo.io/o3k) |
+| Website | https://o3k.io |
 
 ## What this is
 
