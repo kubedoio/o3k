@@ -4,9 +4,9 @@ PRAGMA foreign_keys = ON;
 -- Part of Phase 1 Week 1-2: Keystone user CRUD implementation
 -- Per Constitution: Backward compatible (ADD COLUMN only, no DROP)
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS description TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS domain_id TEXT DEFAULT 'default';
+ALTER TABLE users ADD COLUMN email TEXT;
+ALTER TABLE users ADD COLUMN description TEXT;
+-- domain_id was already added to users by migration 008.
 
 -- Create groups table for user group management
 CREATE TABLE IF NOT EXISTS groups (

@@ -18,7 +18,7 @@ type DHCPManager struct {
 	configPath  string
 	pidPath     string
 	mu          sync.Mutex
-	runningPIDs map[string]int // networkID -> PID
+	runningPIDs map[string]int  // networkID -> PID
 	stubDHCP    map[string]bool // For stub mode
 }
 

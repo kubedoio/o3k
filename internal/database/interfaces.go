@@ -1,43 +1,40 @@
 package database
 
 import (
-	"context"
+	"database/sql"
 	"errors"
 )
 
-// ErrNoRows is returned when a query expects one row but gets none.
-// Services should use errors.Is(err, database.ErrNoRows) instead of pgx.ErrNoRows.
-var ErrNoRows = errors.New("no rows in result set")
+// ErrNoRows is an alias for sql.ErrNoRows so existing callers can keep using
+// errors.Is(err, sql.ErrNoRows). Deprecated: use sql.ErrNoRows directly.
+var ErrNoRows = sql.ErrNoRows
 
-// Result represents the result of an Exec operation.
-type Result interface {
-	RowsAffected() int64
+// Q rewrites a PostgreSQL-style query for the active backend. For SQLite it
+// converts placeholders, dialect constructs, and type casts; for PostgreSQL it
+// returns the query unchanged. Use it for every query executed against DB or a
+// *sql.Tx when the backend is selected at runtime.
+func Q(query string) string {
+	if BackendType() == "sqlite" {
+		return Rewrite(query)
+	}
+	return query
 }
 
-// Row represents a single database row.
-type Row interface {
-	Scan(dest ...any) error
+// Rewrite applies the SQLite dialect rewrite unconditionally. Most callers
+// should use Q instead.
+func Rewrite(query string) string {
+	return rewrite(query)
 }
 
-// Rows represents multiple database rows from a query.
-type Rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Close()
-	Err() error
-}
-
-// Tx represents a database transaction.
-type Tx interface {
-	Exec(ctx context.Context, sql string, args ...any) (Result, error)
-	QueryRow(ctx context.Context, sql string, args ...any) Row
-	Query(ctx context.Context, sql string, args ...any) (Rows, error)
-	Commit(ctx context.Context) error
-	Rollback(ctx context.Context) error
-}
-
-// TxOptions configures transaction behavior.
-type TxOptions struct {
-	IsoLevel string // "serializable", "repeatable_read", "read_committed", "read_uncommitted"
-	ReadOnly bool
+// mapSQLError translates database/sql sentinel errors to database package
+// errors. It is kept for compatibility with callers that relied on the previous
+// adapter behaviour.
+func mapSQLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoRows
+	}
+	return err
 }

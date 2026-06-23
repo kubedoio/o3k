@@ -208,9 +208,9 @@ func setupPortForwardingPrerequisites(t *testing.T, client *gophercloud.ServiceC
 	// Create external network
 	extNetOpts := map[string]interface{}{
 		"network": map[string]interface{}{
-			"name":           "test-ext-net",
+			"name":            "test-ext-net",
 			"router:external": true,
-			"admin_state_up": true,
+			"admin_state_up":  true,
 		},
 	}
 

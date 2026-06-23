@@ -2,134 +2,133 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "modernc.org/sqlite" // pure-Go SQLite driver, no CGO required
 )
 
-var DB DBIF
+// DB is the active database connection. It is set by Connect or ConnectSQLite.
+var DB *sql.DB
 
-var pool *pgxpool.Pool
+// backend tracks which driver is in use.
+var backend string
 
-// PoolConfig contains database connection pool configuration
+// PoolConfig contains database connection pool configuration.
 type PoolConfig struct {
-	MaxConns          int32         // Maximum number of connections in the pool
-	MinConns          int32         // Minimum number of idle connections
-	MaxConnLifetime   time.Duration // Maximum lifetime of a connection
-	MaxConnIdleTime   time.Duration // Maximum idle time before closing connection
-	HealthCheckPeriod time.Duration // How often to check connection health
+	MaxConns          int32
+	MinConns          int32
+	MaxConnLifetime   time.Duration
+	MaxConnIdleTime   time.Duration
+	HealthCheckPeriod time.Duration
 }
 
-// DefaultPoolConfig returns sensible defaults for connection pooling
+// DefaultPoolConfig returns sensible defaults for connection pooling.
 func DefaultPoolConfig() *PoolConfig {
 	return &PoolConfig{
-		MaxConns:          20,               // Default from config
-		MinConns:          2,                // Keep 2 connections warm
-		MaxConnLifetime:   1 * time.Hour,    // Recycle connections hourly
-		MaxConnIdleTime:   15 * time.Minute, // Close idle connections after 15 min
-		HealthCheckPeriod: 1 * time.Minute,  // Check health every minute
-	}
-}
-
-// Connect establishes database connection pool with optimized settings
-func Connect(ctx context.Context, connString string, poolConfig *PoolConfig) error {
-	config, err := pgxpool.ParseConfig(connString)
-	if err != nil {
-		return fmt.Errorf("failed to parse database URL: %w", err)
-	}
-
-	// Apply pool configuration
-	if poolConfig == nil {
-		poolConfig = DefaultPoolConfig()
-	}
-
-	config.MaxConns = poolConfig.MaxConns
-	config.MinConns = poolConfig.MinConns
-	config.MaxConnLifetime = poolConfig.MaxConnLifetime
-	config.MaxConnIdleTime = poolConfig.MaxConnIdleTime
-	config.HealthCheckPeriod = poolConfig.HealthCheckPeriod
-
-	p, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		return fmt.Errorf("failed to create connection pool: %w", err)
-	}
-
-	// Test connection
-	if err := p.Ping(ctx); err != nil {
-		p.Close()
-		return fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	DB = NewPgxAdapter(p)
-	pool = p
-	return nil
-}
-
-// ConnectSimple establishes database connection pool with simple configuration (backwards compatible)
-func ConnectSimple(ctx context.Context, connString string, maxConns int) error {
-	return Connect(ctx, connString, &PoolConfig{
-		MaxConns:          int32(maxConns),
+		MaxConns:          20,
 		MinConns:          2,
 		MaxConnLifetime:   1 * time.Hour,
 		MaxConnIdleTime:   15 * time.Minute,
 		HealthCheckPeriod: 1 * time.Minute,
-	})
+	}
+}
+
+// Connect establishes a PostgreSQL database connection using the pgx stdlib driver.
+func Connect(ctx context.Context, connString string, poolConfig *PoolConfig) error {
+	db, err := sql.Open("pgx", connString)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+
+	if poolConfig == nil {
+		poolConfig = DefaultPoolConfig()
+	}
+
+	db.SetMaxOpenConns(int(poolConfig.MaxConns))
+	if poolConfig.MinConns > 0 {
+		db.SetMaxIdleConns(int(poolConfig.MinConns))
+	}
+	db.SetConnMaxLifetime(poolConfig.MaxConnLifetime)
+	db.SetConnMaxIdleTime(poolConfig.MaxConnIdleTime)
+	// HealthCheckPeriod has no direct *sql.DB equivalent; pgx/stdlib handles
+	// health checks internally via the connection pool.
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	DB = db
+	backend = "postgres"
+	return nil
 }
 
 // ConnectSQLite opens a SQLite database at dbPath and sets DB.
 func ConnectSQLite(ctx context.Context, dbPath string) error {
-	adapter, err := NewSQLiteAdapter(dbPath)
+	dsn := dbPath + "?_journal=WAL&_busy_timeout=30000&_txlock=immediate"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("connect sqlite: %w", err)
 	}
-	DB = adapter
-	return nil
-}
-
-// unwrapDB peels off adapter wrappers (e.g. TracingAdapter) to reach the concrete adapter.
-func unwrapDB(d DBIF) DBIF {
-	type unwrapper interface{ Unwrap() DBIF }
-	for {
-		u, ok := d.(unwrapper)
-		if !ok {
-			return d
-		}
-		d = u.Unwrap()
+	// SQLite supports only one concurrent writer.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return fmt.Errorf("ping sqlite database: %w", err)
 	}
+
+	DB = db
+	backend = "sqlite"
+	return nil
 }
 
 // BackendType returns "sqlite" or "postgres" based on the active DB connection.
 func BackendType() string {
-	if _, ok := unwrapDB(DB).(*SQLiteAdapter); ok {
-		return "sqlite"
-	}
-	return "postgres"
+	return backend
 }
 
-// Close closes the database connection pool (postgres) or SQLite file.
+// Close closes the database connection pool.
 func Close() {
-	if pool != nil {
-		pool.Close()
-	}
-	if a, ok := unwrapDB(DB).(*SQLiteAdapter); ok {
-		a.Close()
+	if DB != nil {
+		DB.Close()
 	}
 }
 
-func Stats() *pgxpool.Stat {
-	if pool == nil {
-		return nil
+// Stats returns the current database pool statistics.
+func Stats() sql.DBStats {
+	if DB == nil {
+		return sql.DBStats{}
 	}
-	return pool.Stat()
+	return DB.Stats()
 }
 
+// HealthCheck pings the database and returns an error if it is unreachable.
 func HealthCheck(ctx context.Context) error {
-	if a, ok := unwrapDB(DB).(*SQLiteAdapter); ok {
-		return a.Ping(ctx)
-	}
-	if pool == nil {
+	if DB == nil {
 		return fmt.Errorf("database connection not initialized")
 	}
-	return pool.Ping(ctx)
+	return DB.PingContext(ctx)
+}
+
+// WithTx executes fn within a database transaction.
+// If fn returns an error, the transaction is rolled back. Otherwise it is committed.
+func WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := DB.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("rollback failed: %v (original: %w)", rbErr, err)
+		}
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }

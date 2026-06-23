@@ -11,10 +11,10 @@ CREATE TABLE IF NOT EXISTS domains (
 );
 
 -- Add domain_id to users table
-ALTER TABLE users ADD COLUMN IF NOT EXISTS domain_id TEXT REFERENCES domains(id) ON DELETE CASCADE;
+ALTER TABLE users ADD COLUMN domain_id TEXT REFERENCES domains(id) ON DELETE CASCADE;
 
 -- Add domain_id to projects table
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS domain_id TEXT REFERENCES domains(id) ON DELETE CASCADE;
+ALTER TABLE projects ADD COLUMN domain_id TEXT REFERENCES domains(id) ON DELETE CASCADE;
 
 -- Create indexes for domain lookups
 CREATE INDEX IF NOT EXISTS idx_users_domain_id ON users(domain_id);

@@ -204,16 +204,16 @@ func TestParseFlavorName_Malformed(t *testing.T) {
 		{"", "empty"},
 		{"foo", "prefix"},
 		{"SCS-", "vCPU"},
-		{"SCS-V-4", "vCPU"},          // missing CPU count
-		{"SCS-1X-4", "CPU type"},     // unknown CPU type letter
-		{"SCS-1V", "RAM"},            // missing RAM
-		{"SCS-1V-", "RAM"},           // empty RAM
-		{"SCS-1V-foo", "RAM"},        // non-numeric RAM
-		{"SCS-1V-4-", "disk"},        // empty disk segment
-		{"SCS-1V-4-foo", "disk"},     // non-numeric disk
-		{"SCS-1V-4-10x", "disk"},     // unknown disk type letter
-		{"SCS-0V-4", "vCPU"},         // zero vCPUs
-		{"SCS-1V-0", "RAM"},          // zero RAM
+		{"SCS-V-4", "vCPU"},      // missing CPU count
+		{"SCS-1X-4", "CPU type"}, // unknown CPU type letter
+		{"SCS-1V", "RAM"},        // missing RAM
+		{"SCS-1V-", "RAM"},       // empty RAM
+		{"SCS-1V-foo", "RAM"},    // non-numeric RAM
+		{"SCS-1V-4-", "disk"},    // empty disk segment
+		{"SCS-1V-4-foo", "disk"}, // non-numeric disk
+		{"SCS-1V-4-10x", "disk"}, // unknown disk type letter
+		{"SCS-0V-4", "vCPU"},     // zero vCPUs
+		{"SCS-1V-0", "RAM"},      // zero RAM
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

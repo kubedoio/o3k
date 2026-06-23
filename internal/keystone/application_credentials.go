@@ -7,6 +7,8 @@ import (
 	"errors"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
@@ -36,7 +38,7 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		}
 	}
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, created_at, access_rules
 		FROM application_credentials
 		WHERE user_id = $1
@@ -88,7 +90,7 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		}
 
 		// Get roles
-		roleRows, err := svc.activeDB().Query(c.Request.Context(), `
+		roleRows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 			SELECT r.id, r.name
 			FROM application_credential_roles acr
 			JOIN roles r ON acr.role_id = r.id
@@ -226,8 +228,8 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 				common.SendError(c, common.NewBadRequestError("role must have id or name"))
 				return
 			}
-			err := svc.activeDB().QueryRow(ctx,
-				`SELECT id FROM roles WHERE name = $1`, roleName,
+			err := svc.activeDB().QueryRowContext(ctx,
+				database.Q(`SELECT id FROM roles WHERE name = $1`), roleName,
 			).Scan(&roleID)
 			if err != nil {
 				common.SendError(c, common.NewNotFoundError("role"))
@@ -236,8 +238,8 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		}
 
 		var exists bool
-		err := svc.activeDB().QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM role_assignments WHERE user_id=$1 AND project_id=$2 AND role_id=$3)`,
+		err := svc.activeDB().QueryRowContext(ctx,
+			database.Q(`SELECT EXISTS(SELECT 1 FROM role_assignments WHERE user_id=$1 AND project_id=$2 AND role_id=$3)`),
 			callerID, callerProjectID, roleID,
 		).Scan(&exists)
 		if err != nil || !exists {
@@ -246,10 +248,10 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		}
 	}
 
-	_, err = svc.activeDB().Exec(ctx, `
+	_, err = svc.activeDB().ExecContext(ctx, database.Q(`
 		INSERT INTO application_credentials (id, user_id, project_id, name, secret_hash, description, expires_at, unrestricted, legacy_auth, updated_at, access_rules, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9, $10)
-	`, credID, userID, projectID, req.ApplicationCredential.Name, string(secretHash), req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, accessRulesJSON, now)
+	`), credID, userID, projectID, req.ApplicationCredential.Name, string(secretHash), req.ApplicationCredential.Description, expiresAt, req.ApplicationCredential.Unrestricted, accessRulesJSON, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_application_credential").Str("user_id", userID).Msg("Failed to create application credential")
@@ -263,10 +265,10 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 		if !ok || roleID == "" {
 			continue
 		}
-		_, _ = svc.activeDB().Exec(ctx, `
+		_, _ = svc.activeDB().ExecContext(ctx, database.Q(`
 			INSERT INTO application_credential_roles (application_credential_id, role_id)
 			VALUES ($1, $2)
-		`, credID, roleID)
+		`), credID, roleID)
 	}
 
 	credential := map[string]interface{}{
@@ -330,13 +332,13 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	var unrestricted bool
 	var accessRulesJSON []byte
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, access_rules
 		FROM application_credentials
 		WHERE id = $1 AND user_id = $2
 	`, credID, userID).Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted, &accessRulesJSON)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
@@ -372,7 +374,7 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	}
 
 	// Get roles
-	roleRows, err := svc.activeDB().Query(c.Request.Context(), `
+	roleRows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT r.id, r.name
 		FROM application_credential_roles acr
 		JOIN roles r ON acr.role_id = r.id
@@ -421,7 +423,7 @@ func (svc *Service) DeleteApplicationCredential(c *gin.Context) {
 		}
 	}
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM application_credentials WHERE id = $1 AND user_id = $2",
 		credID, userID)
 
@@ -431,7 +433,7 @@ func (svc *Service) DeleteApplicationCredential(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
@@ -451,13 +453,13 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	var unrestricted bool
 	var accessRulesJSON []byte
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, access_rules
 		FROM application_credentials
 		WHERE id = $1
 	`, credID).Scan(&id, &userID, &projectID, &name, &description, &expiresAt, &unrestricted, &accessRulesJSON)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("application credential"))
 		return
 	}
@@ -499,7 +501,7 @@ func (svc *Service) GetApplicationCredentialByID(c *gin.Context) {
 	}
 
 	// Get roles
-	roleRows, err := svc.activeDB().Query(c.Request.Context(), `
+	roleRows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT r.id, r.name
 		FROM application_credential_roles acr
 		JOIN roles r ON acr.role_id = r.id

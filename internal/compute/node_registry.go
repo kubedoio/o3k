@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/google/uuid"
 )
@@ -22,11 +24,11 @@ type NodeRegistry struct {
 	heartbeatInterval time.Duration
 	stopChan          chan struct{}
 	stopOnce          sync.Once
-	db                database.DBIF
+	db                *sql.DB
 }
 
 // activeDB returns the injected DB or falls back to the global.
-func (nr *NodeRegistry) activeDB() database.DBIF {
+func (nr *NodeRegistry) activeDB() *sql.DB {
 	if nr.db != nil {
 		return nr.db
 	}
@@ -73,7 +75,7 @@ func (nr *NodeRegistry) RegisterNode(ctx context.Context) error {
 	now := time.Now()
 
 	// Upsert node registration
-	_, err := nr.activeDB().Exec(ctx, `
+	_, err := nr.activeDB().ExecContext(ctx, database.Q(`
 		INSERT INTO compute_nodes (id, hostname, tunnel_ip, status, last_heartbeat, created_at, updated_at)
 		VALUES ($1, $2, $3, 'active', $4, $5, $6)
 		ON CONFLICT (hostname)
@@ -82,7 +84,7 @@ func (nr *NodeRegistry) RegisterNode(ctx context.Context) error {
 			status = 'active',
 			last_heartbeat = EXCLUDED.last_heartbeat,
 			updated_at = EXCLUDED.updated_at
-	`, nr.nodeID, nr.hostname, nr.tunnelIP, now, now, now)
+	`), nr.nodeID, nr.hostname, nr.tunnelIP, now, now, now)
 
 	if err != nil {
 		return fmt.Errorf("failed to register node: %w", err)
@@ -113,11 +115,11 @@ func (nr *NodeRegistry) StartHeartbeat(ctx context.Context) {
 
 // sendHeartbeat updates the last_heartbeat timestamp
 func (nr *NodeRegistry) sendHeartbeat(ctx context.Context) error {
-	_, err := nr.activeDB().Exec(ctx, `
+	_, err := nr.activeDB().ExecContext(ctx, database.Q(`
 		UPDATE compute_nodes
 		SET last_heartbeat = $1, updated_at = $1
 		WHERE hostname = $2
-	`, time.Now(), nr.hostname)
+	`), time.Now(), nr.hostname)
 
 	return err
 }
@@ -133,12 +135,12 @@ func (nr *NodeRegistry) StopHeartbeat() {
 func (nr *NodeRegistry) ListActiveNodes(ctx context.Context) ([]ComputeNode, error) {
 	threshold := time.Now().Add(-2 * nr.heartbeatInterval)
 
-	rows, err := nr.activeDB().Query(ctx, `
+	rows, err := nr.activeDB().QueryContext(ctx, database.Q(`
 		SELECT id, hostname, tunnel_ip, status, last_heartbeat, created_at
 		FROM compute_nodes
 		WHERE last_heartbeat > $1 AND status = 'active'
 		ORDER BY hostname
-	`, threshold)
+	`), threshold)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to list active nodes: %w", err)
@@ -225,7 +227,7 @@ func NewNodeRegistryWithIDPath(nodeID, tunnelIP string, heartbeatInterval time.D
 // machine, which the production constructor (which calls os.Hostname) cannot
 // support. Production code paths must not use this — the lack of UUID
 // persistence and tunnel-IP autodetection is intentional.
-func NewNodeRegistryForTest(nodeID, hostname, tunnelIP string, heartbeatInterval time.Duration, db database.DBIF) *NodeRegistry {
+func NewNodeRegistryForTest(nodeID, hostname, tunnelIP string, heartbeatInterval time.Duration, db *sql.DB) *NodeRegistry {
 	if heartbeatInterval == 0 {
 		heartbeatInterval = 30 * time.Second
 	}

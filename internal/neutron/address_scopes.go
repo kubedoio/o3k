@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -16,7 +17,7 @@ import (
 func (svc *Service) ListAddressScopes(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, project_id, name, ip_version, shared, created_at, updated_at
 		FROM address_scopes
 		WHERE project_id = $1
@@ -94,7 +95,7 @@ func (svc *Service) CreateAddressScope(c *gin.Context) {
 	scopeID := uuid.New().String()
 	now := time.Now()
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO address_scopes (id, project_id, name, ip_version, shared, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, scopeID, projectID, req.AddressScope.Name, req.AddressScope.IPVersion, shared, now, now)
@@ -133,13 +134,13 @@ func (svc *Service) GetAddressScope(c *gin.Context) {
 		updatedAt time.Time
 	)
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT project_id, name, ip_version, shared, created_at, updated_at
 		FROM address_scopes
 		WHERE id = $1 AND project_id = $2
 	`, scopeID, projectID).Scan(&projID, &name, &ipVersion, &shared, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("address scope"))
 		return
 	}
@@ -182,7 +183,7 @@ func (svc *Service) UpdateAddressScope(c *gin.Context) {
 
 	// Check if scope exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM address_scopes WHERE id = $1 AND project_id = $2)",
 		scopeID, projectID,
 	).Scan(&exists)
@@ -193,7 +194,7 @@ func (svc *Service) UpdateAddressScope(c *gin.Context) {
 	}
 
 	// Update scope
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		UPDATE address_scopes
 		SET name = COALESCE($1, name),
 		    shared = COALESCE($2, shared),
@@ -217,7 +218,7 @@ func (svc *Service) UpdateAddressScope(c *gin.Context) {
 		updatedAt time.Time
 	)
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT project_id, name, ip_version, shared, created_at, updated_at
 		FROM address_scopes
 		WHERE id = $1 AND project_id = $2
@@ -248,7 +249,7 @@ func (svc *Service) DeleteAddressScope(c *gin.Context) {
 	scopeID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM address_scopes WHERE id = $1 AND project_id = $2",
 		scopeID, projectID,
 	)
@@ -259,7 +260,7 @@ func (svc *Service) DeleteAddressScope(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("address scope"))
 		return
 	}

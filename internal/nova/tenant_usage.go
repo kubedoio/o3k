@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
@@ -38,7 +40,7 @@ func (svc *Service) buildServerUsages(ctx context.Context, projectID, startParam
 		}
 	}
 
-	rows, err := svc.activeDB().Query(ctx, query, args...)
+	rows, err := svc.activeDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return []gin.H{}
 	}
@@ -97,13 +99,13 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 	stopParam := c.Query("end")
 
 	var (
-		rows database.Rows
+		rows *sql.Rows
 		err  error
 	)
 
 	if isAdminContext(c) {
-		rows, err = svc.activeDB().Query(ctx,
-			`SELECT
+		rows, err = svc.activeDB().QueryContext(ctx,
+			database.Q(`SELECT
 				i.project_id,
 				COUNT(*) as total_instances,
 				COALESCE(SUM(EXTRACT(EPOCH FROM (NOW() - i.created_at)) / 3600), 0) as total_hours,
@@ -112,12 +114,12 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 				COALESCE(SUM(f.disk_gb), 0) as total_local_gb_usage
 			 FROM instances i
 			 LEFT JOIN flavors f ON i.flavor_id = f.id
-			 GROUP BY i.project_id`,
+			 GROUP BY i.project_id`),
 		)
 	} else {
 		projectID := c.GetString("project_id")
-		rows, err = svc.activeDB().Query(ctx,
-			`SELECT
+		rows, err = svc.activeDB().QueryContext(ctx,
+			database.Q(`SELECT
 				i.project_id,
 				COUNT(*) as total_instances,
 				COALESCE(SUM(EXTRACT(EPOCH FROM (NOW() - i.created_at)) / 3600), 0) as total_hours,
@@ -127,7 +129,7 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 			 FROM instances i
 			 LEFT JOIN flavors f ON i.flavor_id = f.id
 			 WHERE i.project_id = $1
-			 GROUP BY i.project_id`,
+			 GROUP BY i.project_id`),
 			projectID,
 		)
 	}
@@ -187,7 +189,7 @@ func (svc *Service) GetTenantUsage(c *gin.Context) {
 	var totalInstances int
 	var totalHours, totalVCPUs, totalMemoryMB, totalLocalGB float64
 
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		`SELECT
 			COUNT(*) as total_instances,
 			COALESCE(SUM(EXTRACT(EPOCH FROM (NOW() - i.created_at)) / 3600), 0) as total_hours,

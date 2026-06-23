@@ -67,8 +67,8 @@ func TestNovaFlavorAddTenantAccess_Contract(t *testing.T) {
 	accessBody, _ := io.ReadAll(accessResp.Body)
 	var accessResult struct {
 		FlavorAccess []struct {
-			FlavorID  string `json:"flavor_id"`
-			TenantID  string `json:"tenant_id"`
+			FlavorID string `json:"flavor_id"`
+			TenantID string `json:"tenant_id"`
 		} `json:"flavor_access"`
 	}
 	json.Unmarshal(accessBody, &accessResult)

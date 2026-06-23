@@ -14,7 +14,6 @@ keystone:
   jwt_secret: ""  # REQUIRED: set O3K_JWT_SECRET env var (min 32 chars) or use zero-config mode
   token_ttl: 24h
   admin_user: admin
-  # admin_password removed — use SeedDefaults auto-generation in zero-config mode
 
 compute:
   # Node identifier - auto-generates UUID if set to "auto"
@@ -34,20 +33,13 @@ nova:
 
 neutron:
   port: 9696
-  dhcp_lease_time: 24h
-  iptables_enabled: true
   networking_mode: stub  # "stub", "iptables", or "ebpf"
-
-  # Security group backend (eBPF requires networking_mode: "real" or "ebpf")
-  security_group_mode: stub  # "stub", "iptables", or "ebpf"
-  ebpf_object_path: "pkg/networking/ebpf/secgroup.o"  # Path to compiled eBPF object
 
   # VXLAN overlay networking for multi-node
   vxlan_enabled: false
   vni_range_start: 1000
   vni_range_end: 10000
   coordination_poll_interval: 1s
-  vxlan_mtu: 1450
 
 cinder:
   port: 8776
@@ -82,13 +74,6 @@ cache:
   redis_url: "redis://localhost:6379/0"
   key_prefix: "o3k:"
   default_ttl: 1h
-
-  # Per-resource TTL overrides (optional)
-  ttl:
-    flavors: 24h        # Flavors rarely change
-    images: 1h          # Images change occasionally
-    networks: 30m       # Networks change more frequently
-    service_catalog: 24h # Service catalog is static
 
 tunnel:
   port: 6385

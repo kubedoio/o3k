@@ -1,1 +1,1 @@
-ALTER TABLE instances ADD COLUMN IF NOT EXISTS fault_message TEXT;
+ALTER TABLE instances ADD COLUMN fault_message TEXT;

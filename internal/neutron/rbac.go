@@ -33,7 +33,7 @@ func (svc *Service) CreateRBACPolicy(c *gin.Context) {
 	policyID := uuid.New().String()
 	now := time.Now()
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO rbac_policies (id, project_id, object_type, object_id, target_tenant, action, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, policyID, projectID, req.RBACPolicy.ObjectType, req.RBACPolicy.ObjectID, req.RBACPolicy.TargetTenant, req.RBACPolicy.Action, now, now)
@@ -60,7 +60,7 @@ func (svc *Service) CreateRBACPolicy(c *gin.Context) {
 func (svc *Service) ListRBACPolicies(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, project_id, object_type, object_id, target_tenant, action
 		FROM rbac_policies
 		WHERE project_id = $1
@@ -106,7 +106,7 @@ func (svc *Service) GetRBACPolicy(c *gin.Context) {
 
 	var projID, objectType, objectID, targetTenant, action string
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT project_id, object_type, object_id, target_tenant, action
 		FROM rbac_policies
 		WHERE id = $1 AND project_id = $2
@@ -169,7 +169,7 @@ func (svc *Service) UpdateRBACPolicy(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE rbac_policies SET %s WHERE id = $%d AND project_id = $%d",
 		strings.Join(updates, ", "), argPos, argPos+1)
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_rbac_policy").Msg("failed to update RBAC policy")
@@ -186,7 +186,7 @@ func (svc *Service) DeleteRBACPolicy(c *gin.Context) {
 	policyID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM rbac_policies WHERE id = $1 AND project_id = $2",
 		policyID, projectID,
 	)
@@ -197,7 +197,7 @@ func (svc *Service) DeleteRBACPolicy(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("RBAC policy"))
 		return
 	}

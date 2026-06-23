@@ -13,6 +13,7 @@ import (
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -94,7 +95,7 @@ func (svc *Service) ListRouters(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
 		SELECT id, name, project_id, admin_state_up, status, external_gateway_info,
 		       distributed, ha, created_at, updated_at
 		FROM routers
@@ -126,23 +127,23 @@ func (svc *Service) ListRouters(c *gin.Context) {
 		}
 
 		routers = append(routers, gin.H{
-			"id":                    r.ID,
-			"name":                  r.Name,
-			"tenant_id":             r.ProjectID,
-			"project_id":            r.ProjectID,
-			"admin_state_up":        r.AdminStateUp,
-			"status":                r.Status,
-			"external_gateway_info": r.ExternalGatewayInfo,
-			"distributed":           r.Distributed,
-			"ha":                    r.HA,
-			"routes":                []interface{}{},
+			"id":                      r.ID,
+			"name":                    r.Name,
+			"tenant_id":               r.ProjectID,
+			"project_id":              r.ProjectID,
+			"admin_state_up":          r.AdminStateUp,
+			"status":                  r.Status,
+			"external_gateway_info":   r.ExternalGatewayInfo,
+			"distributed":             r.Distributed,
+			"ha":                      r.HA,
+			"routes":                  []interface{}{},
 			"availability_zone_hints": []string{},
 			"availability_zones":      []string{"nova"},
 			"description":             "",
 			"revision_number":         1,
 			"tags":                    []string{},
-			"created_at":            r.CreatedAt.Format(time.RFC3339),
-			"updated_at":            r.UpdatedAt.Format(time.RFC3339),
+			"created_at":              r.CreatedAt.Format(time.RFC3339),
+			"updated_at":              r.UpdatedAt.Format(time.RFC3339),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -203,7 +204,7 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 
 	// Insert into database first
 	now := time.Now()
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO routers (id, name, project_id, admin_state_up, status, external_gateway_info, distributed, ha, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, routerID, req.Router.Name, projectID, adminStateUp, "ACTIVE", gatewayInfoJSON, distributed, ha, now, now)
@@ -215,7 +216,7 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 	}
 
 	// Create router namespace after DB insert (best effort)
-	if err := svc.routerManager.CreateRouterNamespace(routerID); err != nil {
+	if err := networking.CreateRouterNamespace(svc.mode, routerID); err != nil {
 		log.Warn().Err(err).Str("router_id", routerID).Msg("failed to create router namespace (router record exists in DB)")
 	}
 
@@ -229,23 +230,23 @@ func (svc *Service) CreateRouter(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"router": gin.H{
-			"id":                    routerID,
-			"name":                  req.Router.Name,
-			"tenant_id":             projectID,
-			"project_id":            projectID,
-			"admin_state_up":        adminStateUp,
-			"status":                "ACTIVE",
-			"external_gateway_info": req.Router.ExternalGatewayInfo,
-			"distributed":           distributed,
-			"ha":                    ha,
-			"routes":                []interface{}{},
+			"id":                      routerID,
+			"name":                    req.Router.Name,
+			"tenant_id":               projectID,
+			"project_id":              projectID,
+			"admin_state_up":          adminStateUp,
+			"status":                  "ACTIVE",
+			"external_gateway_info":   req.Router.ExternalGatewayInfo,
+			"distributed":             distributed,
+			"ha":                      ha,
+			"routes":                  []interface{}{},
 			"availability_zone_hints": []string{},
 			"availability_zones":      []string{"nova"},
 			"description":             "",
 			"revision_number":         1,
 			"tags":                    []string{},
-			"created_at":            now.Format(time.RFC3339),
-			"updated_at":            now.Format(time.RFC3339),
+			"created_at":              now.Format(time.RFC3339),
+			"updated_at":              now.Format(time.RFC3339),
 		},
 	})
 }
@@ -258,7 +259,7 @@ func (svc *Service) GetRouter(c *gin.Context) {
 	var r Router
 	var gatewayInfo sql.NullString
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT id, name, project_id, admin_state_up, status, external_gateway_info,
 		       distributed, ha, created_at, updated_at
 		FROM routers
@@ -266,7 +267,7 @@ func (svc *Service) GetRouter(c *gin.Context) {
 	`, routerID, projectID).Scan(&r.ID, &r.Name, &r.ProjectID, &r.AdminStateUp, &r.Status,
 		&gatewayInfo, &r.Distributed, &r.HA, &r.CreatedAt, &r.UpdatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("router"))
 		return
 	}
@@ -283,23 +284,23 @@ func (svc *Service) GetRouter(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"router": gin.H{
-			"id":                    r.ID,
-			"name":                  r.Name,
-			"tenant_id":             r.ProjectID,
-			"project_id":            r.ProjectID,
-			"admin_state_up":        r.AdminStateUp,
-			"status":                r.Status,
-			"external_gateway_info": r.ExternalGatewayInfo,
-			"distributed":           r.Distributed,
-			"ha":                    r.HA,
-			"routes":                []interface{}{},
+			"id":                      r.ID,
+			"name":                    r.Name,
+			"tenant_id":               r.ProjectID,
+			"project_id":              r.ProjectID,
+			"admin_state_up":          r.AdminStateUp,
+			"status":                  r.Status,
+			"external_gateway_info":   r.ExternalGatewayInfo,
+			"distributed":             r.Distributed,
+			"ha":                      r.HA,
+			"routes":                  []interface{}{},
 			"availability_zone_hints": []string{},
 			"availability_zones":      []string{"nova"},
 			"description":             "",
 			"revision_number":         1,
 			"tags":                    []string{},
-			"created_at":            r.CreatedAt.Format(time.RFC3339),
-			"updated_at":            r.UpdatedAt.Format(time.RFC3339),
+			"created_at":              r.CreatedAt.Format(time.RFC3339),
+			"updated_at":              r.UpdatedAt.Format(time.RFC3339),
 		},
 	})
 }
@@ -357,7 +358,7 @@ func (svc *Service) UpdateRouter(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE routers SET %s WHERE id = $%d AND project_id = $%d",
 		updateString(updates), argID, argID+1)
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_router").Str("router_id", routerID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to update router"))
@@ -375,12 +376,12 @@ func (svc *Service) DeleteRouter(c *gin.Context) {
 
 	// Check if router has any interfaces attached
 	var interfaceCount int
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM router_interfaces WHERE router_id = $1",
 		routerID,
 	).Scan(&interfaceCount)
 
-	if err != nil && !errors.Is(err, database.ErrNoRows) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Error().Err(err).Str("operation", "delete_router_check").Str("router_id", routerID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to check router interfaces"))
 		return
@@ -394,12 +395,12 @@ func (svc *Service) DeleteRouter(c *gin.Context) {
 	}
 
 	// Delete router namespace
-	if err := svc.routerManager.DeleteRouterNamespace(routerID); err != nil {
+	if err := networking.DeleteRouterNamespace(svc.mode, routerID); err != nil {
 		log.Warn().Err(err).Str("router_id", routerID).Msg("failed to delete router namespace")
 	}
 
 	// Delete from database
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM routers WHERE id = $1 AND project_id = $2",
 		routerID, projectID,
 	)
@@ -429,7 +430,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 
 	// Verify router exists
 	var routerExists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1 AND project_id = $2)",
 		routerID, projectID,
 	).Scan(&routerExists)
@@ -441,14 +442,14 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 
 	// Get subnet information (must belong to same project via network ownership)
 	var subnetID, networkID, cidr, gatewayIP string
-	err = svc.activeDB().QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRowContext(c.Request.Context(),
 		`SELECT s.id, s.network_id, s.cidr, s.gateway_ip FROM subnets s
 		 JOIN networks n ON n.id = s.network_id
 		 WHERE s.id = $1 AND n.project_id = $2`,
 		req.SubnetID, projectID,
 	).Scan(&subnetID, &networkID, &cidr, &gatewayIP)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
@@ -471,7 +472,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	fixedIPsJSON, _ := json.Marshal(fixedIPs)
 
 	now := time.Now()
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO ports (id, name, network_id, project_id, device_id, device_owner, mac_address, admin_state_up, status, fixed_ips, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, portID, "router-interface-"+routerID[:8], networkID, projectID, routerID, "network:router_interface",
@@ -484,7 +485,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	}
 
 	// Create router interface record
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO router_interfaces (id, router_id, port_id, subnet_id, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`, uuid.New().String(), routerID, portID, subnetID, now)
@@ -501,7 +502,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	maskBits, _ := ipNet.Mask.Size()
 	cidrSuffix := fmt.Sprintf("%d", maskBits)
 
-	if err := svc.routerManager.AttachInterfaceToRouter(routerID, interfaceName, gatewayIP, cidrSuffix); err != nil {
+	if err := networking.AttachInterfaceToRouter(svc.mode, routerID, interfaceName, gatewayIP, cidrSuffix); err != nil {
 		log.Warn().Err(err).Str("router_id", routerID).Str("interface", interfaceName).Msg("failed to attach interface to router")
 	}
 
@@ -532,12 +533,12 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 	// Get port ID from subnet if not provided
 	portID := req.PortID
 	if portID == "" && req.SubnetID != "" {
-		err := svc.activeDB().QueryRow(c.Request.Context(),
+		err := svc.activeDB().QueryRowContext(c.Request.Context(),
 			"SELECT port_id FROM router_interfaces WHERE router_id = $1 AND subnet_id = $2",
 			routerID, req.SubnetID,
 		).Scan(&portID)
 
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			common.SendError(c, common.NewNotFoundError("router interface"))
 			return
 		} else if err != nil {
@@ -557,12 +558,12 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 
 	// Detach interface from router namespace
 	interfaceName := "qg-" + portID[:10]
-	if err := svc.routerManager.DetachInterfaceFromRouter(routerID, interfaceName); err != nil {
+	if err := networking.DetachInterfaceFromRouter(svc.mode, routerID, interfaceName); err != nil {
 		log.Warn().Err(err).Str("router_id", routerID).Str("interface", interfaceName).Msg("failed to detach interface from router")
 	}
 
 	// Delete router interface record
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM router_interfaces WHERE router_id = $1 AND port_id = $2",
 		routerID, portID,
 	)
@@ -574,13 +575,13 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 
 	// Query network_id from the port before deleting it
 	var networkID string
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT network_id FROM ports WHERE id = $1",
 		portID,
 	).Scan(&networkID)
 
 	// Delete the port
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM ports WHERE id = $1 AND project_id = $2",
 		portID, projectID,
 	)
@@ -617,8 +618,8 @@ func (svc *Service) configureExternalGateway(ctx context.Context, routerID strin
 
 	// Get external network details
 	var externalCIDR string
-	err := svc.activeDB().QueryRow(ctx,
-		"SELECT cidr FROM subnets WHERE network_id = $1 LIMIT 1",
+	err := svc.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT cidr FROM subnets WHERE network_id = $1 LIMIT 1"),
 		networkID,
 	).Scan(&externalCIDR)
 
@@ -627,12 +628,12 @@ func (svc *Service) configureExternalGateway(ctx context.Context, routerID strin
 	}
 
 	// Get all internal subnets connected to this router
-	rows, err := svc.activeDB().Query(ctx, `
+	rows, err := svc.activeDB().QueryContext(ctx, database.Q(`
 		SELECT s.cidr
 		FROM subnets s
 		JOIN router_interfaces ri ON ri.subnet_id = s.id
 		WHERE ri.router_id = $1
-	`, routerID)
+	`), routerID)
 
 	if err != nil {
 		return err
@@ -649,7 +650,7 @@ func (svc *Service) configureExternalGateway(ctx context.Context, routerID strin
 				continue
 			}
 
-			if err := svc.routerManager.EnableSNAT(routerID, externalInterface, internalCIDR); err != nil {
+			if err := networking.EnableSNAT(svc.mode, routerID, externalInterface, internalCIDR); err != nil {
 				log.Warn().Err(err).Str("router_id", routerID).Str("cidr", internalCIDR).Msg("failed to enable SNAT")
 			}
 		}

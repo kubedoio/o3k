@@ -2,6 +2,7 @@ package nova_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,18 +16,18 @@ import (
 // TestCreateFlavor_SCS_Valid is the wire-up integration: a valid SCS-0100
 // name parses, the row insert lands, AND the parsed CPU/disk type is
 // mirrored into flavor_extra_specs so SCS-aware clients see the same shape
-// as the SCS-0103 seed.
+// as the SCS-0103 seed migration.
 func TestCreateFlavor_SCS_Valid(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewMockDB()
-	svc := nova.NewServiceWithDB(mock, "stub")
+	db := database.NewTestDB(t)
+	svc := nova.NewServiceWithDB(db, "stub")
 
 	body, _ := json.Marshal(map[string]any{
 		"flavor": map[string]any{
-			"name":  "SCS-2V-4-20s",
+			"name":  "SCS-2V-4-50s",
 			"ram":   4096,
 			"vcpus": 2,
-			"disk":  20,
+			"disk":  50,
 		},
 	})
 
@@ -40,10 +41,25 @@ func TestCreateFlavor_SCS_Valid(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateFlavor: status = %d, want 200; body = %s", w.Code, w.Body.String())
 	}
-	if !mock.ExecCalled("INSERT INTO flavors") {
-		t.Error("expected INSERT INTO flavors")
+
+	var flavorID string
+	err := db.QueryRowContext(context.Background(),
+		database.Q("SELECT id FROM flavors WHERE name = $1"),
+		"SCS-2V-4-50s",
+	).Scan(&flavorID)
+	if err != nil {
+		t.Fatalf("expected INSERT INTO flavors: %v", err)
 	}
-	if !mock.ExecCalled("INSERT INTO flavor_extra_specs") {
+
+	var extraCount int
+	err = db.QueryRowContext(context.Background(),
+		database.Q("SELECT COUNT(*) FROM flavor_extra_specs WHERE flavor_id = $1"),
+		flavorID,
+	).Scan(&extraCount)
+	if err != nil {
+		t.Fatalf("count extra specs: %v", err)
+	}
+	if extraCount == 0 {
 		t.Error("expected SCS extra-specs to be mirrored into flavor_extra_specs")
 	}
 }
@@ -52,8 +68,8 @@ func TestCreateFlavor_SCS_Valid(t *testing.T) {
 // rejected at the API surface with 400, not silently accepted.
 func TestCreateFlavor_SCS_Malformed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewMockDB()
-	svc := nova.NewServiceWithDB(mock, "stub")
+	db := database.NewTestDB(t)
+	svc := nova.NewServiceWithDB(db, "stub")
 
 	body, _ := json.Marshal(map[string]any{
 		"flavor": map[string]any{
@@ -74,7 +90,16 @@ func TestCreateFlavor_SCS_Malformed(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("CreateFlavor(SCS-bogus): status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
-	if mock.ExecCalled("INSERT INTO flavors") {
+
+	var flavorCount int
+	err := db.QueryRowContext(context.Background(),
+		database.Q("SELECT COUNT(*) FROM flavors WHERE name = $1"),
+		"SCS-bogus",
+	).Scan(&flavorCount)
+	if err != nil {
+		t.Fatalf("count flavors: %v", err)
+	}
+	if flavorCount != 0 {
 		t.Error("malformed SCS name should not have inserted a flavor row")
 	}
 }
@@ -83,12 +108,12 @@ func TestCreateFlavor_SCS_Malformed(t *testing.T) {
 // untouched — the validator is opt-in based on the `SCS-` prefix.
 func TestCreateFlavor_NonSCS_Passthrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewMockDB()
-	svc := nova.NewServiceWithDB(mock, "stub")
+	db := database.NewTestDB(t)
+	svc := nova.NewServiceWithDB(db, "stub")
 
 	body, _ := json.Marshal(map[string]any{
 		"flavor": map[string]any{
-			"name":  "m1.tiny",
+			"name":  "m1.custom",
 			"ram":   512,
 			"vcpus": 1,
 			"disk":  1,
@@ -105,10 +130,25 @@ func TestCreateFlavor_NonSCS_Passthrough(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("CreateFlavor(m1.tiny): status = %d, want 200; body = %s", w.Code, w.Body.String())
 	}
-	if !mock.ExecCalled("INSERT INTO flavors") {
-		t.Error("expected INSERT INTO flavors for non-SCS name")
+
+	var flavorID string
+	err := db.QueryRowContext(context.Background(),
+		database.Q("SELECT id FROM flavors WHERE name = $1"),
+		"m1.custom",
+	).Scan(&flavorID)
+	if err != nil {
+		t.Fatalf("expected INSERT INTO flavors for non-SCS name: %v", err)
 	}
-	if mock.ExecCalled("INSERT INTO flavor_extra_specs") {
+
+	var extraCount int
+	err = db.QueryRowContext(context.Background(),
+		database.Q("SELECT COUNT(*) FROM flavor_extra_specs WHERE flavor_id = $1"),
+		flavorID,
+	).Scan(&extraCount)
+	if err != nil {
+		t.Fatalf("count extra specs: %v", err)
+	}
+	if extraCount != 0 {
 		t.Error("non-SCS name should not produce scs:* extra-specs")
 	}
 }

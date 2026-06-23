@@ -2,28 +2,24 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
-// setupSeedTestDB creates a SQLite adapter with the minimum schema SeedDefaults
-// touches. The full migration chain isn't needed — we only assert the SCS
-// volume types are seeded with the expected extra-specs. The identity tables
-// (users/projects/roles/role_assignments) and the flavor seed tables are
-// included so SeedDefaults runs end-to-end without erroring.
-func setupSeedTestDB(t *testing.T) *database.SQLiteAdapter {
+// setupSeedTestDB opens an in-memory SQLite database and creates the minimal
+// schema SeedDefaults touches.
+func setupSeedTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "seed_test.db")
-	adapter, err := database.NewSQLiteAdapter(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
+	ctx := context.Background()
+	if err := database.ConnectSQLite(ctx, ":memory:"); err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
 	}
-	t.Cleanup(adapter.Close)
+	t.Cleanup(database.Close)
 
-	ctx := t.Context()
+	db := database.DB
 	schemas := []string{
 		`CREATE TABLE projects (
 			id TEXT PRIMARY KEY, name TEXT UNIQUE, description TEXT,
@@ -54,11 +50,11 @@ func setupSeedTestDB(t *testing.T) *database.SQLiteAdapter {
 		);`,
 	}
 	for _, s := range schemas {
-		if _, err := adapter.Exec(ctx, s); err != nil {
+		if _, err := db.ExecContext(ctx, s); err != nil {
 			t.Fatalf("create schema: %v\nSQL: %s", err, s)
 		}
 	}
-	return adapter
+	return db
 }
 
 // TestSeedDefaults_SCSVolumeTypes is the conformance check for Slice 5: after
@@ -74,11 +70,11 @@ func TestSeedDefaults_SCSVolumeTypes(t *testing.T) {
 	}
 
 	cases := []struct {
-		name              string
-		wantEncrypted     string
-		wantReplicated    string
-		wantAvailZone     string
-		wantDescContains  string
+		name             string
+		wantEncrypted    string
+		wantReplicated   string
+		wantAvailZone    string
+		wantDescContains string
 	}{
 		{"scs-default", "false", "false", "nova", "single-AZ"},
 		{"scs-encrypted", "true", "false", "nova", "[scs:encrypted]"},
@@ -88,8 +84,8 @@ func TestSeedDefaults_SCSVolumeTypes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var description, extraSpecsJSON string
-			err := db.QueryRow(ctx,
-				`SELECT description, extra_specs FROM volume_types WHERE name = $1`,
+			err := db.QueryRowContext(ctx,
+				database.Q(`SELECT description, extra_specs FROM volume_types WHERE name = $1`),
 				tc.name,
 			).Scan(&description, &extraSpecsJSON)
 			if err != nil {
@@ -132,8 +128,8 @@ func TestSeedDefaults_Idempotent(t *testing.T) {
 	}
 
 	var count int
-	err := db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM volume_types WHERE name LIKE 'scs-%'`,
+	err := db.QueryRowContext(ctx,
+		database.Q(`SELECT COUNT(*) FROM volume_types WHERE name LIKE 'scs-%'`),
 	).Scan(&count)
 	if err != nil {
 		t.Fatalf("count scs volume_types: %v", err)

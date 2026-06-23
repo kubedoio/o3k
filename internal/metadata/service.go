@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
@@ -19,7 +21,7 @@ type Service struct {
 	// In production, this would run on 169.254.169.254
 	// For testing, it runs on localhost:8775
 	bindAddr string
-	db       database.DBIF
+	db       *sql.DB
 }
 
 // NewService creates a new metadata service
@@ -30,7 +32,7 @@ func NewService(bindAddr string) *Service {
 }
 
 // NewServiceWithDB creates a new metadata service with an injected DB (for testing).
-func NewServiceWithDB(db database.DBIF, bindAddr string) *Service {
+func NewServiceWithDB(db *sql.DB, bindAddr string) *Service {
 	return &Service{
 		bindAddr: bindAddr,
 		db:       db,
@@ -38,7 +40,7 @@ func NewServiceWithDB(db database.DBIF, bindAddr string) *Service {
 }
 
 // activeDB returns the injected DB or falls back to the global.
-func (svc *Service) activeDB() database.DBIF {
+func (svc *Service) activeDB() *sql.DB {
 	if svc.db != nil {
 		return svc.db
 	}
@@ -78,7 +80,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 func (svc *Service) instanceFromRequest(c *gin.Context) (string, error) {
 	clientIP := c.ClientIP()
 	var instanceID string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		`SELECT device_id FROM ports WHERE fixed_ips @> jsonb_build_array(jsonb_build_object('ip_address', $1::text)) LIMIT 1`,
 		clientIP,
 	).Scan(&instanceID)
@@ -98,13 +100,13 @@ func (svc *Service) GetMetaDataJSON(c *gin.Context) {
 
 	var name, hostname, projectID, userID string
 	var uuid string
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT id, name, name, project_id, user_id
 		FROM instances
 		WHERE id = $1
 	`, instanceID).Scan(&uuid, &name, &hostname, &projectID, &userID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -127,7 +129,7 @@ func (svc *Service) GetMetaDataJSON(c *gin.Context) {
 	}
 
 	// Fetch custom metadata
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT meta_key, meta_value
 		FROM instance_metadata
 		WHERE instance_id = $1
@@ -148,7 +150,7 @@ func (svc *Service) GetMetaDataJSON(c *gin.Context) {
 	}
 
 	// Fetch SSH keys
-	keyRows, err := svc.activeDB().Query(c.Request.Context(), `
+	keyRows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT k.name, k.public_key
 		FROM keypairs k
 		WHERE k.user_id = $1
@@ -179,13 +181,13 @@ func (svc *Service) GetUserData(c *gin.Context) {
 	}
 
 	var userData string
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT userdata
 		FROM instance_userdata
 		WHERE instance_id = $1
 	`, instanceID).Scan(&userData)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No user-data is not an error, just return empty
 		c.String(http.StatusOK, "")
 		return
@@ -208,7 +210,7 @@ func (svc *Service) GetNetworkDataJSON(c *gin.Context) {
 	}
 
 	// Query all ports for this instance
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT p.id, p.mac_address, p.fixed_ips, p.network_id, n.name, s.cidr, s.gateway_ip, s.dns_nameservers
 		FROM ports p
 		JOIN networks n ON p.network_id = n.id
@@ -319,7 +321,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		c.String(http.StatusOK, instanceID)
 	case "hostname":
 		var hostname string
-		err := svc.activeDB().QueryRow(c.Request.Context(), `
+		err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 			SELECT name FROM instances WHERE id = $1
 		`, instanceID).Scan(&hostname)
 		if err == nil {
@@ -329,7 +331,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		}
 	case "instance-type":
 		var flavorName string
-		err := svc.activeDB().QueryRow(c.Request.Context(), `
+		err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 			SELECT f.name
 			FROM instances i
 			JOIN flavors f ON i.flavor_id = f.id
@@ -342,7 +344,7 @@ func (svc *Service) GetMetaDataKey(c *gin.Context) {
 		}
 	case "local-ipv4":
 		var fixedIPsJSON []byte
-		err := svc.activeDB().QueryRow(c.Request.Context(), `
+		err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 			SELECT fixed_ips FROM ports WHERE device_id = $1 LIMIT 1
 		`, instanceID).Scan(&fixedIPsJSON)
 		if err == nil {

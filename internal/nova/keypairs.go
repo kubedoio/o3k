@@ -15,8 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
 // CreateKeypairRequest represents a keypair creation request
@@ -32,7 +33,7 @@ type CreateKeypairRequest struct {
 func (svc *Service) ListKeypairs(c *gin.Context) {
 	userID := c.GetString("user_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, name, user_id, public_key, fingerprint, created_at
 		FROM keypairs
 		WHERE user_id = $1
@@ -89,13 +90,13 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 	var name, publicKey, fingerprint string
 	var createdAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT name, public_key, fingerprint, created_at
 		FROM keypairs
 		WHERE user_id = $1 AND name = $2
 	`, userID, keypairName).Scan(&name, &publicKey, &fingerprint, &createdAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("keypair"))
 		return
 	}
@@ -157,7 +158,7 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 
 	// Check if keypair with same name already exists
 	var existingID string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT id FROM keypairs WHERE user_id = $1 AND name = $2",
 		userID, req.Keypair.Name,
 	).Scan(&existingID)
@@ -170,7 +171,7 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO keypairs (user_id, name, public_key, fingerprint, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`, userID, req.Keypair.Name, publicKey, fingerprint, now)
@@ -204,7 +205,7 @@ func (svc *Service) DeleteKeypair(c *gin.Context) {
 	keypairName := c.Param("id") // In Nova API, it's the name, not UUID
 	userID := c.GetString("user_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM keypairs WHERE user_id = $1 AND name = $2",
 		userID, keypairName,
 	)
@@ -215,7 +216,7 @@ func (svc *Service) DeleteKeypair(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("keypair"))
 		return
 	}

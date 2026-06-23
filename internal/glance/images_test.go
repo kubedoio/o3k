@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
@@ -148,71 +149,26 @@ func TestAllowedImageUpdateField(t *testing.T) {
 	}
 }
 
-// deleteImageQueryRowDB is a test double whose QueryRow returns controlled
-// values for the ownership+protected query in DeleteImage.
-type deleteImageQueryRowDB struct {
-	*database.MockDB
-	ownerProjectID string
-	protected      bool
-}
-
-func (d *deleteImageQueryRowDB) QueryRow(_ context.Context, sql string, args ...any) database.Row {
-	if strings.Contains(sql, "FROM images") {
-		nullStr := sql_NullString(d.ownerProjectID)
-		return &scanRow{values: []any{nullStr, d.protected}}
+// insertTestProject creates a project row required by the images FK constraint.
+func insertTestProject(t *testing.T, db *sql.DB, id string) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(), database.Q(`INSERT INTO projects (id, name) VALUES ($1, $2)`), id, id)
+	if err != nil {
+		t.Fatalf("insert project: %v", err)
 	}
-	return &scanRow{err: database.ErrNoRows}
 }
 
-// sql_NullString is a local helper to avoid importing database/sql in test helper.
-func sql_NullString(s string) sql.NullString {
-	return sql.NullString{String: s, Valid: s != ""}
-}
-
-// scanRow is a pgx.Row that fills Scan destinations in declaration order.
-type scanRow struct {
-	values []any
-	err    error
-}
-
-func (r *scanRow) Scan(dest ...any) error {
-	if r.err != nil {
-		return r.err
+// insertTestImage creates an image fixture in the in-memory test database.
+func insertTestImage(t *testing.T, db *sql.DB, imageID, ownerProjectID, visibility string, protected bool) {
+	t.Helper()
+	now := time.Now().Format(time.RFC3339)
+	_, err := db.ExecContext(context.Background(), database.Q(`
+		INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, min_disk_gb, min_ram_mb, protected, properties, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`), imageID, "test-image", ownerProjectID, "active", visibility, "qcow2", "bare", 0, 0, protected, "{}", now, now)
+	if err != nil {
+		t.Fatalf("insert image: %v", err)
 	}
-	for i, d := range dest {
-		if i >= len(r.values) {
-			break
-		}
-		switch dst := d.(type) {
-		case *sql.NullString:
-			if v, ok := r.values[i].(sql.NullString); ok {
-				*dst = v
-			}
-		case *bool:
-			if b, ok := r.values[i].(bool); ok {
-				*dst = b
-			}
-		case *string:
-			if s, ok := r.values[i].(string); ok {
-				*dst = s
-			}
-		}
-	}
-	return nil
-}
-
-// Ensure deleteImageQueryRowDB satisfies database.DBIF at compile time.
-var _ database.DBIF = (*deleteImageQueryRowDB)(nil)
-
-// Exec, Query, BeginTx delegate to embedded MockDB.
-func (d *deleteImageQueryRowDB) Exec(ctx context.Context, sql string, args ...any) (database.Result, error) {
-	return d.MockDB.Exec(ctx, sql, args...)
-}
-func (d *deleteImageQueryRowDB) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
-	return d.MockDB.Query(ctx, sql, args...)
-}
-func (d *deleteImageQueryRowDB) BeginTx(ctx context.Context, opts database.TxOptions) (database.Tx, error) {
-	return d.MockDB.BeginTx(ctx, opts)
 }
 
 func TestDeleteImageProtected(t *testing.T) {
@@ -250,18 +206,19 @@ func TestDeleteImageProtected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := &deleteImageQueryRowDB{
-				MockDB:         database.NewMockDB(),
-				ownerProjectID: tt.ownerProjectID,
-				protected:      tt.protected,
-			}
+			db := database.NewTestDB(t)
+			insertTestProject(t, db, tt.ownerProjectID)
+
+			imageID := "img-id-123"
+			insertTestImage(t, db, imageID, tt.ownerProjectID, "private", tt.protected)
+
 			svc := NewServiceWithDB(db, "stub", "", "", "", "", "", nil)
 
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
-			req, _ := http.NewRequest(http.MethodDelete, "/images/img-id-123", nil)
+			req, _ := http.NewRequest(http.MethodDelete, "/images/"+imageID, nil)
 			c.Request = req
-			c.Params = gin.Params{{Key: "id", Value: "img-id-123"}}
+			c.Params = gin.Params{{Key: "id", Value: imageID}}
 			c.Set("project_id", "proj-abc")
 			c.Set("is_admin", tt.isAdmin)
 
@@ -273,8 +230,12 @@ func TestDeleteImageProtected(t *testing.T) {
 				if w.Code == http.StatusForbidden {
 					t.Errorf("expected delete to proceed but got 403; body = %s", w.Body.String())
 				}
-				if !db.MockDB.ExecCalled("DELETE") {
-					t.Error("expected DELETE to be executed but it was not")
+				var count int
+				if err := db.QueryRowContext(context.Background(), database.Q("SELECT COUNT(*) FROM images WHERE id = $1"), imageID).Scan(&count); err != nil {
+					t.Fatalf("count images: %v", err)
+				}
+				if count != 0 {
+					t.Errorf("expected image to be deleted but count = %d", count)
 				}
 				return
 			}

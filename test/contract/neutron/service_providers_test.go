@@ -33,9 +33,9 @@ func TestNeutronServiceProvidersList_Contract(t *testing.T) {
 
 	var result struct {
 		ServiceProviders []struct {
-			Name         string `json:"name"`
-			ServiceType  string `json:"service_type"`
-			Default      bool   `json:"default"`
+			Name        string `json:"name"`
+			ServiceType string `json:"service_type"`
+			Default     bool   `json:"default"`
 		} `json:"service_providers"`
 	}
 

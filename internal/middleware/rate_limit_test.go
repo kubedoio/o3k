@@ -36,14 +36,22 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	window := 50 * time.Millisecond
 	rl := NewRateLimiter(2, window)
 
-	if !rl.Allow("10.0.0.1") { t.Fatal("request 1 should pass") }
-	if !rl.Allow("10.0.0.1") { t.Fatal("request 2 should pass") }
-	if rl.Allow("10.0.0.1")  { t.Fatal("request 3 should be denied") }
+	if !rl.Allow("10.0.0.1") {
+		t.Fatal("request 1 should pass")
+	}
+	if !rl.Allow("10.0.0.1") {
+		t.Fatal("request 2 should pass")
+	}
+	if rl.Allow("10.0.0.1") {
+		t.Fatal("request 3 should be denied")
+	}
 
 	// Wait for the window to expire.
 	time.Sleep(window + 10*time.Millisecond)
 
-	if !rl.Allow("10.0.0.1") { t.Fatal("request after window reset should pass") }
+	if !rl.Allow("10.0.0.1") {
+		t.Fatal("request after window reset should pass")
+	}
 }
 
 // TestRateLimiterPerIP verifies that different keys have independent limits.

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -176,14 +178,12 @@ func runMigrateDatastore(args []string) {
 	fs := flag.NewFlagSet("migrate-datastore", flag.ExitOnError)
 	from := fs.String("from", "", "source datastore (e.g., sqlite:///var/lib/o3k/db/state.db)")
 	to := fs.String("to", "", "destination datastore (e.g., postgres://user:pass@host/db)")
-	batchSize := fs.Int("batch", 500, "rows per batch (currently unused; reserved for future batching)")
 	_ = fs.Parse(args)
 
 	if *from == "" || *to == "" {
 		fmt.Fprintln(os.Stderr, "Usage: o3k migrate-datastore --from <source> --to <dest>")
 		fmt.Fprintln(os.Stderr, "  --from  sqlite:///path/to/state.db")
 		fmt.Fprintln(os.Stderr, "  --to    postgres://user:pass@host:5432/o3k")
-		fmt.Fprintln(os.Stderr, "  --batch rows per batch (default 500)")
 		os.Exit(1)
 	}
 
@@ -214,8 +214,6 @@ func runMigrateDatastore(args []string) {
 	}
 	dstDB := database.DB
 
-	_ = *batchSize // reserved
-
 	totalRows := 0
 	totalTables := 0
 
@@ -240,10 +238,10 @@ func runMigrateDatastore(args []string) {
 // migrateTable copies all rows of one table from src to dst.
 // Returns the number of rows copied.
 // If the table does not exist in src (older schema), returns (0, nil).
-func migrateTable(ctx context.Context, src, dst database.DBIF, tm tableMigration) (int, error) {
+func migrateTable(ctx context.Context, src, dst *sql.DB, tm tableMigration) (int, error) {
 	// Quick existence check — if the table is absent in the source, skip silently.
 	var count int
-	if err := src.QueryRow(ctx, "SELECT COUNT(*) FROM "+tm.name).Scan(&count); err != nil {
+	if err := src.QueryRowContext(ctx, database.Q("SELECT COUNT(*) FROM ")+tm.name).Scan(&count); err != nil {
 		// Table absent or other non-fatal error — treat as empty.
 		return 0, nil
 	}
@@ -254,7 +252,7 @@ func migrateTable(ctx context.Context, src, dst database.DBIF, tm tableMigration
 	cols := strings.Join(tm.columns, ", ")
 	selectSQL := fmt.Sprintf("SELECT %s FROM %s", cols, tm.name)
 
-	rows, err := src.Query(ctx, selectSQL)
+	rows, err := src.QueryContext(ctx, selectSQL)
 	if err != nil {
 		// Column mismatch with older schema — skip rather than abort.
 		return 0, nil
@@ -284,7 +282,7 @@ func migrateTable(ctx context.Context, src, dst database.DBIF, tm tableMigration
 			return migrated, fmt.Errorf("scan row from %s: %w", tm.name, err)
 		}
 
-		if _, err := dst.Exec(ctx, insertSQL, values...); err != nil {
+		if _, err := dst.ExecContext(ctx, insertSQL, values...); err != nil {
 			return migrated, fmt.Errorf("insert row into %s: %w", tm.name, err)
 		}
 		migrated++

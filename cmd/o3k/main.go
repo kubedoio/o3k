@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
@@ -33,6 +32,8 @@ import (
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -381,10 +382,6 @@ func runServer(args []string) {
 	}
 	defer database.Close()
 
-	// Wrap the database connection with OpenTelemetry span instrumentation.
-	// Every Exec/Query/QueryRow call will create a child span in the active trace.
-	database.DB = database.NewTracingAdapter(database.DB)
-
 	// Run migrations (PostgreSQL only — SQLite manages its own schema)
 	if database.BackendType() == "postgres" {
 		log.Println("Running database migrations...")
@@ -559,8 +556,7 @@ func runServer(args []string) {
 
 	// Wire async dispatcher when AsyncCompute is enabled and Hub is running
 	if cfg.Nova.AsyncCompute && hub != nil {
-		dispatcher := tunnel.NewDispatcher(hub)
-		novaService.SetDispatcher(dispatcher)
+		novaService.SetDispatcher(hub)
 		log.Printf("Nova async compute enabled — dispatching to agents via tunnel")
 	}
 
@@ -575,9 +571,8 @@ func runServer(args []string) {
 			reconcileInterval = 30
 		}
 
-		hubAdapter := scheduler.NewHubAdapter(hub)
 		for i := 0; i < maxWorkers; i++ {
-			w := scheduler.NewWorker(database.DB, hubAdapter)
+			w := scheduler.NewWorker(database.DB, hub)
 			go w.Run(workerCtx)
 		}
 
@@ -668,8 +663,6 @@ func runServer(args []string) {
 	metadataService := metadata.NewService(fmt.Sprintf("localhost:%d", metadataPort))
 	log.Println("Metadata service initialized")
 
-	// Initialize placement service
-	placementService := placement.NewService()
 	log.Println("Placement service initialized")
 
 	// Create HTTP servers for each service
@@ -679,7 +672,7 @@ func runServer(args []string) {
 		createNeutronServer(cfg, neutronService, authService),
 		createCinderServer(cfg, cinderService, authService),
 		createGlanceServer(cfg, glanceService, authService),
-		createPlacementServer(cfg, placementService, authService, placementPort),
+		createPlacementServer(cfg, authService, placementPort),
 		createMetadataServer(cfg, metadataService, metadataPort),
 	}
 
@@ -853,22 +846,9 @@ func loadOrGenerateNodeID(path string) string {
 	if err == nil && len(data) > 0 {
 		return strings.TrimSpace(string(data))
 	}
-	id := uuid()
+	id := uuid.NewString()
 	_ = os.WriteFile(path, []byte(id+"\n"), 0600)
 	return id
-}
-
-// uuid generates a new random UUID v4 string using crypto/rand.
-func uuid() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback: hex-encode a timestamp + random bytes via crypto/rand is
-		// already imported; if it fails we have bigger problems.
-		panic(fmt.Sprintf("uuid: crypto/rand unavailable: %v", err))
-	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant bits
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
 func runTokenCmd(args []string) {
@@ -908,7 +888,7 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("keystone"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -959,7 +939,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("nova"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -974,7 +954,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	svc.RegisterRoutes(r.Group(""))
+	placement.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Nova.Port),
@@ -990,7 +970,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("neutron"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -1004,7 +984,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	svc.RegisterRoutes(r.Group(""))
+	placement.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Neutron.Port),
@@ -1020,7 +1000,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("cinder"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -1034,7 +1014,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	svc.RegisterRoutes(r.Group(""))
+	placement.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Cinder.Port),
@@ -1050,7 +1030,7 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("glance"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -1082,12 +1062,12 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	}
 }
 
-func createPlacementServer(cfg *common.Config, svc *placement.Service, authService *keystone.AuthService, port int) *http.Server {
+func createPlacementServer(cfg *common.Config, authService *keystone.AuthService, port int) *http.Server {
 	r := gin.New()
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("placement"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -1100,7 +1080,7 @@ func createPlacementServer(cfg *common.Config, svc *placement.Service, authServi
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	svc.RegisterRoutes(r.Group(""))
+	placement.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, port),
@@ -1116,7 +1096,7 @@ func createMetadataServer(cfg *common.Config, svc *metadata.Service, port int) *
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
-	r.Use(middleware.TracingMiddleware())
+	r.Use(otelgin.Middleware("o3k"))
 	r.Use(middleware.MetricsMiddleware("metadata"))
 	r.Use(middleware.ErrorHandlingMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -1126,7 +1106,7 @@ func createMetadataServer(cfg *common.Config, svc *metadata.Service, port int) *
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	svc.RegisterRoutes(r.Group(""))
+	placement.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, port),

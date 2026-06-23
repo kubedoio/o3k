@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/rs/zerolog/log"
 )
@@ -13,13 +15,13 @@ const maxTaskRetries = 3
 // Reconciler scans for tasks that have been stuck in dispatched state past 2x
 // their timeout and either requeues them (if retries < 3) or marks them failed.
 type Reconciler struct {
-	db       database.DBIF
+	db       *sql.DB
 	interval time.Duration
 }
 
 // NewReconciler returns a Reconciler that polls every intervalSec seconds.
 // If intervalSec is <= 0, it defaults to 30 seconds.
-func NewReconciler(db database.DBIF, intervalSec int) *Reconciler {
+func NewReconciler(db *sql.DB, intervalSec int) *Reconciler {
 	if intervalSec <= 0 {
 		intervalSec = 30
 	}
@@ -45,23 +47,23 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcileOnce(ctx context.Context) {
-	tx, err := r.db.BeginTx(ctx, database.TxOptions{})
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		log.Error().Err(err).Msg("reconciler: failed to begin transaction")
 		return
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.Query(ctx, `
+	rows, err := tx.QueryContext(ctx, database.Q(`
 		SELECT id, agent_id, resource_id, retries, timeout_sec, req_vcpu, req_ram_mb, req_disk_gb
 		FROM tasks
 		WHERE status = 'dispatched'
 		  AND dispatched_at < now() - (2 * timeout_sec * interval '1 second')
 		FOR UPDATE SKIP LOCKED
-		LIMIT 10`)
+		LIMIT 10`))
 	if err != nil {
 		log.Error().Err(err).Msg("reconciler: failed to query stalled tasks")
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback()
 		return
 	}
 
@@ -69,9 +71,9 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 	// executing UPDATE statements while a rows cursor is open deadlocks because
 	// both operations compete for the single connection.
 	type stalledTask struct {
-		taskID, agentID, resourceID string
+		taskID, agentID, resourceID  string
 		retries, timeoutSec, reqVcpu int
-		reqRam, reqDisk             int64
+		reqRam, reqDisk              int64
 	}
 	var stalled []stalledTask
 	for rows.Next() {
@@ -85,28 +87,28 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 
 	if err := rows.Err(); err != nil {
 		log.Error().Err(err).Msg("reconciler: error iterating stalled tasks")
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback()
 		return
 	}
 
 	for _, t := range stalled {
 		if t.retries >= maxTaskRetries {
-			if _, err := tx.Exec(ctx, `UPDATE tasks SET status='failed', error='reconciler: max retries exceeded', completed_at=now() WHERE id=$1 AND status='dispatched'`, t.taskID); err != nil {
+			if _, err := tx.ExecContext(ctx, database.Q(`UPDATE tasks SET status='failed', error='reconciler: max retries exceeded', completed_at=now() WHERE id=$1 AND status='dispatched'`), t.taskID); err != nil {
 				log.Error().Err(err).Str("task_id", t.taskID).Msg("reconciler: failed to mark task failed")
 			}
-			if _, err := tx.Exec(ctx, `UPDATE instances SET status='ERROR', task_state=NULL WHERE id=$1`, t.resourceID); err != nil {
+			if _, err := tx.ExecContext(ctx, database.Q(`UPDATE instances SET status='ERROR', task_state=NULL WHERE id=$1`), t.resourceID); err != nil {
 				log.Error().Err(err).Str("resource_id", t.resourceID).Msg("reconciler: failed to mark instance ERROR")
 			}
 		} else {
 			backoff := time.Duration((t.retries+1)*10) * time.Second
-			if _, err := tx.Exec(ctx, `UPDATE tasks SET status='pending', agent_id=NULL, dispatched_at=NULL, next_retry_at=$1, retries=retries+1 WHERE id=$2 AND status='dispatched'`,
+			if _, err := tx.ExecContext(ctx, database.Q(`UPDATE tasks SET status='pending', agent_id=NULL, dispatched_at=NULL, next_retry_at=$1, retries=retries+1 WHERE id=$2 AND status='dispatched'`),
 				time.Now().Add(backoff), t.taskID); err != nil {
 				log.Error().Err(err).Str("task_id", t.taskID).Msg("reconciler: failed to requeue task")
 			}
 		}
 
 		if t.agentID != "" {
-			if _, err := tx.Exec(ctx, `UPDATE compute_nodes SET reserved_vcpu=GREATEST(0,reserved_vcpu-$1), reserved_ram_mb=GREATEST(0,reserved_ram_mb-$2), reserved_disk_gb=GREATEST(0,reserved_disk_gb-$3) WHERE id=$4`,
+			if _, err := tx.ExecContext(ctx, database.Q(`UPDATE compute_nodes SET reserved_vcpu=GREATEST(0,reserved_vcpu-$1), reserved_ram_mb=GREATEST(0,reserved_ram_mb-$2), reserved_disk_gb=GREATEST(0,reserved_disk_gb-$3) WHERE id=$4`),
 				t.reqVcpu, t.reqRam, t.reqDisk, t.agentID); err != nil {
 				log.Error().Err(err).Str("agent_id", t.agentID).Msg("reconciler: failed to release compute node resources")
 			}
@@ -119,7 +121,7 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 		log.Warn().Str("task_id", t.taskID).Str("resource_id", t.resourceID).Int("retries", t.retries).Str("action", action).Msg("reconciler: task state changed")
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		log.Error().Err(err).Msg("reconciler: failed to commit reconcile transaction")
 	}
 }

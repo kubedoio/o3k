@@ -3,7 +3,6 @@ package common
 import (
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -124,41 +123,11 @@ func NewNotFoundError(resource string) *OpenStackError {
 	}
 }
 
-// NewResourceNotFoundError creates a detailed not found error with resource type and ID
-func NewResourceNotFoundError(resourceType, resourceID string) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusNotFound,
-		Code:       "itemNotFound",
-		Message:    fmt.Sprintf("%s %s could not be found.", resourceType, resourceID),
-		Details:    fmt.Sprintf("The requested %s does not exist or has been deleted.", resourceType),
-	}
-}
-
 func NewConflictError(message string) *OpenStackError {
 	return &OpenStackError{
 		StatusCode: http.StatusConflict,
 		Code:       "conflict",
 		Message:    message,
-	}
-}
-
-// NewResourceConflictError creates a detailed conflict error
-func NewResourceConflictError(resourceType, resourceName, reason string) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusConflict,
-		Code:       "conflict",
-		Message:    fmt.Sprintf("%s '%s' already exists", resourceType, resourceName),
-		Details:    reason,
-	}
-}
-
-// NewOperationConflictError creates an error for conflicting operations
-func NewOperationConflictError(operation, reason string) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusConflict,
-		Code:       "conflictingRequest",
-		Message:    fmt.Sprintf("Cannot %s", operation),
-		Details:    reason,
 	}
 }
 
@@ -193,36 +162,6 @@ func NewValidationError(field, issue, suggestion string) *OpenStackError {
 	}
 }
 
-// NewMissingFieldError creates an error for missing required fields
-func NewMissingFieldError(fields ...string) *OpenStackError {
-	var fieldList string
-	if len(fields) == 1 {
-		fieldList = fields[0]
-	} else {
-		fieldList = strings.Join(fields, ", ")
-	}
-	return &OpenStackError{
-		StatusCode: http.StatusBadRequest,
-		Code:       "badRequest",
-		Message:    "Missing required field(s)",
-		Details:    fmt.Sprintf("Required field(s) missing: %s", fieldList),
-	}
-}
-
-// NewInvalidValueError creates an error for invalid field values
-func NewInvalidValueError(field, value, allowedValues string) *OpenStackError {
-	details := fmt.Sprintf("Field '%s' has invalid value '%s'", field, value)
-	if allowedValues != "" {
-		details = fmt.Sprintf("%s. Allowed values: %s", details, allowedValues)
-	}
-	return &OpenStackError{
-		StatusCode: http.StatusBadRequest,
-		Code:       "badRequest",
-		Message:    "Invalid field value",
-		Details:    details,
-	}
-}
-
 func NewServiceUnavailableError(message string) *OpenStackError {
 	return &OpenStackError{
 		StatusCode: http.StatusServiceUnavailable,
@@ -245,16 +184,6 @@ func NewDatabaseError(operation, resourceType string, err error) *OpenStackError
 		StatusCode: http.StatusInternalServerError,
 		Code:       "computeFault",
 		Message:    fmt.Sprintf("database error during %s operation on %s", operation, resourceType),
-	}
-}
-
-// NewExternalServiceError creates an error for external service failures
-func NewExternalServiceError(service, operation string, err error) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusServiceUnavailable,
-		Code:       "serviceUnavailable",
-		Message:    fmt.Sprintf("%s service error", service),
-		Details:    fmt.Sprintf("Failed to %s: %v", operation, err),
 	}
 }
 
@@ -289,25 +218,3 @@ func NewInvalidStateError(message string) *OpenStackError {
 		Message:    message,
 	}
 }
-
-// NewResourceStateError creates an error for invalid resource state operations
-func NewResourceStateError(resourceType, resourceID, currentState, requiredState, operation string) *OpenStackError {
-	return &OpenStackError{
-		StatusCode: http.StatusConflict,
-		Code:       "conflictingRequest",
-		Message:    fmt.Sprintf("Cannot %s %s in current state", operation, resourceType),
-		Details:    fmt.Sprintf("%s %s is in state '%s' but operation requires state '%s'", resourceType, resourceID, currentState, requiredState),
-	}
-}
-
-// NewPermissionDeniedError creates an error for permission issues
-func NewPermissionDeniedError(operation, resourceType, requiredRole string) *OpenStackError {
-	details := fmt.Sprintf("Operation '%s' on %s requires role '%s'", operation, resourceType, requiredRole)
-	return &OpenStackError{
-		StatusCode: http.StatusForbidden,
-		Code:       "forbidden",
-		Message:    "Permission denied",
-		Details:    details,
-	}
-}
-

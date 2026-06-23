@@ -1,9 +1,9 @@
 -- Add legacy_auth flag for backward compatibility with pre-bcrypt credentials
 ALTER TABLE application_credentials
-ADD COLUMN IF NOT EXISTS legacy_auth INTEGER DEFAULT 0;
+ADD COLUMN legacy_auth INTEGER DEFAULT 0;
 
 ALTER TABLE application_credentials
-ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT CURRENT_TIMESTAMP;
+ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP;
 
 -- Mark only truly legacy credentials (not already bcrypt-hashed)
 UPDATE application_credentials

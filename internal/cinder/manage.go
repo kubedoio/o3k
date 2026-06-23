@@ -35,7 +35,7 @@ func (svc *Service) ManageVolume(c *gin.Context) {
 	// Default size for managed volumes (would query backend in real implementation)
 	sizeGB := 1
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO volumes (id, name, size_gb, status, project_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, volumeID, req.Volume.Name, sizeGB, "available", projectID, time.Now(), time.Now())
@@ -84,7 +84,7 @@ func (svc *Service) UnmanageVolume(c *gin.Context, volumeID string) {
 	var id uuid.UUID
 	var status string
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT id, status
 		FROM volumes
 		WHERE id = $1 AND project_id = $2
@@ -102,7 +102,7 @@ func (svc *Service) UnmanageVolume(c *gin.Context, volumeID string) {
 	}
 
 	// Remove from database (in real implementation, would leave on backend)
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM volumes WHERE id = $1 AND project_id = $2",
 		volumeID, projectID,
 	)
@@ -136,7 +136,7 @@ func (svc *Service) ManageSnapshot(c *gin.Context) {
 
 	// Verify volume exists
 	var volumeExists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)
 	`, req.Snapshot.VolumeID, projectID).Scan(&volumeExists)
 
@@ -151,7 +151,7 @@ func (svc *Service) ManageSnapshot(c *gin.Context) {
 	// Default size (would query backend in real implementation)
 	sizeGB := 1
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO snapshots (id, name, volume_id, size_gb, status, project_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, snapshotID, req.Snapshot.Name, req.Snapshot.VolumeID, sizeGB, "available", projectID, time.Now(), time.Now())

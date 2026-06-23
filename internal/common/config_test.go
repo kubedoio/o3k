@@ -23,7 +23,6 @@ keystone:
   jwt_secret: "test-secret"
   token_ttl: 24h
   admin_user: "admin"
-  admin_password: "secret"
 
 nova:
   port: 8774
@@ -32,8 +31,6 @@ nova:
 
 neutron:
   port: 9696
-  dhcp_lease_time: 24h
-  iptables_enabled: true
 
 cinder:
   port: 8776
@@ -94,10 +91,6 @@ logging:
 	// Verify neutron config
 	if config.Neutron.Port != 9696 {
 		t.Errorf("Expected neutron port 9696, got %d", config.Neutron.Port)
-	}
-
-	if !config.Neutron.IPTablesEnabled {
-		t.Error("Expected iptables enabled")
 	}
 
 	// Verify cinder config

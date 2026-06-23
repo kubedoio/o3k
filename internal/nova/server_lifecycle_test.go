@@ -19,212 +19,6 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/nova"
 )
 
-// novaDB wraps MockDB and returns pre-seeded responses for the queries that
-// CreateServer and CheckQuota issue. It delegates everything else to MockDB.
-type novaDB struct {
-	*database.MockDB
-	// quotaLimit for "instances", 0 means no quota row (use default of 10).
-	instanceQuotaLimit int
-	hasQuotaRow        bool
-	// instanceCount is the current count returned for quota checks.
-	instanceCount int
-}
-
-// novaSeededRow implements database.Row for returning a known set of values.
-type novaSeededRow struct {
-	values []any
-}
-
-func (r *novaSeededRow) Scan(dest ...any) error {
-	for i, d := range dest {
-		if i >= len(r.values) {
-			break
-		}
-		switch dst := d.(type) {
-		case *string:
-			if s, ok := r.values[i].(string); ok {
-				*dst = s
-			}
-		case *int:
-			if n, ok := r.values[i].(int); ok {
-				*dst = n
-			}
-		}
-	}
-	return nil
-}
-
-func (d *novaDB) QueryRow(_ context.Context, sql string, args ...any) database.Row {
-	switch {
-	case strings.Contains(sql, "FROM flavors"):
-		// Return a valid m1.small flavor.
-		return &novaSeededRow{values: []any{
-			"flavor-m1-small", "m1.small", 1, 512, 10,
-		}}
-	case strings.Contains(sql, "FROM quotas"):
-		// New combined limits query scans (instanceLimit, coreLimit, ramLimit).
-		// When no quota row exists fall through to built-in defaults encoded in the SQL COALESCE.
-		if !d.hasQuotaRow {
-			return &novaSeededRow{values: []any{10, 20, 51200}}
-		}
-		return &novaSeededRow{values: []any{d.instanceQuotaLimit, 20, 51200}}
-	case strings.Contains(sql, "COUNT(*)") && strings.Contains(sql, "FROM instances"):
-		// New combined usage query scans (instanceCount, coreSum, ramSum).
-		return &novaSeededRow{values: []any{d.instanceCount, d.instanceCount, d.instanceCount * 512}}
-	}
-	return &novaErrRow{err: database.ErrNoRows}
-}
-
-// BeginTx returns a transaction whose QueryRow/Exec delegate back to novaDB
-// so that the in-transaction quota queries hit the same seeded responses.
-func (d *novaDB) BeginTx(_ context.Context, _ database.TxOptions) (database.Tx, error) {
-	return &novaDBTx{db: d}, nil
-}
-
-// novaDBTx is a minimal Tx that delegates reads/writes back to novaDB.
-type novaDBTx struct{ db *novaDB }
-
-func (t *novaDBTx) QueryRow(ctx context.Context, sql string, args ...any) database.Row {
-	return t.db.QueryRow(ctx, sql, args...)
-}
-func (t *novaDBTx) Exec(ctx context.Context, sql string, args ...any) (database.Result, error) {
-	return t.db.MockDB.Exec(ctx, sql, args...)
-}
-func (t *novaDBTx) Query(ctx context.Context, sql string, args ...any) (database.Rows, error) {
-	return t.db.MockDB.Query(ctx, sql, args...)
-}
-func (t *novaDBTx) Commit(_ context.Context) error   { return nil }
-func (t *novaDBTx) Rollback(_ context.Context) error { return nil }
-
-// novaErrRow is a database.Row that always returns the given error from Scan.
-type novaErrRow struct{ err error }
-
-func (r *novaErrRow) Scan(dest ...any) error { return r.err }
-
-// novaInstanceRow holds the per-row data returned by novaListDB.
-type novaInstanceRow struct {
-	id     string
-	name   string
-	status string
-}
-
-// novaListDB is a mock DB that returns a configurable list of server rows for
-// FROM-instances queries. It avoids the SQLite single-connection deadlock that
-// would occur when ListServersDetail calls getInstanceAddresses while iterating
-// the main cursor.
-type novaListDB struct {
-	*database.MockDB
-	// rows controls which instances are returned for the main SELECT.
-	rows []novaInstanceRow
-}
-
-// novaListRows is a Rows implementation backed by a []novaInstanceRow slice.
-// It returns the 20 columns ListServersDetail scans.
-type novaListRows struct {
-	rows    []novaInstanceRow
-	current int
-}
-
-func (r *novaListRows) Next() bool {
-	r.current++
-	return r.current <= len(r.rows)
-}
-
-func (r *novaListRows) Scan(dest ...any) error {
-	row := r.rows[r.current-1]
-	now := time.Now()
-	emptyNS := sql.NullString{Valid: false}
-
-	type col struct{ v any }
-	cols := []col{
-		{v: row.id},         // id
-		{v: row.name},       // name
-		{v: row.status},     // status
-		{v: 0},              // power_state
-		{v: "test-project"}, // project_id
-		{v: "test-user"},    // user_id
-		{v: "flavor-m1-small"}, // flavor_id
-		{v: (*string)(nil)}, // image_id
-		{v: now},            // created_at
-		{v: now},            // updated_at
-		{v: (*time.Time)(nil)}, // launched_at
-		{v: 1},              // vcpus
-		{v: 512},            // ram_mb
-		{v: 10},             // disk_gb
-		{v: "m1.small"},     // flavor_name
-		{v: emptyNS},        // host
-		{v: false},          // locked
-		{v: emptyNS},        // task_state
-		{v: emptyNS},        // key_name
-		{v: emptyNS},        // fault_message
-	}
-	for i, d := range dest {
-		if i >= len(cols) {
-			break
-		}
-		switch dst := d.(type) {
-		case *string:
-			if s, ok := cols[i].v.(string); ok {
-				*dst = s
-			}
-		case **string:
-			if s, ok := cols[i].v.(*string); ok {
-				*dst = s
-			}
-		case *int:
-			if n, ok := cols[i].v.(int); ok {
-				*dst = n
-			}
-		case *bool:
-			if b, ok := cols[i].v.(bool); ok {
-				*dst = b
-			}
-		case *time.Time:
-			if t, ok := cols[i].v.(time.Time); ok {
-				*dst = t
-			}
-		case **time.Time:
-			if t, ok := cols[i].v.(*time.Time); ok {
-				*dst = t
-			}
-		case *sql.NullString:
-			if ns, ok := cols[i].v.(sql.NullString); ok {
-				*dst = ns
-			}
-		}
-	}
-	return nil
-}
-
-func (r *novaListRows) Close() {}
-func (r *novaListRows) Err() error { return nil }
-
-func (d *novaListDB) Query(_ context.Context, sqlStr string, args ...any) (database.Rows, error) {
-	if strings.Contains(sqlStr, "FROM instances") {
-		rows := d.rows
-		// The last arg is the LIMIT value — cap the rows slice accordingly.
-		if len(args) > 0 {
-			if lim, ok := args[len(args)-1].(int); ok && lim > 0 && lim < len(rows) {
-				rows = rows[:lim]
-			}
-		}
-		return &novaListRows{rows: rows}, nil
-	}
-	return &emptyNovaRows{}, nil
-}
-
-func (d *novaListDB) QueryRow(ctx context.Context, sqlStr string, args ...any) database.Row {
-	return d.MockDB.QueryRow(ctx, sqlStr, args...)
-}
-func (d *novaListDB) Exec(ctx context.Context, sqlStr string, args ...any) (database.Result, error) {
-	return d.MockDB.Exec(ctx, sqlStr, args...)
-}
-func (d *novaListDB) BeginTx(ctx context.Context, opts database.TxOptions) (database.Tx, error) {
-	return d.MockDB.BeginTx(ctx, opts)
-}
-
-var _ database.DBIF = (*novaListDB)(nil)
-
 // novaGinContext builds a gin context with auth pre-set.
 func novaGinContext(t *testing.T, method, path, body string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
@@ -245,10 +39,62 @@ func createServerBody(name string) string {
 	return fmt.Sprintf(`{"server":{"name":%q,"flavorRef":"flavor-m1-small","imageRef":"img-cirros"}}`, name)
 }
 
+func insertFlavor(t *testing.T, db *sql.DB, id, name string, vcpus, ram, disk int) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(),
+		database.Q(`INSERT INTO flavors (id, name, vcpus, ram_mb, disk_gb, is_public)
+			VALUES ($1, $2, $3, $4, $5, $6)`),
+		id, name, vcpus, ram, disk, true,
+	)
+	require.NoError(t, err)
+}
+
+func insertInstance(t *testing.T, db *sql.DB, id, name, projectID, userID, flavorID, status string) {
+	t.Helper()
+	nowStr := time.Now().Format(time.RFC3339)
+	_, err := db.ExecContext(context.Background(),
+		database.Q(`INSERT INTO instances (id, name, project_id, user_id, flavor_id, status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`),
+		id, name, projectID, userID, flavorID, status, nowStr, nowStr,
+	)
+	require.NoError(t, err)
+}
+
+func insertQuota(t *testing.T, db *sql.DB, projectID, resource string, limit int) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(),
+		database.Q(`INSERT INTO quotas (id, project_id, resource, hard_limit)
+			VALUES ($1, $2, $3, $4)`),
+		fmt.Sprintf("quota-%s-%s", projectID, resource), projectID, resource, limit,
+	)
+	require.NoError(t, err)
+}
+
+func insertNetwork(t *testing.T, db *sql.DB, id, name, projectID string) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(),
+		database.Q(`INSERT INTO networks (id, name, project_id)
+			VALUES ($1, $2, $3)`),
+		id, name, projectID,
+	)
+	require.NoError(t, err)
+}
+
+func insertPort(t *testing.T, db *sql.DB, id, networkID, projectID, deviceID, fixedIPs string) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(),
+		database.Q(`INSERT INTO ports (id, network_id, project_id, device_id, fixed_ips, mac_address)
+			VALUES ($1, $2, $3, $4, $5, $6)`),
+		id, networkID, projectID, deviceID, fixedIPs, "aa:bb:cc:dd:ee:ff",
+	)
+	require.NoError(t, err)
+}
+
 // TestCreateServerReturnsRequiredFields verifies that the server creation
 // response contains all fields required by Terraform.
 func TestCreateServerReturnsRequiredFields(t *testing.T) {
-	db := &novaDB{MockDB: database.NewMockDB()}
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
 	svc := nova.NewServiceWithDB(db, "stub")
 	c, w := novaGinContext(t, http.MethodPost, "/v2.1/servers", createServerBody("tf-test-vm"))
 
@@ -272,17 +118,17 @@ func TestCreateServerReturnsRequiredFields(t *testing.T) {
 }
 
 // TestListServersDetailPagination verifies that listing with limit=2 returns
-// exactly 2 entries plus a next-page link when the mock has 5 servers.
+// exactly 2 entries plus a next-page link when the database has 5 servers.
 func TestListServersDetailPagination(t *testing.T) {
-	instances := make([]novaInstanceRow, 5)
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
 	for i := range 5 {
-		instances[i] = novaInstanceRow{
-			id:     fmt.Sprintf("inst-%03d", i),
-			name:   fmt.Sprintf("pag-vm-%d", i),
-			status: "ACTIVE",
-		}
+		insertInstance(t, db,
+			fmt.Sprintf("inst-%03d", i),
+			fmt.Sprintf("pag-vm-%d", i),
+			"test-project", "test-user", "flavor-m1-small", "ACTIVE",
+		)
 	}
-	db := &novaListDB{MockDB: database.NewMockDB(), rows: instances}
 	svc := nova.NewServiceWithDB(db, "stub")
 
 	gin.SetMode(gin.TestMode)
@@ -294,7 +140,7 @@ func TestListServersDetailPagination(t *testing.T) {
 	c.Set("roles", []string{"member"})
 
 	svc.ListServersDetail(c)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -307,15 +153,11 @@ func TestListServersDetailPagination(t *testing.T) {
 
 // TestListServersFilterByStatus verifies that ?status=ACTIVE filters correctly.
 func TestListServersFilterByStatus(t *testing.T) {
-	// The mock returns all rows regardless of status — the service applies the
-	// filter via SQL. To test filtering without SQLite, we provide only the
-	// ACTIVE row; the service receives exactly one row and returns it.
-	db := &novaListDB{
-		MockDB: database.NewMockDB(),
-		rows: []novaInstanceRow{
-			{id: "inst-active", name: "active-vm", status: "ACTIVE"},
-		},
-	}
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertInstance(t, db, "inst-active", "active-vm", "test-project", "test-user", "flavor-m1-small", "ACTIVE")
+	insertInstance(t, db, "inst-build", "build-vm", "test-project", "test-user", "flavor-m1-small", "BUILD")
+
 	svc := nova.NewServiceWithDB(db, "stub")
 
 	gin.SetMode(gin.TestMode)
@@ -327,7 +169,7 @@ func TestListServersFilterByStatus(t *testing.T) {
 	c.Set("roles", []string{"member"})
 
 	svc.ListServers(c)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -340,11 +182,14 @@ func TestListServersFilterByStatus(t *testing.T) {
 }
 
 // TestGetServerIncludesAddresses verifies that the server detail response
-// includes an "addresses" key.  We use a custom DB mock to avoid the
-// single-connection SQLite deadlock that occurs when ListServersDetail holds
-// a rows cursor and calls getInstanceAddresses (nested query) in the loop.
+// includes an "addresses" key populated from the ports table.
 func TestGetServerIncludesAddresses(t *testing.T) {
-	db := &novaAddressesDB{MockDB: database.NewMockDB()}
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertNetwork(t, db, "net-1", "test-net", "test-project")
+	insertInstance(t, db, "inst-addr", "addr-vm", "test-project", "test-user", "flavor-m1-small", "ACTIVE")
+	insertPort(t, db, "port-1", "net-1", "test-project", "inst-addr", `[{"ip_address":"10.0.0.2"}]`)
+
 	svc := nova.NewServiceWithDB(db, "stub")
 
 	gin.SetMode(gin.TestMode)
@@ -365,139 +210,19 @@ func TestGetServerIncludesAddresses(t *testing.T) {
 	require.NotEmpty(t, servers)
 	server := servers[0].(map[string]interface{})
 	assert.Contains(t, server, "addresses", "server detail must include 'addresses' key")
-}
-
-// novaAddressesDB is a mock that returns one server row for the
-// ListServersDetail query and empty rows for everything else (ports, SGs).
-type novaAddressesDB struct {
-	*database.MockDB
-}
-
-// novaServerRows is a single-row Rows implementation that returns the 20
-// columns ListServersDetail scans from its main JOIN query.
-type novaServerRows struct {
-	served bool
-}
-
-func (r *novaServerRows) Next() bool {
-	if r.served {
-		return false
-	}
-	r.served = true
-	return true
-}
-
-func (r *novaServerRows) Scan(dest ...any) error {
-	// Column order matches ListServersDetail SELECT:
-	// id, name, status, power_state, project_id, user_id,
-	// flavor_id, image_id(*string), created_at, updated_at, launched_at(*time.Time),
-	// vcpus, ram_mb, disk_gb, flavor_name, host(sql.NullString), locked(bool),
-	// task_state(sql.NullString), key_name(sql.NullString), fault_message(sql.NullString)
-	now := time.Now()
-	emptyNS := sql.NullString{Valid: false}
-
-	type col struct{ v any }
-	cols := []col{
-		{v: "inst-addr"},    // id
-		{v: "addr-vm"},      // name
-		{v: "ACTIVE"},       // status
-		{v: 1},              // power_state
-		{v: "test-project"}, // project_id
-		{v: "test-user"},    // user_id
-		{v: "flv-1"},        // flavor_id
-		{v: (*string)(nil)}, // image_id
-		{v: now},            // created_at
-		{v: now},            // updated_at
-		{v: (*time.Time)(nil)}, // launched_at
-		{v: 1},              // vcpus
-		{v: 512},            // ram_mb
-		{v: 10},             // disk_gb
-		{v: "m1.small"},     // flavor_name
-		{v: emptyNS},        // host
-		{v: false},          // locked
-		{v: emptyNS},        // task_state
-		{v: emptyNS},        // key_name
-		{v: emptyNS},        // fault_message
-	}
-	for i, d := range dest {
-		if i >= len(cols) {
-			break
-		}
-		switch dst := d.(type) {
-		case *string:
-			if s, ok := cols[i].v.(string); ok {
-				*dst = s
-			}
-		case **string:
-			if s, ok := cols[i].v.(*string); ok {
-				*dst = s
-			}
-		case *int:
-			if n, ok := cols[i].v.(int); ok {
-				*dst = n
-			}
-		case *bool:
-			if b, ok := cols[i].v.(bool); ok {
-				*dst = b
-			}
-		case *time.Time:
-			if t, ok := cols[i].v.(time.Time); ok {
-				*dst = t
-			}
-		case **time.Time:
-			if t, ok := cols[i].v.(*time.Time); ok {
-				*dst = t
-			}
-		case *sql.NullString:
-			if ns, ok := cols[i].v.(sql.NullString); ok {
-				*dst = ns
-			}
-		}
-	}
-	return nil
-}
-
-func (r *novaServerRows) Close() {}
-func (r *novaServerRows) Err() error { return nil }
-
-func (d *novaAddressesDB) Query(_ context.Context, sql string, args ...any) (database.Rows, error) {
-	if strings.Contains(sql, "FROM instances") {
-		return &novaServerRows{}, nil
-	}
-	// ports, security_groups queries — return empty
-	return &emptyNovaRows{}, nil
-}
-
-// emptyNovaRows implements database.Rows returning no results.
-type emptyNovaRows struct{}
-
-func (r *emptyNovaRows) Next() bool             { return false }
-func (r *emptyNovaRows) Scan(dest ...any) error { return nil }
-func (r *emptyNovaRows) Close()                {}
-func (r *emptyNovaRows) Err() error            { return nil }
-
-// Compile-time interface check.
-var _ database.DBIF = (*novaAddressesDB)(nil)
-
-func (d *novaAddressesDB) Exec(ctx context.Context, sql string, args ...any) (database.Result, error) {
-	return d.MockDB.Exec(ctx, sql, args...)
-}
-func (d *novaAddressesDB) QueryRow(ctx context.Context, sql string, args ...any) database.Row {
-	return d.MockDB.QueryRow(ctx, sql, args...)
-}
-func (d *novaAddressesDB) BeginTx(ctx context.Context, opts database.TxOptions) (database.Tx, error) {
-	return d.MockDB.BeginTx(ctx, opts)
+	addresses, ok := server["addresses"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Contains(t, addresses, "test-net")
 }
 
 // TestQuotaBlocksExcessCreation verifies that creating a server when the
 // instance quota is already at its limit returns 413.
 func TestQuotaBlocksExcessCreation(t *testing.T) {
-	db := &novaDB{
-		MockDB:             database.NewMockDB(),
-		hasQuotaRow:        true,
-		instanceQuotaLimit: 1,
-		instanceCount:      1, // already at limit
-	}
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertQuota(t, db, "test-project", "instances", 1)
+	insertInstance(t, db, "inst-existing", "existing-vm", "test-project", "test-user", "flavor-m1-small", "ACTIVE")
+
 	svc := nova.NewServiceWithDB(db, "stub")
 
 	c, w := novaGinContext(t, http.MethodPost, "/v2.1/servers", createServerBody("quota-vm"))

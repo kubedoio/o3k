@@ -1,10 +1,12 @@
 package tunnel
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	pb "github.com/cobaltcore-dev/o3k/proto/tunnel"
 	"google.golang.org/grpc"
@@ -137,11 +139,95 @@ func (h *Hub) PickAgent() *AgentInfo {
 	return nil
 }
 
+// Dispatch validates the task and sends it to an available agent via its gRPC stream.
+func (h *Hub) Dispatch(task Task) error {
+	if err := task.Validate(); err != nil {
+		return fmt.Errorf("invalid task: %w", err)
+	}
+
+	agent := h.PickAgent()
+	if agent == nil {
+		return fmt.Errorf("no agents connected")
+	}
+
+	if agent.Stream == nil {
+		return fmt.Errorf("agent %s has no active stream", agent.NodeID)
+	}
+
+	msg := &pb.ServerMessage{
+		Payload: &pb.ServerMessage_Task{
+			Task: &pb.TaskMsg{
+				TaskId:   task.ID,
+				TaskType: task.Type,
+				Payload:  task.Payload,
+			},
+		},
+	}
+	if err := agent.SafeSend(msg); err != nil {
+		return fmt.Errorf("failed to send task to agent %s: %w", agent.NodeID, err)
+	}
+	return nil
+}
+
 // GetAgent returns the agent with the given nodeID, or nil if not connected.
 func (h *Hub) GetAgent(nodeID string) *AgentInfo {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.agents[nodeID]
+}
+
+// defaultTaskTimeout is the maximum time DispatchSync will wait for a task result
+// when the caller's context carries no deadline of its own.
+const defaultTaskTimeout = 5 * time.Minute
+
+// DispatchSync routes the task to the agent identified by agentID, validates it,
+// sends it via the tunnel stream, and blocks until a TaskResult arrives or the
+// context is cancelled. A safety-net timeout is applied when the incoming
+// context carries no deadline, preventing tasks from blocking indefinitely if
+// an agent crashes.
+func (h *Hub) DispatchSync(ctx context.Context, agentID string, taskType string, payload []byte, timeoutSec int) ([]byte, string, error) {
+	agent := h.GetAgent(agentID)
+	if agent == nil {
+		return nil, "", fmt.Errorf("agent %s not connected", agentID)
+	}
+	if agent.Stream == nil {
+		return nil, "", fmt.Errorf("agent %s has no active stream", agent.NodeID)
+	}
+	if !h.TryAcquireInflight(agent.NodeID) {
+		return nil, "", fmt.Errorf("agent %s busy", agent.NodeID)
+	}
+
+	task := Task{Type: taskType, Payload: payload}
+	if err := task.Validate(); err != nil {
+		h.ReleaseInflight(agent.NodeID)
+		return nil, "", err
+	}
+
+	resultCh := h.RegisterResultChan(task.ID)
+
+	if err := agent.SendTask(task); err != nil {
+		h.ReleaseInflight(agent.NodeID)
+		return nil, err.Error(), err
+	}
+
+	waitCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, defaultTaskTimeout)
+		defer cancel()
+	}
+
+	select {
+	case result := <-resultCh:
+		if result.Error != "" {
+			return nil, result.Error, nil
+		}
+		return result.Result, "", nil
+	case <-waitCtx.Done():
+		h.ReleaseInflight(agent.NodeID)
+		h.UnregisterResultChan(task.ID)
+		return nil, "", waitCtx.Err()
+	}
 }
 
 // VerifyJoin reports whether the given tokenHash is valid for nodeID.

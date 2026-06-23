@@ -31,7 +31,7 @@ func BenchmarkDatabaseQuery(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			var count int
-			database.DB.QueryRow(ctx, "SELECT COUNT(*) FROM flavors").Scan(&count)
+			database.DB.QueryRowContext(ctx, database.Q("SELECT COUNT(*) FROM flavors")).Scan(&count)
 		}
 	})
 }
@@ -58,8 +58,8 @@ func BenchmarkDatabaseQueryRow(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			var id, name string
-			database.DB.QueryRow(ctx,
-				"SELECT id, name FROM flavors LIMIT 1",
+			database.DB.QueryRowContext(ctx,
+				database.Q("SELECT id, name FROM flavors LIMIT 1"),
 			).Scan(&id, &name)
 		}
 	})
@@ -86,12 +86,12 @@ func BenchmarkDatabaseJoinQuery(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			rows, _ := database.DB.Query(ctx, `
+			rows, _ := database.DB.QueryContext(ctx, database.Q(`
 				SELECT s.id, s.name, s.network_id, n.name as network_name
 				FROM subnets s
 				JOIN networks n ON s.network_id = n.id
 				LIMIT 10
-			`)
+			`))
 			if rows != nil {
 				rows.Close()
 			}
@@ -122,7 +122,7 @@ func BenchmarkConnectionPoolUtilization(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				var count int
-				database.DB.QueryRow(ctx, "SELECT COUNT(*) FROM images").Scan(&count)
+				database.DB.QueryRowContext(ctx, database.Q("SELECT COUNT(*) FROM images")).Scan(&count)
 			}
 		})
 	})
@@ -132,7 +132,7 @@ func BenchmarkConnectionPoolUtilization(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				var count int
-				database.DB.QueryRow(ctx, "SELECT COUNT(*) FROM images").Scan(&count)
+				database.DB.QueryRowContext(ctx, database.Q("SELECT COUNT(*) FROM images")).Scan(&count)
 			}
 		})
 	})
@@ -159,10 +159,10 @@ func BenchmarkDatabaseInsert(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Insert test flavor (will fail on duplicate, that's ok for benchmark)
-		database.DB.Exec(ctx, `
+		database.DB.ExecContext(ctx, database.Q(`
 			INSERT INTO flavors (id, name, vcpus, ram_mb, disk_gb, is_public)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (id) DO NOTHING
-		`, "bench-"+string(rune(i)), "bench.flavor", 1, 1024, 10, true)
+		`), "bench-"+string(rune(i)), "bench.flavor", 1, 1024, 10, true)
 	}
 }

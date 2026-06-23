@@ -16,9 +16,17 @@ func TestImageSpecs_ManifestLoads(t *testing.T) {
 		t.Fatal("expected non-empty SCS-0104 image manifest")
 	}
 
-	// Ubuntu 22.04 is the one mandatory image in v1 of the standard.
-	ubuntu, ok := specs.Lookup("Ubuntu 22.04")
-	if !ok {
+	var ubuntu, capi scs.ImageSpec
+	for _, s := range specs {
+		if s.Name == "Ubuntu 22.04" {
+			ubuntu = s
+		}
+		if s.Name == "ubuntu-capi-image" {
+			capi = s
+		}
+	}
+
+	if ubuntu.Name == "" {
 		t.Fatal("Ubuntu 22.04 must be in the SCS-0104 manifest")
 	}
 	if ubuntu.Status != scs.ImageStatusMandatory {
@@ -35,9 +43,7 @@ func TestImageSpecs_ManifestLoads(t *testing.T) {
 		t.Errorf("Ubuntu 22.04 sources missing %q; got %v", wantPrefix, ubuntu.Sources)
 	}
 
-	// ubuntu-capi-image is the recommended class — addressed by name_scheme.
-	capi, ok := specs.Lookup("ubuntu-capi-image")
-	if !ok {
+	if capi.Name == "" {
 		t.Fatal("ubuntu-capi-image must be in the SCS-0104 manifest")
 	}
 	if capi.Status != scs.ImageStatusRecommended {
@@ -119,47 +125,5 @@ func TestValidateImageSource_EmptySource_KnownName(t *testing.T) {
 func TestValidateImageSource_EmptySource_UnknownName(t *testing.T) {
 	if err := scs.ValidateImageSource("my-custom-image", ""); err != nil {
 		t.Errorf("expected unknown name with empty source to pass through, got %v", err)
-	}
-}
-
-// TestImageSpecs_ConformanceCheck: given a hypothetical Glance catalog, the
-// CheckCatalog function reports which mandatory images are missing and which
-// present images have bad sources. This is the operator-facing summary view.
-func TestImageSpecs_ConformanceCheck(t *testing.T) {
-	specs := scs.ImageSpecs()
-
-	// Catalog with: Ubuntu 22.04 with valid source, Debian 12 with bad source,
-	// nothing else. Mandatory check: Ubuntu 22.04 ✓ (it's the only mandatory
-	// in v1). Source check: Debian 12 fails.
-	catalog := []scs.CatalogImage{
-		{Name: "Ubuntu 22.04", Source: "https://cloud-images.ubuntu.com/jammy/jammy-server-cloudimg-amd64.img"},
-		{Name: "Debian 12", Source: "https://example.org/wrong.qcow2"},
-	}
-
-	report := specs.CheckCatalog(catalog)
-	if len(report.MissingMandatory) != 0 {
-		t.Errorf("expected no missing mandatory images, got %v", report.MissingMandatory)
-	}
-	if len(report.BadSources) != 1 {
-		t.Fatalf("expected 1 bad-source finding, got %d: %v", len(report.BadSources), report.BadSources)
-	}
-	if report.BadSources[0].Name != "Debian 12" {
-		t.Errorf("bad-source finding should be Debian 12, got %q", report.BadSources[0].Name)
-	}
-}
-
-// TestImageSpecs_ConformanceCheck_MissingMandatory: an empty catalog must
-// flag Ubuntu 22.04 as missing.
-func TestImageSpecs_ConformanceCheck_MissingMandatory(t *testing.T) {
-	specs := scs.ImageSpecs()
-	report := specs.CheckCatalog(nil)
-	found := false
-	for _, m := range report.MissingMandatory {
-		if m == "Ubuntu 22.04" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected Ubuntu 22.04 in MissingMandatory; got %v", report.MissingMandatory)
 	}
 }

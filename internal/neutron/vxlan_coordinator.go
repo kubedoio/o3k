@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/compute"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
@@ -16,7 +18,7 @@ type VXLANCoordinator struct {
 	vxlanManager  *networking.VXLANManager
 	nodeRegistry  *compute.NodeRegistry
 	nsManager     *networking.NetworkNamespaceManager
-	db            database.DBIF
+	db            *sql.DB
 	pollInterval  time.Duration
 	vniRangeStart int
 	vniRangeEnd   int
@@ -47,7 +49,7 @@ func NewVXLANCoordinator(
 }
 
 // activeDB returns the injected DB or falls back to the global database.DB
-func (vc *VXLANCoordinator) activeDB() database.DBIF {
+func (vc *VXLANCoordinator) activeDB() *sql.DB {
 	if vc.db != nil {
 		return vc.db
 	}
@@ -84,12 +86,12 @@ func (vc *VXLANCoordinator) Stop() {
 // syncNetworks ensures all VXLAN networks exist on this node
 func (vc *VXLANCoordinator) syncNetworks(ctx context.Context) {
 	// Get all networks that need VXLAN
-	rows, err := vc.activeDB().Query(ctx, `
+	rows, err := vc.activeDB().QueryContext(ctx, database.Q(`
 		SELECT n.id, n.name, n.project_id, v.vni
 		FROM networks n
 		LEFT JOIN network_vni_allocations v ON n.id = v.network_id
 		WHERE n.network_type = 'vxlan'
-	`)
+	`))
 
 	if err != nil {
 		log.Error().Err(err).Msg("failed to query networks")
@@ -145,10 +147,10 @@ func (vc *VXLANCoordinator) syncPorts(ctx context.Context) {
 	}
 
 	// Get all FDB entries from database
-	rows, err := vc.activeDB().Query(ctx, `
+	rows, err := vc.activeDB().QueryContext(ctx, database.Q(`
 		SELECT network_id, mac_address, vtep_ip
 		FROM vxlan_fdb_entries
-	`)
+	`))
 
 	if err != nil {
 		log.Error().Err(err).Msg("failed to query FDB entries")
@@ -199,17 +201,17 @@ func (vc *VXLANCoordinator) syncPorts(ctx context.Context) {
 func (vc *VXLANCoordinator) allocateVNI(ctx context.Context, networkID string) (int, error) {
 	// Try to allocate a VNI atomically using ON CONFLICT
 	for vni := vc.vniRangeStart; vni <= vc.vniRangeEnd; vni++ {
-		result, err := vc.activeDB().Exec(ctx, `
+		result, err := vc.activeDB().ExecContext(ctx, database.Q(`
 			INSERT INTO network_vni_allocations (network_id, vni)
 			VALUES ($1, $2)
 			ON CONFLICT (vni) DO NOTHING
-		`, networkID, vni)
+		`), networkID, vni)
 
 		if err != nil {
 			continue
 		}
 
-		rowsAffected := result.RowsAffected()
+		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected > 0 {
 			return vni, nil
 		}
@@ -224,7 +226,7 @@ func (vc *VXLANCoordinator) DistributeFDBEntry(ctx context.Context, networkID, p
 	localIP := vc.nodeRegistry.GetTunnelIP()
 	now := time.Now()
 
-	_, err := vc.activeDB().Exec(ctx, `
+	_, err := vc.activeDB().ExecContext(ctx, database.Q(`
 		INSERT INTO vxlan_fdb_entries (network_id, mac_address, vtep_ip, port_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (network_id, mac_address)
@@ -232,7 +234,7 @@ func (vc *VXLANCoordinator) DistributeFDBEntry(ctx context.Context, networkID, p
 			vtep_ip = EXCLUDED.vtep_ip,
 			port_id = EXCLUDED.port_id,
 			updated_at = EXCLUDED.updated_at
-	`, networkID, macAddress, localIP, portID, now, now)
+	`), networkID, macAddress, localIP, portID, now, now)
 
 	return err
 }
@@ -240,10 +242,10 @@ func (vc *VXLANCoordinator) DistributeFDBEntry(ctx context.Context, networkID, p
 // RemoveFDBEntry removes an FDB entry from the database
 // This should be called when a port is deleted
 func (vc *VXLANCoordinator) RemoveFDBEntry(ctx context.Context, portID string) error {
-	_, err := vc.activeDB().Exec(ctx, `
+	_, err := vc.activeDB().ExecContext(ctx, database.Q(`
 		DELETE FROM vxlan_fdb_entries
 		WHERE port_id = $1
-	`, portID)
+	`), portID)
 
 	return err
 }
@@ -252,9 +254,9 @@ func (vc *VXLANCoordinator) RemoveFDBEntry(ctx context.Context, portID string) e
 func (vc *VXLANCoordinator) GetVNI(ctx context.Context, networkID string) (int, error) {
 	// Try to get existing VNI
 	var vni int
-	err := vc.activeDB().QueryRow(ctx, `
+	err := vc.activeDB().QueryRowContext(ctx, database.Q(`
 		SELECT vni FROM network_vni_allocations WHERE network_id = $1
-	`, networkID).Scan(&vni)
+	`), networkID).Scan(&vni)
 
 	if err == nil {
 		return vni, nil

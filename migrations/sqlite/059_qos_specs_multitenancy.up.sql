@@ -1,5 +1,5 @@
 -- Add project_id column for multi-tenancy support
-ALTER TABLE qos_specs ADD COLUMN IF NOT EXISTS project_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002';
+ALTER TABLE qos_specs ADD COLUMN project_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002';
 
 -- Drop old unique constraint on name
 -- SQLite does not support DROP CONSTRAINT; the unique index must be dropped instead
@@ -12,4 +12,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS qos_specs_name_project_unique ON qos_specs (na
 CREATE INDEX IF NOT EXISTS idx_qos_specs_project_id ON qos_specs(project_id);
 
 -- Add updated_at column
-ALTER TABLE qos_specs ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE qos_specs ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;

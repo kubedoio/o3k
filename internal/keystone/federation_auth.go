@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/golang-jwt/jwt/v5"
@@ -120,8 +122,8 @@ func (s *AuthService) resolveFederatedUser(ctx context.Context, id *FederatedIde
 	uid := deterministicUUID(id.Issuer, id.Subject)
 
 	var user database.User
-	err := s.activeDB().QueryRow(ctx,
-		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1",
+	err := s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1"),
 		uid,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
 
@@ -131,7 +133,7 @@ func (s *AuthService) resolveFederatedUser(ctx context.Context, id *FederatedIde
 		}
 		return &user, nil
 	}
-	if !errors.Is(err, database.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("database error looking up federated user: %w", err)
 	}
 
@@ -151,8 +153,8 @@ func (s *AuthService) resolveFederatedUser(ctx context.Context, id *FederatedIde
 
 	// Resolve domain — federated users land in "Default" for v1.
 	var domainID string
-	if err := s.activeDB().QueryRow(ctx,
-		"SELECT id FROM domains WHERE name = $1", "Default",
+	if err := s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id FROM domains WHERE name = $1"), "Default",
 	).Scan(&domainID); err != nil {
 		return nil, fmt.Errorf("federated JIT: failed to resolve Default domain: %w", err)
 	}
@@ -160,10 +162,10 @@ func (s *AuthService) resolveFederatedUser(ctx context.Context, id *FederatedIde
 	// password_hash is set to a sentinel that can never match a bcrypt
 	// check ("!" prefix is invalid bcrypt), so federated users cannot
 	// fall back to password authentication.
-	_, err = s.activeDB().Exec(ctx, `
+	_, err = s.activeDB().ExecContext(ctx, database.Q(`
 		INSERT INTO users (id, name, password_hash, enabled, domain_id)
 		VALUES ($1, $2, $3, $4, $5)
-	`, uid, username, "!federated", true, domainID)
+	`), uid, username, "!federated", true, domainID)
 	if err != nil {
 		return nil, fmt.Errorf("federated JIT: failed to create user: %w", err)
 	}
@@ -210,10 +212,10 @@ func (s *AuthService) resolveFederatedScope(
 		query = "SELECT id, name, description, enabled, domain_id FROM projects WHERE name = $1"
 		params = []interface{}{projectName}
 	}
-	err := s.activeDB().QueryRow(ctx, query, params...).Scan(
+	err := s.activeDB().QueryRowContext(ctx, query, params...).Scan(
 		&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 	)
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, nil, common.NewUnauthorizedError("project not found")
 	}
 	if err != nil {
@@ -233,12 +235,12 @@ func (s *AuthService) resolveFederatedScope(
 		}
 	}
 
-	rows, err := s.activeDB().Query(ctx, `
+	rows, err := s.activeDB().QueryContext(ctx, database.Q(`
 		SELECT r.name
 		FROM role_assignments ra
 		JOIN roles r ON ra.role_id = r.id
 		WHERE ra.user_id = $1 AND ra.project_id = $2
-	`, user.ID, proj.ID)
+	`), user.ID, proj.ID)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("federated scope: role fetch failed: %w", err)
 	}
@@ -267,10 +269,10 @@ func (s *AuthService) resolveFederatedScope(
 // Idempotent: calling twice for the same (user, project) is a no-op.
 func (s *AuthService) ensureFederatedDefaultRole(ctx context.Context, userID, projectID, roleName string) error {
 	var roleID string
-	err := s.activeDB().QueryRow(ctx,
-		"SELECT id FROM roles WHERE name = $1", roleName,
+	err := s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id FROM roles WHERE name = $1"), roleName,
 	).Scan(&roleID)
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("federated default role %q does not exist", roleName)
 	}
 	if err != nil {
@@ -278,22 +280,22 @@ func (s *AuthService) ensureFederatedDefaultRole(ctx context.Context, userID, pr
 	}
 
 	var existing string
-	err = s.activeDB().QueryRow(ctx, `
+	err = s.activeDB().QueryRowContext(ctx, database.Q(`
 		SELECT id FROM role_assignments
 		WHERE user_id = $1 AND project_id = $2 AND role_id = $3
-	`, userID, projectID, roleID).Scan(&existing)
+	`), userID, projectID, roleID).Scan(&existing)
 	if err == nil {
 		return nil // already assigned
 	}
-	if !errors.Is(err, database.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("federated default role: existence check failed: %w", err)
 	}
 
 	assignmentID := deterministicUUID(userID, projectID, roleID)
-	if _, err := s.activeDB().Exec(ctx, `
+	if _, err := s.activeDB().ExecContext(ctx, database.Q(`
 		INSERT INTO role_assignments (id, user_id, project_id, role_id)
 		VALUES ($1, $2, $3, $4)
-	`, assignmentID, userID, projectID, roleID); err != nil {
+	`), assignmentID, userID, projectID, roleID); err != nil {
 		return fmt.Errorf("federated default role assignment: %w", err)
 	}
 	return nil
@@ -318,8 +320,8 @@ func (s *AuthService) buildFederatedResponse(
 	resp.Token.IsDomain = false
 
 	var userDomainName string
-	if err := s.activeDB().QueryRow(ctx,
-		"SELECT name FROM domains WHERE id = $1", user.DomainID,
+	if err := s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT name FROM domains WHERE id = $1"), user.DomainID,
 	).Scan(&userDomainName); err != nil {
 		userDomainName = "Default"
 	}
@@ -334,8 +336,8 @@ func (s *AuthService) buildFederatedResponse(
 
 	if projectID != "" && project != nil {
 		var projectDomainName string
-		if err := s.activeDB().QueryRow(ctx,
-			"SELECT name FROM domains WHERE id = $1", project.DomainID,
+		if err := s.activeDB().QueryRowContext(ctx,
+			database.Q("SELECT name FROM domains WHERE id = $1"), project.DomainID,
 		).Scan(&projectDomainName); err != nil {
 			projectDomainName = "Default"
 		}
@@ -350,8 +352,8 @@ func (s *AuthService) buildFederatedResponse(
 		}
 		for _, roleName := range roles {
 			var roleID string
-			_ = s.activeDB().QueryRow(ctx,
-				"SELECT id FROM roles WHERE name = $1", roleName,
+			_ = s.activeDB().QueryRowContext(ctx,
+				database.Q("SELECT id FROM roles WHERE name = $1"), roleName,
 			).Scan(&roleID)
 			if roleID == "" {
 				roleID = roleName

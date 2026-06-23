@@ -28,14 +28,14 @@ import (
 
 // Service handles Nova API endpoints
 type Service struct {
-	db             database.DBIF
+	db             *sql.DB
 	libvirtURI     string
 	libvirtMode    string
 	NoVNCProxyHost string // Configured noVNC proxy hostname; falls back to request Host if empty
 	vmManager      *hypervisor.VMManager
 	cache          *cache.Cache
-	neutronSvc     NeutronService // For port allocation
-	dispatcher     *tunnel.Dispatcher
+	neutronSvc     *neutron.Service // For port allocation
+	dispatcher     *tunnel.Hub
 	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -49,13 +49,6 @@ const (
 	novaMinVersion     = "2.1"
 	novaCurrentVersion = "2.93"
 )
-
-// NeutronService defines the interface for Neutron operations Nova needs
-type NeutronService interface {
-	AllocatePortForInstance(ctx context.Context, networkID, projectID, instanceID string) (interface{}, error)
-	BindPort(portID, mac, ip, networkID, hostname string) error
-	UnbindPort(portID, mac, networkID string) error
-}
 
 // NewService creates a new Nova service
 func NewService(libvirtURI, libvirtMode string, cacheInstance *cache.Cache) *Service {
@@ -71,7 +64,7 @@ func NewService(libvirtURI, libvirtMode string, cacheInstance *cache.Cache) *Ser
 }
 
 // NewServiceWithDB creates a Nova service with an injected DB for testing.
-func NewServiceWithDB(db database.DBIF, libvirtMode string) *Service {
+func NewServiceWithDB(db *sql.DB, libvirtMode string) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		db:          db,
@@ -82,7 +75,7 @@ func NewServiceWithDB(db database.DBIF, libvirtMode string) *Service {
 }
 
 // activeDB returns the injected DB or falls back to the global.
-func (svc *Service) activeDB() database.DBIF {
+func (svc *Service) activeDB() *sql.DB {
 	if svc.db != nil {
 		return svc.db
 	}
@@ -96,12 +89,12 @@ func (svc *Service) Shutdown() {
 }
 
 // SetNeutronService sets the Neutron service reference (called after both services are created)
-func (svc *Service) SetNeutronService(neutron NeutronService) {
+func (svc *Service) SetNeutronService(neutron *neutron.Service) {
 	svc.neutronSvc = neutron
 }
 
-// SetDispatcher wires the tunnel Dispatcher for async task dispatch.
-func (svc *Service) SetDispatcher(d *tunnel.Dispatcher) {
+// SetDispatcher wires the tunnel Hub for async task dispatch.
+func (svc *Service) SetDispatcher(d *tunnel.Hub) {
 	svc.dispatcher = d
 }
 
@@ -307,13 +300,13 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	// Fetch flavor (support lookup by UUID or name)
 	var flavor database.Flavor
 	queryStart := time.Now()
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id, name, vcpus, ram_mb, disk_gb FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT id, name, vcpus, ram_mb, disk_gb FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1"),
 		req.Server.FlavorRef,
 	).Scan(&flavor.ID, &flavor.Name, &flavor.VCPUs, &flavor.RAMMB, &flavor.DiskGB)
 	middleware.LogDatabaseQuery(c, "SELECT flavor", time.Since(queryStart), err)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		logger.Warn().Str("flavor_ref", req.Server.FlavorRef).Msg("Flavor not found")
 		middleware.LogOperationEnd(c, "create", "server", req.Server.Name, time.Since(start), err)
 		common.SendError(c, common.NewNotFoundError("flavor"))
@@ -330,22 +323,22 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	// Atomic quota check + INSERT: serializable transaction prevents TOCTOU
 	// races across multiple replicas. The in-process mutex is no longer needed
 	// on this path.
-	tx, err := svc.activeDB().BeginTx(c.Request.Context(), database.TxOptions{IsoLevel: "serializable"})
+	tx, err := svc.activeDB().BeginTx(c.Request.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		log.Error().Err(err).Str("operation", "begin_tx").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to begin transaction"))
 		return
 	}
-	defer tx.Rollback(c.Request.Context()) //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck
 
 	// Check current usage for all three resources in one query.
 	var instanceCount, coreSum, ramSum int
 	queryStart = time.Now()
-	if err := tx.QueryRow(c.Request.Context(), `
+	if err := tx.QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT COUNT(*), COALESCE(SUM(f.vcpus), 0), COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i LEFT JOIN flavors f ON i.flavor_id = f.id
 		WHERE i.project_id = $1 AND i.status NOT IN ('DELETED', 'SOFT_DELETED', 'ERROR')
-	`, projectID).Scan(&instanceCount, &coreSum, &ramSum); err != nil {
+	`), projectID).Scan(&instanceCount, &coreSum, &ramSum); err != nil {
 		log.Error().Err(err).Str("operation", "quota_usage").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to check quota usage"))
 		return
@@ -355,13 +348,13 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	// Fetch per-project limits (fall back to built-in defaults if not set).
 	var instanceLimit, coreLimit, ramLimit int
 	queryStart = time.Now()
-	if err := tx.QueryRow(c.Request.Context(), `
+	if err := tx.QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT
 			COALESCE(MAX(CASE WHEN resource='instances' THEN hard_limit END), 10),
 			COALESCE(MAX(CASE WHEN resource='cores'     THEN hard_limit END), 20),
 			COALESCE(MAX(CASE WHEN resource='ram'       THEN hard_limit END), 51200)
 		FROM quotas WHERE project_id = $1 AND resource IN ('instances','cores','ram')
-	`, projectID).Scan(&instanceLimit, &coreLimit, &ramLimit); err != nil {
+	`), projectID).Scan(&instanceLimit, &coreLimit, &ramLimit); err != nil {
 		log.Error().Err(err).Str("operation", "quota_limits").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to check quota limits"))
 		return
@@ -386,6 +379,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Create instance record in database
 	now := time.Now()
+	nowStr := now.Format(time.RFC3339)
 
 	// Handle NULL image_id (for volume-backed instances)
 	var imageID interface{}
@@ -400,10 +394,10 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		keyNameValue = req.Server.KeyName
 	}
 	queryStart = time.Now()
-	_, err = tx.Exec(c.Request.Context(), `
+	_, err = tx.ExecContext(c.Request.Context(), database.Q(`
 		INSERT INTO instances (id, name, project_id, user_id, flavor_id, image_id, status, power_state, key_name, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, instanceID, req.Server.Name, projectID, userID, flavor.ID, imageID, "BUILD", 0, keyNameValue, now, now)
+	`), instanceID, req.Server.Name, projectID, userID, flavor.ID, imageID, "BUILD", 0, keyNameValue, nowStr, nowStr)
 	middleware.LogDatabaseQuery(c, "INSERT instance", time.Since(queryStart), err)
 
 	if err != nil {
@@ -414,7 +408,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		return
 	}
 
-	if err := tx.Commit(c.Request.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		logger.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to commit instance transaction")
 		middleware.LogOperationEnd(c, "create", "server", instanceID, time.Since(start), err)
 		log.Error().Err(err).Str("operation", "commit_instance").Msg("database error")
@@ -426,10 +420,10 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Log instance action
 	requestID := uuid.New().String()
-	if _, err := svc.activeDB().Exec(c.Request.Context(), `
+	if _, err := svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		INSERT INTO instance_actions (instance_id, action, request_id, user_id, project_id, start_time, message)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, instanceID, "create", requestID, userID, projectID, now, "Instance created"); err != nil {
+	`), instanceID, "create", requestID, userID, projectID, now, "Instance created"); err != nil {
 		log.Debug().Err(err).Str("instance_id", instanceID).Msg("failed to log instance action (non-critical)")
 	}
 
@@ -445,15 +439,15 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		})
 
 		taskID := uuid.New().String()
-		_, err := svc.activeDB().Exec(c.Request.Context(), `
+		_, err := svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 			INSERT INTO tasks (id, type, resource_id, project_id, payload, timeout_sec, req_vcpu, req_ram_mb, req_disk_gb)
-			VALUES ($1, 'VM_CREATE', $2, $3, $4, 120, $5, $6, $7)`,
+			VALUES ($1, 'VM_CREATE', $2, $3, $4, 120, $5, $6, $7)`),
 			taskID, instanceID, projectID, taskPayload, flavor.VCPUs, flavor.RAMMB, flavor.DiskGB)
 
 		if err != nil {
 			log.Error().Err(err).Str("task_id", taskID).Msg("Failed to insert task")
 		} else {
-			if _, nerr := svc.activeDB().Exec(c.Request.Context(), "SELECT pg_notify('new_task', $1)", taskID); nerr != nil {
+			if _, nerr := svc.activeDB().ExecContext(c.Request.Context(), "SELECT pg_notify('new_task', $1)", taskID); nerr != nil {
 				log.Debug().Err(nerr).Str("task_id", taskID).Msg("pg_notify failed (non-fatal)")
 			}
 		}
@@ -467,7 +461,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Error().Interface("panic", r).Str("instance_id", instanceID).Msg("PANIC in VM creation goroutine")
-					if _, derr := svc.activeDB().Exec(context.Background(),
+					if _, derr := svc.activeDB().ExecContext(context.Background(),
 						"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3",
 						"ERROR", time.Now(), instanceID); derr != nil {
 						log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to mark instance ERROR after panic")
@@ -494,8 +488,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 							Str("network_id", network.UUID).
 							Msg("Failed to allocate port from Neutron")
 						// Fail VM creation: a VM without network is unusable
-						if _, derr := svc.activeDB().Exec(ctx,
-							"UPDATE instances SET status = 'ERROR', fault_message = $1, updated_at = NOW() WHERE id = $2",
+						if _, derr := svc.activeDB().ExecContext(ctx,
+							database.Q("UPDATE instances SET status = 'ERROR', fault_message = $1, updated_at = NOW() WHERE id = $2"),
 							fmt.Sprintf("Failed to allocate port for network %s: %v", network.UUID, err), instanceID,
 						); derr != nil {
 							log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to mark instance ERROR after port allocation failure")
@@ -530,8 +524,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			if req.Server.KeyName != "" {
 				// Fetch SSH public key from database
 				var publicKey string
-				err := svc.activeDB().QueryRow(ctx,
-					"SELECT public_key FROM keypairs WHERE user_id = $1 AND name = $2",
+				err := svc.activeDB().QueryRowContext(ctx,
+					database.Q("SELECT public_key FROM keypairs WHERE user_id = $1 AND name = $2"),
 					userID, req.Server.KeyName,
 				).Scan(&publicKey)
 
@@ -585,8 +579,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				// Update instance status to ERROR
 				dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
 				defer dbCancel()
-				if _, derr := svc.activeDB().Exec(dbCtx,
-					"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3",
+				if _, derr := svc.activeDB().ExecContext(dbCtx,
+					database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3"),
 					"ERROR", time.Now(), instanceID); derr != nil {
 					log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to mark instance ERROR after libvirt failure")
 				}
@@ -604,11 +598,11 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			// Update instance with libvirt UUID
 			dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
 			defer dbCancel()
-			if _, derr := svc.activeDB().Exec(dbCtx, `
+			if _, derr := svc.activeDB().ExecContext(dbCtx, database.Q(`
 				UPDATE instances
 				SET status = $1, power_state = $2, libvirt_domain_id = $3, launched_at = $4, updated_at = $5
 				WHERE id = $6
-			`, "ACTIVE", 1, libvirtUUID, time.Now(), time.Now(), instanceID); derr != nil {
+			`), "ACTIVE", 1, libvirtUUID, time.Now(), time.Now(), instanceID); derr != nil {
 				log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to update instance to ACTIVE after VM creation")
 			}
 		}()
@@ -617,7 +611,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		// In pure stub mode, auto-transition to ACTIVE after a brief delay
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			if _, derr := svc.activeDB().Exec(context.Background(),
+			if _, derr := svc.activeDB().ExecContext(context.Background(),
 				"UPDATE instances SET status = 'ACTIVE', power_state = 1, task_state = '', updated_at = $1 WHERE id = $2 AND status = 'BUILD'",
 				time.Now(), instanceID,
 			); derr != nil {
@@ -633,32 +627,32 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	bookmarkURL := fmt.Sprintf("/servers/%s", instanceID)
 	c.JSON(http.StatusAccepted, gin.H{
 		"server": gin.H{
-			"id":               instanceID,
-			"name":             req.Server.Name,
-			"status":           "BUILD",
-			"tenant_id":        projectID,
-			"user_id":          userID,
-			"created":          now.Format(time.RFC3339),
-			"updated":          now.Format(time.RFC3339),
-			"flavor":           gin.H{"id": flavor.ID},
-			"image":            gin.H{"id": req.Server.ImageRef},
-			"metadata":         gin.H{},
-			"adminPass":        common.GeneratePassword(16),
-			"security_groups":  []gin.H{{"name": "default"}},
-			"OS-DCF:diskConfig": "AUTO",
-			"hostId":                       "",
-			"progress":                     0,
-			"config_drive":                 "",
-			"key_name":                     keyNameValue,
-			"accessIPv4":                   "",
-			"accessIPv6":                   "",
-			"addresses":                    gin.H{},
-			"OS-EXT-STS:power_state":       0,
-			"OS-EXT-STS:task_state":        "scheduling",
-			"OS-EXT-STS:vm_state":          "building",
-			"OS-EXT-AZ:availability_zone":  "nova",
-			"OS-SRV-USG:launched_at":       nil,
-			"OS-SRV-USG:terminated_at":     nil,
+			"id":                          instanceID,
+			"name":                        req.Server.Name,
+			"status":                      "BUILD",
+			"tenant_id":                   projectID,
+			"user_id":                     userID,
+			"created":                     nowStr,
+			"updated":                     nowStr,
+			"flavor":                      gin.H{"id": flavor.ID},
+			"image":                       gin.H{"id": req.Server.ImageRef},
+			"metadata":                    gin.H{},
+			"adminPass":                   common.GeneratePassword(16),
+			"security_groups":             []gin.H{{"name": "default"}},
+			"OS-DCF:diskConfig":           "AUTO",
+			"hostId":                      "",
+			"progress":                    0,
+			"config_drive":                "",
+			"key_name":                    keyNameValue,
+			"accessIPv4":                  "",
+			"accessIPv6":                  "",
+			"addresses":                   gin.H{},
+			"OS-EXT-STS:power_state":      0,
+			"OS-EXT-STS:task_state":       "scheduling",
+			"OS-EXT-STS:vm_state":         "building",
+			"OS-EXT-AZ:availability_zone": "nova",
+			"OS-SRV-USG:launched_at":      nil,
+			"OS-SRV-USG:terminated_at":    nil,
 			"links": []gin.H{
 				{"rel": "self", "href": selfURL},
 				{"rel": "bookmark", "href": bookmarkURL},
@@ -743,7 +737,7 @@ func (svc *Service) ListServers(c *gin.Context) {
 	baseQuery += fmt.Sprintf(" LIMIT $%d", argIdx)
 	args = append(args, limit)
 
-	rows, queryErr := svc.activeDB().Query(c.Request.Context(), baseQuery, args...)
+	rows, queryErr := svc.activeDB().QueryContext(c.Request.Context(), database.Q(baseQuery), args...)
 	if queryErr != nil {
 		log.Error().Err(queryErr).Str("operation", "list_servers").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to list servers"))
@@ -789,6 +783,25 @@ func nullStringToInterface(s sql.NullString) interface{} {
 	return s.String
 }
 
+// parseDBTime parses timestamps stored by SQLite (TEXT) into time.Time.
+// It accepts RFC3339, SQLite's CURRENT_TIMESTAMP format, and the verbose
+// string representation produced by the Go driver for time.Time values.
+func parseDBTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	// Strip the monotonic reading suffix that the Go SQLite driver may append.
+	if idx := strings.Index(s, " m="); idx >= 0 {
+		s = s[:idx]
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999 -0700 MST", "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // generateHostID returns a deterministic hex string derived from projectID and hostname,
 // matching the Nova convention for the hostId field in server responses.
 func generateHostID(projectID, hostname string) string {
@@ -827,7 +840,7 @@ func (svc *Service) batchFetchAddresses(ctx context.Context, serverIDs []string)
 		JOIN networks n ON p.network_id = n.id
 		WHERE p.device_id IN %s`, buildInClause(len(serverIDs)))
 
-	rows, err := svc.activeDB().Query(ctx, query, args...)
+	rows, err := svc.activeDB().QueryContext(ctx, database.Q(query), args...)
 	if err != nil {
 		return result
 	}
@@ -883,7 +896,7 @@ func (svc *Service) batchFetchSecurityGroups(ctx context.Context, serverIDs []st
 		JOIN security_groups sg ON sg.id = ssg.security_group_id
 		WHERE ssg.server_id IN %s`, buildInClause(len(serverIDs)))
 
-	rows, err := svc.activeDB().Query(ctx, query, args...)
+	rows, err := svc.activeDB().QueryContext(ctx, database.Q(query), args...)
 	if err != nil {
 		return result
 	}
@@ -920,7 +933,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	baseQuery := `
 		SELECT i.id, i.name, i.status, i.power_state, i.project_id, i.user_id,
 		       i.flavor_id, i.image_id, i.created_at, i.updated_at, i.launched_at,
-		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name, i.host, i.locked,
+		       f.vcpus, f.ram_mb, f.disk_gb, f.name as flavor_name, '' as host, i.locked,
 		       i.task_state, i.key_name, i.fault_message
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
@@ -981,7 +994,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	baseQuery += fmt.Sprintf(" ORDER BY i.created_at DESC LIMIT $%d", argIdx)
 	queryArgs = append(queryArgs, limit)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), baseQuery, queryArgs...)
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(baseQuery), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_servers_detail").Msg("database error")
@@ -993,12 +1006,12 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	// First pass: scan all rows into a temporary slice and collect server IDs.
 	type serverRow struct {
 		id, name, status, projID, userID, flavorID, flavorName string
-		imageID                                                 *string
+		imageID                                                *string
 		powerState, vcpus, ramMB, diskGB                       int
-		createdAt, updatedAt                                    time.Time
-		launchedAt                                              *time.Time
-		host                                                    sql.NullString
-		locked                                                  bool
+		createdAt, updatedAt                                   string
+		launchedAt                                             *string
+		host                                                   sql.NullString
+		locked                                                 bool
 		taskStateDB, keyNameDB, faultMsgDB                     sql.NullString
 	}
 	var rawRows []serverRow
@@ -1037,7 +1050,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		}
 		launchedAtStr := ""
 		if r.launchedAt != nil {
-			launchedAtStr = r.launchedAt.Format(time.RFC3339)
+			launchedAtStr = parseDBTime(*r.launchedAt).Format(time.RFC3339)
 		}
 
 		addresses, ok := addressesByServer[r.id]
@@ -1098,8 +1111,8 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			"status":                              r.status,
 			"tenant_id":                           r.projID,
 			"user_id":                             r.userID,
-			"created":                             r.createdAt.Format(time.RFC3339),
-			"updated":                             r.updatedAt.Format(time.RFC3339),
+			"created":                             parseDBTime(r.createdAt).Format(time.RFC3339),
+			"updated":                             parseDBTime(r.updatedAt).Format(time.RFC3339),
 			"addresses":                           addresses,
 			"OS-EXT-STS:power_state":              r.powerState,
 			"OS-EXT-STS:task_state":               taskState,
@@ -1147,7 +1160,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			entry["fault"] = gin.H{
 				"code":    500,
 				"message": faultMsg,
-				"created": r.createdAt.Format(time.RFC3339),
+				"created": parseDBTime(r.createdAt).Format(time.RFC3339),
 			}
 		}
 		servers = append(servers, entry)
@@ -1172,12 +1185,12 @@ func (svc *Service) getInstanceAddresses(ctx context.Context, instanceID, projec
 	addresses := gin.H{}
 
 	// Query ports for this instance
-	rows, err := svc.activeDB().Query(ctx, `
+	rows, err := svc.activeDB().QueryContext(ctx, database.Q(`
 		SELECT p.network_id, p.fixed_ips, n.name, p.mac_address
 		FROM ports p
 		JOIN networks n ON p.network_id = n.id
 		WHERE p.device_id = $1 AND p.project_id = $2
-	`, instanceID, projectID)
+	`), instanceID, projectID)
 
 	if err != nil {
 		return addresses // Return empty dict on error
@@ -1205,10 +1218,10 @@ func (svc *Service) getInstanceAddresses(ctx context.Context, instanceID, projec
 		for _, ipInfo := range fixedIPs {
 			if ipAddr, ok := ipInfo["ip_address"].(string); ok {
 				addressList = append(addressList, gin.H{
-					"addr":                     ipAddr,
-					"version":                  4,
-					"OS-EXT-IPS:type":          "fixed",
-					"OS-EXT-IPS-MAC:mac_addr":  macAddress,
+					"addr":                    ipAddr,
+					"version":                 4,
+					"OS-EXT-IPS:type":         "fixed",
+					"OS-EXT-IPS-MAC:mac_addr": macAddress,
 				})
 			}
 		}
@@ -1224,10 +1237,10 @@ func (svc *Service) getInstanceAddresses(ctx context.Context, instanceID, projec
 // getServerSecurityGroups returns the security groups attached to a server.
 // Falls back to []gin.H{{"name": "default"}} when none are found.
 func (svc *Service) getServerSecurityGroups(ctx context.Context, serverID string) []gin.H {
-	rows, err := svc.activeDB().Query(ctx, `
+	rows, err := svc.activeDB().QueryContext(ctx, database.Q(`
 		SELECT sg.name FROM security_groups sg
 		JOIN server_security_groups ssg ON sg.id = ssg.security_group_id
-		WHERE ssg.server_id = $1`, serverID)
+		WHERE ssg.server_id = $1`), serverID)
 	if err != nil {
 		return []gin.H{{"name": "default"}}
 	}
@@ -1253,8 +1266,8 @@ func (svc *Service) GetServer(c *gin.Context) {
 	var id, name, status, projID string
 	var userID, flavorID, imageID interface{}
 	var powerState int
-	var createdAt, updatedAt time.Time
-	var launchedAt *time.Time
+	var createdAt, updatedAt string
+	var launchedAt *string
 	var host sql.NullString
 	var locked bool
 	var vcpus, ramMB, diskGB int
@@ -1265,9 +1278,9 @@ func (svc *Service) GetServer(c *gin.Context) {
 
 	// Try to find by ID first, then by name
 	// Use separate conditions to avoid type mismatch when id is UUID and param might be a name
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT i.id, i.name, i.status, i.power_state, i.project_id, i.user_id,
-		       i.flavor_id, i.image_id, i.created_at, i.updated_at, i.host, i.launched_at,
+		       i.flavor_id, i.image_id, i.created_at, i.updated_at, '' as host, i.launched_at,
 		       i.locked, COALESCE(f.vcpus, 0), COALESCE(f.ram_mb, 0), COALESCE(f.disk_gb, 0), f.name,
 		       i.task_state, i.key_name, i.fault_message
 		FROM instances i
@@ -1275,9 +1288,9 @@ func (svc *Service) GetServer(c *gin.Context) {
 		WHERE i.project_id = $2 AND (
 			(i.id::text = $1) OR (i.name = $1)
 		)
-	`, instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt, &locked, &vcpus, &ramMB, &diskGB, &flavorName, &taskStateDB, &keyNameDB, &faultMsgDB)
+	`), instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt, &locked, &vcpus, &ramMB, &diskGB, &flavorName, &taskStateDB, &keyNameDB, &faultMsgDB)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -1330,9 +1343,9 @@ func (svc *Service) GetServer(c *gin.Context) {
 	// Use DB launched_at if non-null; fall back to created_at for ACTIVE instances
 	var getLaunchedAt interface{}
 	if launchedAt != nil {
-		getLaunchedAt = launchedAt.Format(time.RFC3339)
+		getLaunchedAt = parseDBTime(*launchedAt).Format(time.RFC3339)
 	} else if status == "ACTIVE" {
-		getLaunchedAt = createdAt.Format(time.RFC3339)
+		getLaunchedAt = parseDBTime(createdAt).Format(time.RFC3339)
 	}
 
 	// progress: 25 for BUILD, 0 otherwise
@@ -1348,8 +1361,8 @@ func (svc *Service) GetServer(c *gin.Context) {
 		"name":                                name,
 		"status":                              status,
 		"tenant_id":                           projID,
-		"created":                             createdAt.Format(time.RFC3339),
-		"updated":                             updatedAt.Format(time.RFC3339),
+		"created":                             parseDBTime(createdAt).Format(time.RFC3339),
+		"updated":                             parseDBTime(updatedAt).Format(time.RFC3339),
 		"hostId":                              generateHostID(projID, "stub-host"),
 		"OS-EXT-SRV-ATTR:host":                hostStr,
 		"OS-EXT-SRV-ATTR:instance_name":       fmt.Sprintf("instance-%s", id[:8]),
@@ -1400,7 +1413,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 		response["fault"] = gin.H{
 			"code":    500,
 			"message": faultMsg,
-			"created": createdAt.Format(time.RFC3339),
+			"created": parseDBTime(createdAt).Format(time.RFC3339),
 		}
 	}
 	response["security_groups"] = svc.getServerSecurityGroups(c.Request.Context(), id)
@@ -1411,8 +1424,8 @@ func (svc *Service) GetServer(c *gin.Context) {
 
 	// Fetch instance metadata from DB
 	serverMetadata := make(map[string]string)
-	metaRows, metaErr := svc.activeDB().Query(c.Request.Context(),
-		"SELECT meta_key, meta_value FROM instance_metadata WHERE instance_id = $1",
+	metaRows, metaErr := svc.activeDB().QueryContext(c.Request.Context(),
+		database.Q("SELECT meta_key, meta_value FROM instance_metadata WHERE instance_id = $1"),
 		id,
 	)
 	if metaErr == nil {
@@ -1449,13 +1462,13 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	var instanceUserID sql.NullString
 	var instanceStatus string
 	queryStart := time.Now()
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT libvirt_domain_id, user_id, status FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &instanceUserID, &instanceStatus)
 	middleware.LogDatabaseQuery(c, "SELECT libvirt_domain_id", time.Since(queryStart), err)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		logger.Warn().Str("instance_id", instanceID).Msg("Instance not found")
 		middleware.LogOperationEnd(c, "delete", "server", instanceID, time.Since(start), err)
 		common.SendError(c, common.NewNotFoundError("instance"))
@@ -1511,8 +1524,8 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	// Unbind ports before deleting them from the database
 	if svc.neutronSvc != nil {
 		ctx := c.Request.Context()
-		rows, portErr := svc.activeDB().Query(ctx,
-			"SELECT id, mac_address, network_id FROM ports WHERE device_id = $1 AND project_id = $2",
+		rows, portErr := svc.activeDB().QueryContext(ctx,
+			database.Q("SELECT id, mac_address, network_id FROM ports WHERE device_id = $1 AND project_id = $2"),
 			instanceID, projectID)
 		if portErr == nil {
 			defer rows.Close()
@@ -1528,7 +1541,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	}
 
 	// Delete orphaned ports for this instance
-	if _, derr := svc.activeDB().Exec(c.Request.Context(),
+	if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM ports WHERE device_id = $1 AND project_id = $2",
 		instanceID, projectID); derr != nil {
 		log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to delete orphaned ports during instance deletion")
@@ -1536,7 +1549,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 
 	// Delete from database (support lookup by ID or name)
 	queryStart = time.Now()
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	)
@@ -1683,12 +1696,12 @@ func (svc *Service) ServerAction(c *gin.Context) {
 	// Get libvirt domain ID and status for remaining actions (support lookup by ID or name)
 	var libvirtDomainID interface{}
 	var instanceStatus string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT libvirt_domain_id, status FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &instanceStatus)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		log.Warn().Str("instance_id", instanceID).Msg("Instance not found in ServerAction")
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
@@ -1716,7 +1729,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		// Handle actions in stub mode by updating database only
 		if _, ok := req["reboot"]; ok {
 			// Just mark as rebooting then active
-			if _, derr := svc.activeDB().Exec(c.Request.Context(),
+			if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
 				"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
 				"REBOOT", time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to set instance to REBOOT (stub)")
@@ -1731,8 +1744,8 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				}
 				ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
 				defer cancel()
-				if _, derr := svc.activeDB().Exec(ctx,
-					"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
+				if _, derr := svc.activeDB().ExecContext(ctx,
+					database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4"),
 					"ACTIVE", time.Now(), instanceID, projectID); derr != nil {
 					log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to restore instance to ACTIVE after reboot (stub)")
 				}
@@ -1747,7 +1760,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				})
 				return
 			}
-			if _, derr := svc.activeDB().Exec(c.Request.Context(),
+			if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
 				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
 				"SHUTOFF", 4, time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to set instance SHUTOFF (stub)")
@@ -1762,7 +1775,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				})
 				return
 			}
-			if _, derr := svc.activeDB().Exec(c.Request.Context(),
+			if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
 				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
 				"ACTIVE", 1, time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to set instance ACTIVE (stub)")
@@ -1800,8 +1813,8 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			common.SendError(c, common.NewInternalServerError("failed to stop server"))
 			return
 		}
-		if _, err := svc.activeDB().Exec(ctx,
-			"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+		if _, err := svc.activeDB().ExecContext(ctx,
+			database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5"),
 			"SHUTOFF", 4, time.Now(), instanceID, projectID); err != nil {
 			log.Error().Err(err).Str("instance_id", instanceID).Msg("VM stopped in libvirt but failed to update DB status — state divergence")
 		}
@@ -1820,8 +1833,8 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			common.SendError(c, common.NewInternalServerError("failed to start server"))
 			return
 		}
-		if _, err := svc.activeDB().Exec(ctx,
-			"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+		if _, err := svc.activeDB().ExecContext(ctx,
+			database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5"),
 			"ACTIVE", 1, time.Now(), instanceID, projectID); err != nil {
 			log.Error().Err(err).Str("instance_id", instanceID).Msg("VM started in libvirt but failed to update DB status — state divergence")
 		}
@@ -1875,7 +1888,7 @@ func (svc *Service) ListFlavors(c *gin.Context) {
 		}
 	}
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), query, args...)
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_flavors").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to list flavors"))
@@ -1937,8 +1950,8 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 	// Add marker filter using created_at cursor (avoids broken UUID lexicographic ordering)
 	if marker != "" {
 		var markerTime interface{}
-		lookupErr := svc.activeDB().QueryRow(ctx,
-			"SELECT created_at FROM flavors WHERE id = $1", marker).Scan(&markerTime)
+		lookupErr := svc.activeDB().QueryRowContext(ctx,
+			database.Q("SELECT created_at FROM flavors WHERE id = $1"), marker).Scan(&markerTime)
 		if lookupErr == nil {
 			query += fmt.Sprintf(" AND created_at > $%d", argIndex)
 			args = append(args, markerTime)
@@ -1970,7 +1983,7 @@ func (svc *Service) ListFlavorsDetail(c *gin.Context) {
 		}
 	}
 
-	rows, err := svc.activeDB().Query(ctx, query, args...)
+	rows, err := svc.activeDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_flavors_detail").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to list flavors"))
@@ -2039,12 +2052,12 @@ func (svc *Service) GetFlavor(c *gin.Context) {
 	var isPublic bool
 
 	// Support lookup by UUID or name
-	err := svc.activeDB().QueryRow(ctx,
-		"SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1",
+	err := svc.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id, name, vcpus, ram_mb, disk_gb, is_public FROM flavors WHERE id::text = $1 OR name = $1 LIMIT 1"),
 		flavorID,
 	).Scan(&id, &name, &vcpus, &ramMB, &diskGB, &isPublic)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("flavor"))
 		return
 	}
@@ -2140,7 +2153,7 @@ func (svc *Service) ListHypervisorsDetail(c *gin.Context) {
 func (svc *Service) GetHypervisorStatistics(c *gin.Context) {
 	// Count running instances
 	var runningVMs int
-	if err := svc.activeDB().QueryRow(c.Request.Context(),
+	if err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM instances WHERE power_state = 1",
 	).Scan(&runningVMs); err != nil {
 		log.Debug().Err(err).Str("operation", "hypervisor_stats_running").Msg("failed to count running VMs")
@@ -2168,7 +2181,7 @@ func (svc *Service) GetHypervisorStatistics(c *gin.Context) {
 // ListAvailabilityZones lists availability zones
 func (svc *Service) ListAvailabilityZones(c *gin.Context) {
 	// Query distinct availability zones from host_aggregates
-	rows, err := svc.activeDB().Query(c.Request.Context(),
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT DISTINCT availability_zone FROM host_aggregates WHERE availability_zone IS NOT NULL AND availability_zone != ''")
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_availability_zones").Msg("database error")
@@ -2206,7 +2219,7 @@ func (svc *Service) ListAvailabilityZones(c *gin.Context) {
 // ListAvailabilityZonesDetail lists availability zones with host details
 func (svc *Service) ListAvailabilityZonesDetail(c *gin.Context) {
 	// Query availability zones with hosts from host_aggregates
-	rows, err := svc.activeDB().Query(c.Request.Context(),
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT availability_zone, hosts FROM host_aggregates WHERE availability_zone IS NOT NULL AND availability_zone != ''")
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_availability_zones_detail").Msg("database error")
@@ -2274,14 +2287,14 @@ func (svc *Service) GetLimits(c *gin.Context) {
 
 	// Query current usage from database
 	var instancesUsed, coresUsed, ramUsed int
-	if err := svc.activeDB().QueryRow(ctx,
-		`SELECT
+	if err := svc.activeDB().QueryRowContext(ctx,
+		database.Q(`SELECT
 			COUNT(*),
 			COALESCE(SUM(f.vcpus), 0),
 			COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id = $1 AND i.status != 'DELETED'`,
+		WHERE i.project_id = $1 AND i.status != 'DELETED'`),
 		projectID,
 	).Scan(&instancesUsed, &coresUsed, &ramUsed); err != nil {
 		instancesUsed, coresUsed, ramUsed = 0, 0, 0
@@ -2305,8 +2318,8 @@ func (svc *Service) GetLimits(c *gin.Context) {
 		quotas[k] = v
 	}
 
-	quotaRows, err := svc.activeDB().Query(ctx,
-		`SELECT resource, hard_limit FROM quotas WHERE project_id = $1`, projectID)
+	quotaRows, err := svc.activeDB().QueryContext(ctx,
+		database.Q(`SELECT resource, hard_limit FROM quotas WHERE project_id = $1`), projectID)
 	if err == nil {
 		defer quotaRows.Close()
 		for quotaRows.Next() {
@@ -2401,7 +2414,7 @@ func (svc *Service) GetServerMetadata(c *gin.Context) {
 
 	// Check if server exists and belongs to this project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		serverID, c.GetString("project_id"),
 	).Scan(&exists)
@@ -2412,7 +2425,7 @@ func (svc *Service) GetServerMetadata(c *gin.Context) {
 	}
 
 	// Fetch metadata
-	rows, err := svc.activeDB().Query(c.Request.Context(),
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT meta_key, meta_value FROM instance_metadata WHERE instance_id = $1",
 		serverID,
 	)
@@ -2452,7 +2465,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 
 	// Check if server exists and belongs to this project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		serverID, c.GetString("project_id"),
 	).Scan(&exists)
@@ -2464,7 +2477,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 
 	// Upsert each metadata key-value pair
 	for key, value := range req.Metadata {
-		_, err := svc.activeDB().Exec(c.Request.Context(),
+		_, err := svc.activeDB().ExecContext(c.Request.Context(),
 			`INSERT INTO instance_metadata (instance_id, meta_key, meta_value)
 			 VALUES ($1, $2, $3)
 			 ON CONFLICT (instance_id, meta_key)
@@ -2479,7 +2492,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 	}
 
 	// Fetch and return all metadata
-	rows, err := svc.activeDB().Query(c.Request.Context(),
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT meta_key, meta_value FROM instance_metadata WHERE instance_id = $1",
 		serverID,
 	)
@@ -2520,7 +2533,7 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 
 	// Check if server exists and belongs to this project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		serverID, projectID,
 	).Scan(&exists)
@@ -2531,15 +2544,15 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 	}
 
 	// Delete all existing metadata then insert new metadata atomically
-	err = database.WithTx(c.Request.Context(), func(tx database.Tx) error {
-		if _, err := tx.Exec(c.Request.Context(),
+	err = database.WithTx(c.Request.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(c.Request.Context(),
 			"DELETE FROM instance_metadata WHERE instance_id = $1",
 			serverID,
 		); err != nil {
 			return fmt.Errorf("clear_metadata: %w", err)
 		}
 		for key, value := range req.Metadata {
-			if _, err := tx.Exec(c.Request.Context(),
+			if _, err := tx.ExecContext(c.Request.Context(),
 				`INSERT INTO instance_metadata (instance_id, meta_key, meta_value)
 				 VALUES ($1, $2, $3)`,
 				serverID, key, value,
@@ -2579,7 +2592,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 
 	// Update instance in database
 	now := time.Now()
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE instances SET image_id = $1, name = COALESCE(NULLIF($2, ''), name), status = $3, updated_at = $4 WHERE id = $5 AND project_id = $6",
 		imageRef, name, "REBUILD", now, instanceID, projectID,
 	)
@@ -2601,8 +2614,8 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 			}
 			ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
 			defer cancel()
-			if _, derr := svc.activeDB().Exec(ctx,
-				"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+			if _, derr := svc.activeDB().ExecContext(ctx,
+				database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4"),
 				"ACTIVE", time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to restore instance to ACTIVE after rebuild (stub)")
 			}
@@ -2614,7 +2627,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 	var flavorID, userID, serverName, status string
 	var nullImageID sql.NullString
 	var createdAt, updatedAt time.Time
-	err = svc.activeDB().QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT id, name, flavor_id, image_id, user_id, status, created_at, updated_at FROM instances WHERE id = $1 AND project_id = $2",
 		instanceID, projectID,
 	).Scan(&instanceID, &serverName, &flavorID, &nullImageID, &userID, &status, &createdAt, &updatedAt)
@@ -2654,7 +2667,7 @@ func (svc *Service) RescueInstanceAction(c *gin.Context, rescueData interface{})
 
 	// Update instance status to RESCUE
 	now := time.Now()
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
 		"RESCUE", now, instanceID, projectID,
 	)
@@ -2699,7 +2712,7 @@ func (svc *Service) CreateImageAction(c *gin.Context, createImageData interface{
 	// Create image record in database
 	imageID := uuid.New().String()
 	now := time.Now()
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO images (id, name, project_id, status, container_format, disk_format, size_bytes, visibility, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, imageID, imageName, projectID, "active", "bare", "qcow2", 0, "private", now, now)
@@ -2712,7 +2725,7 @@ func (svc *Service) CreateImageAction(c *gin.Context, createImageData interface{
 
 	// Store metadata if provided
 	for key, value := range metadata {
-		if _, derr := svc.activeDB().Exec(c.Request.Context(), `
+		if _, derr := svc.activeDB().ExecContext(c.Request.Context(), `
 			INSERT INTO image_properties (image_id, name, value)
 			VALUES ($1, $2, $3)
 		`, imageID, key, value); derr != nil {
@@ -2732,7 +2745,7 @@ func (svc *Service) PauseInstanceAction(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Update instance status to PAUSED
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
 		"PAUSED", time.Now(), instanceID, projectID,
 	)
@@ -2751,7 +2764,7 @@ func (svc *Service) UnpauseInstanceAction(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Update instance status to ACTIVE
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
 		"ACTIVE", time.Now(), instanceID, projectID,
 	)
@@ -2770,7 +2783,7 @@ func (svc *Service) LockInstanceAction(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Update instance locked status
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE instances SET locked = true, updated_at = $1 WHERE id = $2 AND project_id = $3",
 		time.Now(), instanceID, projectID,
 	)
@@ -2789,7 +2802,7 @@ func (svc *Service) UnlockInstanceAction(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Update instance locked status
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE instances SET locked = false, updated_at = $1 WHERE id = $2 AND project_id = $3",
 		time.Now(), instanceID, projectID,
 	)
@@ -2809,7 +2822,7 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 
 	// In stub mode, just delete from database
 	if svc.libvirtMode == "stub" || svc.vmManager == nil {
-		_, err := svc.activeDB().Exec(c.Request.Context(),
+		_, err := svc.activeDB().ExecContext(c.Request.Context(),
 			"DELETE FROM instances WHERE id = $1 AND project_id = $2",
 			instanceID, projectID,
 		)
@@ -2824,7 +2837,7 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 
 	// In real mode, destroy VM then delete from database
 	var libvirtDomainID interface{}
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
@@ -2838,7 +2851,7 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 		}
 	}
 
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM instances WHERE id = $1 AND project_id = $2",
 		instanceID, projectID,
 	)

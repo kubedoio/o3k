@@ -15,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
@@ -22,22 +24,21 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-// setupCinderTestDB creates a SQLite adapter in a temp directory and builds
+// setupCinderTestDB creates a SQLite database in a temp directory and builds
 // the minimal schema needed for cinder volume tests (no FK constraints so we
 // don't need the full migration chain).
-func setupCinderTestDB(t *testing.T) *database.SQLiteAdapter {
+func setupCinderTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "cinder_test.db")
-	adapter, err := database.NewSQLiteAdapter(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-
 	ctx := t.Context()
+	if err := database.ConnectSQLite(ctx, dbPath); err != nil {
+		t.Fatalf("ConnectSQLite: %v", err)
+	}
+	db := database.DB
+	t.Cleanup(database.Close)
 
 	// Minimal volumes table — no FK constraints for test isolation.
-	_, err = adapter.Exec(ctx, `
+	_, err := db.ExecContext(ctx, database.Q(`
 		CREATE TABLE IF NOT EXISTS volumes (
 			id TEXT PRIMARY KEY,
 			name TEXT,
@@ -54,41 +55,41 @@ func setupCinderTestDB(t *testing.T) *database.SQLiteAdapter {
 			volume_type TEXT DEFAULT '__DEFAULT__',
 			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-		)`)
+		)`))
 	if err != nil {
 		t.Fatalf("create volumes table: %v", err)
 	}
 
 	// instances table for attach instance-exists check.
-	_, err = adapter.Exec(ctx, `
+	_, err = db.ExecContext(ctx, database.Q(`
 		CREATE TABLE IF NOT EXISTS instances (
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL
-		)`)
+		)`))
 	if err != nil {
 		t.Fatalf("create instances table: %v", err)
 	}
 
 	// cinder_quotas table — quota queries fall through to defaults on ErrNoRows.
-	_, err = adapter.Exec(ctx, `
+	_, err = db.ExecContext(ctx, database.Q(`
 		CREATE TABLE IF NOT EXISTS cinder_quotas (
 			project_id TEXT NOT NULL,
 			resource TEXT NOT NULL,
 			"limit" INTEGER NOT NULL,
 			PRIMARY KEY(project_id, resource)
-		)`)
+		)`))
 	if err != nil {
 		t.Fatalf("create cinder_quotas table: %v", err)
 	}
 
-	return adapter
+	return db
 }
 
 // insertVolume inserts a test volume and returns its ID.
-func insertVolume(t *testing.T, db database.DBIF, projectID, status string, sizeGB int) string {
+func insertVolume(t *testing.T, db *sql.DB, projectID, status string, sizeGB int) string {
 	t.Helper()
 	id := uuid.New().String()
-	_, err := db.Exec(t.Context(), `
+	_, err := db.ExecContext(t.Context(), `
 		INSERT INTO volumes (id, project_id, size_gb, status, name, rbd_pool, rbd_image)
 		VALUES ($1, $2, $3, $4, 'test-vol', '', '')`,
 		id, projectID, sizeGB, status)
@@ -99,10 +100,10 @@ func insertVolume(t *testing.T, db database.DBIF, projectID, status string, size
 }
 
 // insertInstance inserts a test instance and returns its ID.
-func insertInstance(t *testing.T, db database.DBIF, projectID string) string {
+func insertInstance(t *testing.T, db *sql.DB, projectID string) string {
 	t.Helper()
 	id := uuid.New().String()
-	_, err := db.Exec(t.Context(), `INSERT INTO instances (id, project_id) VALUES ($1, $2)`, id, projectID)
+	_, err := db.ExecContext(t.Context(), `INSERT INTO instances (id, project_id) VALUES ($1, $2)`, id, projectID)
 	if err != nil {
 		t.Fatalf("insertInstance: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestConcurrentAttach(t *testing.T) {
 
 	// Volume must end up in-use.
 	var finalStatus string
-	if err := db.QueryRow(t.Context(),
+	if err := db.QueryRowContext(t.Context(),
 		"SELECT status FROM volumes WHERE id = $1", volumeID,
 	).Scan(&finalStatus); err != nil {
 		t.Fatalf("query final status: %v", err)
@@ -244,7 +245,7 @@ func TestConcurrentExtend(t *testing.T) {
 
 	// Verify final size is 20 (the extended value).
 	var finalSize int
-	if err := db.QueryRow(t.Context(),
+	if err := db.QueryRowContext(t.Context(),
 		"SELECT size_gb FROM volumes WHERE id = $1", volumeID,
 	).Scan(&finalSize); err != nil {
 		t.Fatalf("query final size: %v", err)
@@ -295,7 +296,7 @@ func TestQuotaEnforcementConcurrent(t *testing.T) {
 
 	// Confirm total volume count does not exceed the limit.
 	var totalCount int
-	if err := db.QueryRow(t.Context(),
+	if err := db.QueryRowContext(t.Context(),
 		"SELECT COUNT(*) FROM volumes WHERE project_id = $1 AND status != 'deleted'", projectID,
 	).Scan(&totalCount); err != nil {
 		t.Fatalf("count volumes: %v", err)

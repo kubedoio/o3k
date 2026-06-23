@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,12 +19,12 @@ func (svc *Service) StageImageData(c *gin.Context) {
 
 	// Verify image exists and is owned by project
 	var status string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT status FROM images WHERE id = $1 AND project_id = $2",
 		imageID, projectID,
 	).Scan(&status)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
@@ -51,7 +52,7 @@ func (svc *Service) StageImageData(c *gin.Context) {
 	}
 
 	// Mark image as uploading (staged, awaiting import confirmation)
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE images SET status = $1, size_bytes = $2, updated_at = $3 WHERE id = $4",
 		"uploading", size, time.Now(), imageID,
 	)
@@ -82,12 +83,12 @@ func (svc *Service) ImportImage(c *gin.Context) {
 
 	// Verify image exists
 	var status string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT status FROM images WHERE id = $1 AND project_id = $2",
 		imageID, projectID,
 	).Scan(&status)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Image not found"})
 		return
 	}
@@ -100,7 +101,7 @@ func (svc *Service) ImportImage(c *gin.Context) {
 	// Import from staging to active storage
 	// In stub mode, just mark as active
 	// In real mode, would move from staging to backend storage
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		UPDATE images
 		SET status = $1, updated_at = $2
 		WHERE id = $3
@@ -121,7 +122,7 @@ func (svc *Service) GetImageImportInfo(c *gin.Context) {
 
 	// Verify image exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM images WHERE id = $1 AND project_id = $2)",
 		imageID, projectID,
 	).Scan(&exists)

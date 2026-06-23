@@ -11,7 +11,7 @@ import (
 
 // ListMetadefNamespaces handles GET /v2/metadefs/namespaces
 func (svc *Service) ListMetadefNamespaces(c *gin.Context) {
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT namespace, display_name, description, visibility, protected, owner, created_at, updated_at
 		FROM metadef_namespaces
 		ORDER BY namespace ASC
@@ -88,7 +88,7 @@ func (svc *Service) CreateMetadefNamespace(c *gin.Context) {
 	owner, _ := req["owner"].(string)
 	protected, _ := req["protected"].(bool)
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO metadef_namespaces (namespace, display_name, description, visibility, protected, owner, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, namespace, displayName, description, visibility, protected, owner, time.Now(), time.Now())
@@ -105,7 +105,7 @@ func (svc *Service) CreateMetadefNamespace(c *gin.Context) {
 				rtName, _ := assocMap["name"].(string)
 				rtPrefix, _ := assocMap["prefix"].(string)
 
-				_, _ = svc.activeDB().Exec(c.Request.Context(), `
+				_, _ = svc.activeDB().ExecContext(c.Request.Context(), `
 					INSERT INTO metadef_resource_types (namespace, name, prefix, created_at)
 					VALUES ($1, $2, $3, $4)
 				`, namespace, rtName, rtPrefix, time.Now())
@@ -143,7 +143,7 @@ func (svc *Service) GetMetadefNamespace(c *gin.Context) {
 	var protected bool
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT namespace, display_name, description, visibility, protected, owner, created_at, updated_at
 		FROM metadef_namespaces
 		WHERE namespace = $1
@@ -173,7 +173,7 @@ func (svc *Service) GetMetadefNamespace(c *gin.Context) {
 	}
 
 	// Get resource type associations
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT name, prefix FROM metadef_resource_types WHERE namespace = $1
 	`, namespace)
 
@@ -218,7 +218,7 @@ func (svc *Service) UpdateMetadefNamespace(c *gin.Context) {
 
 	// Verify namespace exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT EXISTS(SELECT 1 FROM metadef_namespaces WHERE namespace = $1)
 	`, namespace).Scan(&exists)
 
@@ -232,7 +232,7 @@ func (svc *Service) UpdateMetadefNamespace(c *gin.Context) {
 	visibility, _ := req["visibility"].(string)
 	protected, _ := req["protected"].(bool)
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		UPDATE metadef_namespaces
 		SET display_name = $1, description = $2, visibility = $3, protected = $4, updated_at = $5
 		WHERE namespace = $6
@@ -265,7 +265,7 @@ func (svc *Service) UpdateMetadefNamespace(c *gin.Context) {
 func (svc *Service) DeleteMetadefNamespace(c *gin.Context) {
 	namespace := c.Param("namespace")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM metadef_namespaces WHERE namespace = $1",
 		namespace,
 	)
@@ -276,7 +276,7 @@ func (svc *Service) DeleteMetadefNamespace(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("Namespace"))
 		return
 	}

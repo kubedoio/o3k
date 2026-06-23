@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/keystone"
@@ -23,13 +25,12 @@ import (
 // Service handles Neutron API endpoints
 type Service struct {
 	mode             string
-	db               database.DBIF
+	db               *sql.DB
 	nsManager        *networking.NetworkNamespaceManager
 	brManager        *networking.BridgeManager
 	tapManager       *networking.TAPDeviceManager
 	dhcpManager      *networking.DHCPManager
 	sgManager        *networking.SecurityGroupManager
-	routerManager    *networking.RouterManager
 	vxlanCoordinator *VXLANCoordinator
 	cache            *cache.Cache
 }
@@ -41,26 +42,25 @@ func NewService(mode string, cacheInstance *cache.Cache) *Service {
 		log.Error().Err(err).Str("mode", mode).Msg("failed to initialize security group manager")
 	}
 	return &Service{
-		mode:          mode,
-		nsManager:     networking.NewNetworkNamespaceManager(mode),
-		brManager:     networking.NewBridgeManager(mode),
-		tapManager:    networking.NewTAPDeviceManager(mode),
-		dhcpManager:   networking.NewDHCPManager(mode),
-		sgManager:     sgManager,
-		routerManager: networking.NewRouterManager(mode),
-		cache:         cacheInstance,
+		mode:        mode,
+		nsManager:   networking.NewNetworkNamespaceManager(mode),
+		brManager:   networking.NewBridgeManager(mode),
+		tapManager:  networking.NewTAPDeviceManager(mode),
+		dhcpManager: networking.NewDHCPManager(mode),
+		sgManager:   sgManager,
+		cache:       cacheInstance,
 	}
 }
 
 // NewServiceWithDB creates a new Neutron service with a specific database implementation
-func NewServiceWithDB(db database.DBIF, mode string, cacheInstance *cache.Cache) *Service {
+func NewServiceWithDB(db *sql.DB, mode string, cacheInstance *cache.Cache) *Service {
 	svc := NewService(mode, cacheInstance)
 	svc.db = db
 	return svc
 }
 
 // activeDB returns the injected DB or falls back to the global database.DB
-func (svc *Service) activeDB() database.DBIF {
+func (svc *Service) activeDB() *sql.DB {
 	if svc.db != nil {
 		return svc.db
 	}
@@ -342,32 +342,32 @@ func (svc *Service) GetQuota(c *gin.Context) {
 	// Query current usage from database
 	var networksUsed, subnetsUsed, portsUsed, routersUsed, floatingIPsUsed, securityGroupsUsed int
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM networks WHERE project_id = $1",
 		projectID,
 	).Scan(&networksUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM subnets WHERE project_id = $1",
 		projectID,
 	).Scan(&subnetsUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM ports WHERE project_id = $1",
 		projectID,
 	).Scan(&portsUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM routers WHERE project_id = $1",
 		projectID,
 	).Scan(&routersUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM floating_ips WHERE project_id = $1",
 		projectID,
 	).Scan(&floatingIPsUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM security_groups WHERE project_id = $1",
 		projectID,
 	).Scan(&securityGroupsUsed)
@@ -393,32 +393,32 @@ func (svc *Service) GetQuotaDetails(c *gin.Context) {
 	// Query current usage
 	var networksUsed, subnetsUsed, portsUsed, routersUsed, floatingIPsUsed, securityGroupsUsed int
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM networks WHERE project_id = $1",
 		projectID,
 	).Scan(&networksUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM subnets WHERE project_id = $1",
 		projectID,
 	).Scan(&subnetsUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM ports WHERE project_id = $1",
 		projectID,
 	).Scan(&portsUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM routers WHERE project_id = $1",
 		projectID,
 	).Scan(&routersUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM floating_ips WHERE project_id = $1",
 		projectID,
 	).Scan(&floatingIPsUsed)
 
-	_ = svc.activeDB().QueryRow(c.Request.Context(),
+	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM security_groups WHERE project_id = $1",
 		projectID,
 	).Scan(&securityGroupsUsed)
@@ -511,7 +511,7 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 		mtu = 1450 // Account for VXLAN overhead
 	}
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO networks (id, name, project_id, admin_state_up, status, shared, network_type, mtu, is_external, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, networkID, req.Network.Name, projectID, adminStateUp, "ACTIVE", shared, networkType, mtu, isExternal, now, now)
@@ -618,7 +618,7 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
 		SELECT n.id, n.name, n.project_id, n.admin_state_up, n.status, n.shared, n.mtu, n.network_type, n.is_external, n.created_at, n.updated_at
 		FROM networks n
 		WHERE %s
@@ -715,14 +715,14 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	var mtu int
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRow(ctx, `
+	err := svc.activeDB().QueryRowContext(ctx, database.Q(`
 		SELECT id, name, project_id, admin_state_up, status, shared, mtu, network_type, is_external, created_at, updated_at
 		FROM networks
 		WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)
 		LIMIT 1
-	`, networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAt, &updatedAt)
+	`), networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
@@ -773,11 +773,11 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 
 	// Fetch the network's owning project before deleting (supports policy enforcement).
 	var networkProjectID string
-	err := svc.activeDB().QueryRow(ctx,
-		"SELECT project_id FROM networks WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)",
+	err := svc.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT project_id FROM networks WHERE (id::text = $1 OR name = $1) AND (project_id = $2 OR shared = true)"),
 		networkID, projectID,
 	).Scan(&networkProjectID)
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
 		return
 	}
@@ -805,8 +805,8 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 
 	// Check for active ports (excluding DHCP and router-interface system ports).
 	var portCount int
-	err = svc.activeDB().QueryRow(ctx,
-		`SELECT COUNT(*) FROM ports WHERE network_id = $1 AND device_owner NOT IN ('network:dhcp', 'network:router_interface')`,
+	err = svc.activeDB().QueryRowContext(ctx,
+		database.Q(`SELECT COUNT(*) FROM ports WHERE network_id = $1 AND device_owner NOT IN ('network:dhcp', 'network:router_interface')`),
 		networkID,
 	).Scan(&portCount)
 	if err != nil {
@@ -827,8 +827,8 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 
 	// Check for subnets.
 	var subnetCount int
-	err = svc.activeDB().QueryRow(ctx,
-		"SELECT COUNT(*) FROM subnets WHERE network_id = $1",
+	err = svc.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT COUNT(*) FROM subnets WHERE network_id = $1"),
 		networkID,
 	).Scan(&subnetCount)
 	if err != nil {
@@ -854,8 +854,8 @@ func (svc *Service) DeleteNetwork(c *gin.Context) {
 	_ = svc.brManager.DeleteBridge(bridgeName, true, nsName)
 
 	// Delete from database
-	_, err = svc.activeDB().Exec(ctx,
-		"DELETE FROM networks WHERE id = $1 AND project_id = $2",
+	_, err = svc.activeDB().ExecContext(ctx,
+		database.Q("DELETE FROM networks WHERE id = $1 AND project_id = $2"),
 		networkID, projectID,
 	)
 	if err != nil {
@@ -927,7 +927,7 @@ func (svc *Service) UpdateNetwork(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE networks SET %s WHERE id = $%d AND project_id = $%d",
 		updateString(updates), argID, argID+1)
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_network").Str("network_id", networkID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to update network"))
@@ -986,7 +986,7 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 	}
 
 	// Check for CIDR overlap with existing subnets on the same network
-	existingRows, cidrErr := svc.activeDB().Query(c.Request.Context(),
+	existingRows, cidrErr := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT cidr FROM subnets WHERE network_id = $1",
 		req.Subnet.NetworkID,
 	)
@@ -1011,7 +1011,7 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, ip_version, enable_dhcp, dns_nameservers, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, subnetID, req.Subnet.Name, req.Subnet.NetworkID, projectID, req.Subnet.CIDR, gatewayIP, ipVersion, enableDHCP, req.Subnet.DNSNameservers, now, now)
@@ -1128,7 +1128,7 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
@@ -1209,14 +1209,14 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 	var dnsNameservers []string
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
 		WHERE s.id = $1 AND (s.project_id = $2 OR n.shared = true)
 	`, subnetID, projectID).Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameservers, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
@@ -1254,7 +1254,7 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 
 	// Get network ID to stop DHCP
 	var networkID string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT network_id FROM subnets WHERE id = $1 AND project_id = $2",
 		subnetID, projectID,
 	).Scan(&networkID)
@@ -1266,7 +1266,7 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 
 	// Refuse to delete if ports are still allocated on this subnet.
 	var portCount int
-	if err := svc.activeDB().QueryRow(c.Request.Context(),
+	if err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT COUNT(*) FROM ports WHERE subnet_id = $1",
 		subnetID,
 	).Scan(&portCount); err != nil {
@@ -1286,7 +1286,7 @@ func (svc *Service) DeleteSubnet(c *gin.Context) {
 	}
 
 	// Delete from database
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM subnets WHERE id = $1 AND project_id = $2",
 		subnetID, projectID,
 	)
@@ -1316,12 +1316,12 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 
 	// Check subnet exists
 	var currentName string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT name FROM subnets WHERE id = $1 AND project_id = $2",
 		subnetID, projectID,
 	).Scan(&currentName)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
 		return
 	}
@@ -1336,7 +1336,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 		currentName = *req.Subnet.Name
 	}
 
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE subnets SET name = $1 WHERE id = $2",
 		currentName, subnetID,
 	)
@@ -1349,7 +1349,7 @@ func (svc *Service) UpdateSubnet(c *gin.Context) {
 	// Return updated subnet
 	var networkID, cidr, gatewayIP string
 	var ipVersion int
-	err = svc.activeDB().QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT network_id, cidr, gateway_ip, ip_version FROM subnets WHERE id = $1",
 		subnetID,
 	).Scan(&networkID, &cidr, &gatewayIP, &ipVersion)

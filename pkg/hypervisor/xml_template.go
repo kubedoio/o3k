@@ -41,15 +41,15 @@ func renderRBDHosts(monitors []string) string {
 
 // VMSpec defines VM specifications
 type VMSpec struct {
-	UUID         string
-	Name         string
-	VCPUs        int
-	MemoryMB     int
-	DiskGB       int
-	ImagePath    string // Path to image (RBD or local)
-	Networks     []NetworkConfig
-	Volumes      []VolumeConfig
-	CloudInit    *CloudInitConfig
+	UUID      string
+	Name      string
+	VCPUs     int
+	MemoryMB  int
+	DiskGB    int
+	ImagePath string // Path to image (RBD or local)
+	Networks  []NetworkConfig
+	Volumes   []VolumeConfig
+	CloudInit *CloudInitConfig
 	// CephMonitors is the list of Ceph monitor endpoints in host:port form
 	// (e.g. ["mon1.ceph.local:6789", "10.0.0.5:6789"]). Used when ImagePath is
 	// an rbd: URL or any Volumes are RBD-backed. Empty means "fall back to
@@ -68,10 +68,10 @@ type NetworkConfig struct {
 
 // VolumeConfig defines volume attachment configuration
 type VolumeConfig struct {
-	VolumeID  string
-	RBDPool   string
-	RBDImage  string
-	Device    string // vda, vdb, etc.
+	VolumeID string
+	RBDPool  string
+	RBDImage string
+	Device   string // vda, vdb, etc.
 }
 
 // CloudInitConfig defines cloud-init configuration

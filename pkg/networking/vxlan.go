@@ -77,7 +77,7 @@ func (m *VXLANManager) createVXLANReal(networkID string, vni int, localIP string
 		},
 		VxlanId:  vni,
 		Port:     m.vxlanPort,
-		Learning: true,  // Enable MAC learning
+		Learning: true, // Enable MAC learning
 		SrcAddr:  localAddr,
 		L2miss:   true,  // Notify on L2 miss
 		L3miss:   true,  // Notify on L3 miss

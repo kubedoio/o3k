@@ -11,10 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
-
-
-
 // TestCinderListBackups_Contract tests GET /v3/:project_id/backups
 func TestCinderListBackups_Contract(t *testing.T) {
 	skipIfO3KNotRunning(t)

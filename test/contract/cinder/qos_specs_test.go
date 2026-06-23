@@ -49,10 +49,10 @@ func TestCinderCreateQosSpec_Contract(t *testing.T) {
 
 	payload := map[string]interface{}{
 		"qos_specs": map[string]interface{}{
-			"name": "test-qos",
+			"name":     "test-qos",
 			"consumer": "back-end",
 			"specs": map[string]interface{}{
-				"read_iops_sec": "1000",
+				"read_iops_sec":  "1000",
 				"write_iops_sec": "800",
 			},
 		},
@@ -133,7 +133,7 @@ func TestCinderUpdateQosSpec_Contract(t *testing.T) {
 
 	payload := map[string]interface{}{
 		"qos_specs": map[string]interface{}{
-			"read_iops_sec": "2000",
+			"read_iops_sec":  "2000",
 			"write_iops_sec": "1500",
 		},
 	}
@@ -194,10 +194,10 @@ func createTestQosSpec(t *testing.T, client *gophercloud.ServiceClient) string {
 
 	payload := map[string]interface{}{
 		"qos_specs": map[string]interface{}{
-			"name": "test-qos",
+			"name":     "test-qos",
 			"consumer": "back-end",
 			"specs": map[string]interface{}{
-				"read_iops_sec": "1000",
+				"read_iops_sec":  "1000",
 				"write_iops_sec": "800",
 			},
 		},

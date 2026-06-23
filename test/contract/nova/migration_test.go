@@ -127,4 +127,3 @@ func TestNovaServerLiveMigrate_Contract(t *testing.T) {
 		}
 	}
 }
-

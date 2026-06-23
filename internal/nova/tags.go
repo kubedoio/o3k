@@ -15,7 +15,7 @@ func (svc *Service) ListServerTags(c *gin.Context) {
 
 	// Verify server exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
 	).Scan(&exists)
@@ -26,7 +26,7 @@ func (svc *Service) ListServerTags(c *gin.Context) {
 	}
 
 	// Get tags
-	rows, err := svc.activeDB().Query(c.Request.Context(),
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT tag FROM server_tags WHERE instance_id = $1 ORDER BY tag",
 		instanceID,
 	)
@@ -69,7 +69,7 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 
 	// Verify server exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
 	).Scan(&exists)
@@ -80,7 +80,7 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 	}
 
 	// Delete all existing tags
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM server_tags WHERE instance_id = $1",
 		instanceID,
 	)
@@ -92,7 +92,7 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 
 	// Insert new tags
 	for _, tag := range req.Tags {
-		_, err = svc.activeDB().Exec(c.Request.Context(),
+		_, err = svc.activeDB().ExecContext(c.Request.Context(),
 			"INSERT INTO server_tags (instance_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING",
 			instanceID, tag,
 		)
@@ -114,7 +114,7 @@ func (svc *Service) AddServerTag(c *gin.Context) {
 
 	// Verify server exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
 	).Scan(&exists)
@@ -125,7 +125,7 @@ func (svc *Service) AddServerTag(c *gin.Context) {
 	}
 
 	// Insert tag
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"INSERT INTO server_tags (instance_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING",
 		instanceID, tag,
 	)
@@ -146,7 +146,7 @@ func (svc *Service) DeleteServerTag(c *gin.Context) {
 
 	// Verify server exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
 	).Scan(&exists)
@@ -157,7 +157,7 @@ func (svc *Service) DeleteServerTag(c *gin.Context) {
 	}
 
 	// Delete tag
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM server_tags WHERE instance_id = $1 AND tag = $2",
 		instanceID, tag,
 	)
@@ -167,7 +167,7 @@ func (svc *Service) DeleteServerTag(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("tag"))
 		return
 	}
@@ -182,7 +182,7 @@ func (svc *Service) DeleteAllServerTags(c *gin.Context) {
 
 	// Verify server exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
 		instanceID, projectID,
 	).Scan(&exists)
@@ -193,7 +193,7 @@ func (svc *Service) DeleteAllServerTags(c *gin.Context) {
 	}
 
 	// Delete all tags
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM server_tags WHERE instance_id = $1",
 		instanceID,
 	)

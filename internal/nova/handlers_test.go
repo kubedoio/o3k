@@ -15,9 +15,9 @@ import (
 
 func TestListFlavorsReturnsJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewMockDB()
+	db := database.NewTestDB(t)
 
-	svc := nova.NewServiceWithDB(mock, "stub")
+	svc := nova.NewServiceWithDB(db, "stub")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request, _ = http.NewRequest("GET", "/v2.1/flavors", nil)
@@ -32,11 +32,10 @@ func TestListFlavorsReturnsJSON(t *testing.T) {
 }
 
 func TestSetDispatcher(t *testing.T) {
-	mock := database.NewMockDB()
-	svc := nova.NewServiceWithDB(mock, "stub")
+	db := database.NewTestDB(t)
+	svc := nova.NewServiceWithDB(db, "stub")
 
 	hub := tunnel.NewHub("secret")
-	dispatcher := tunnel.NewDispatcher(hub)
-	svc.SetDispatcher(dispatcher)
+	svc.SetDispatcher(hub)
 	// No panic — dispatcher is wired
 }

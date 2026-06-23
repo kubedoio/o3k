@@ -78,12 +78,12 @@ func TestCinderGetLimits_Contract(t *testing.T) {
 		Limits struct {
 			Rate     []interface{} `json:"rate"`
 			Absolute struct {
-				MaxTotalVolumes          int `json:"maxTotalVolumes"`
-				MaxTotalSnapshots        int `json:"maxTotalSnapshots"`
-				MaxTotalVolumeGigabytes  int `json:"maxTotalVolumeGigabytes"`
-				TotalVolumesUsed         int `json:"totalVolumesUsed"`
-				TotalSnapshotsUsed       int `json:"totalSnapshotsUsed"`
-				TotalGigabytesUsed       int `json:"totalGigabytesUsed"`
+				MaxTotalVolumes         int `json:"maxTotalVolumes"`
+				MaxTotalSnapshots       int `json:"maxTotalSnapshots"`
+				MaxTotalVolumeGigabytes int `json:"maxTotalVolumeGigabytes"`
+				TotalVolumesUsed        int `json:"totalVolumesUsed"`
+				TotalSnapshotsUsed      int `json:"totalSnapshotsUsed"`
+				TotalGigabytesUsed      int `json:"totalGigabytesUsed"`
 			} `json:"absolute"`
 		} `json:"limits"`
 	}

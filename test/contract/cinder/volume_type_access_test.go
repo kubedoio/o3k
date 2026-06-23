@@ -21,7 +21,7 @@ func TestCinderVolumeTypeAccessCRUD(t *testing.T) {
 	// Create a private volume type
 	volumeType := map[string]interface{}{
 		"volume_type": map[string]interface{}{
-			"name": "private-type-test",
+			"name":                            "private-type-test",
 			"os-volume-type-access:is_public": false,
 		},
 	}

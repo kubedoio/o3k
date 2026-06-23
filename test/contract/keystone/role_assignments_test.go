@@ -3,9 +3,9 @@ package keystone_test
 import (
 	"testing"
 
+	"github.com/gophercloud/gophercloud/openstack/identity/v3/projects"
 	"github.com/gophercloud/gophercloud/openstack/identity/v3/roles"
 	"github.com/gophercloud/gophercloud/openstack/identity/v3/users"
-	"github.com/gophercloud/gophercloud/openstack/identity/v3/projects"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -5,26 +5,23 @@ import (
 	"errors"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 	"github.com/rs/zerolog/log"
 )
 
-// Dispatcher sends a task to the agent identified by agentID and returns the
-// raw result bytes, an application-level error message, or a transport error.
-type Dispatcher interface {
-	Dispatch(ctx context.Context, agentID string, taskType string, payload []byte, timeoutSec int) (result []byte, errMsg string, err error)
-}
-
 // Worker polls the tasks table, atomically claims one pending task alongside a
-// capable compute node, dispatches the work via Dispatcher, and records the outcome.
+// capable compute node, dispatches the work via the tunnel Hub, and records the outcome.
 type Worker struct {
-	db         database.DBIF
-	dispatcher Dispatcher
+	db  *sql.DB
+	hub *tunnel.Hub
 }
 
-// NewWorker constructs a Worker backed by db and dispatcher.
-func NewWorker(db database.DBIF, dispatcher Dispatcher) *Worker {
-	return &Worker{db: db, dispatcher: dispatcher}
+// NewWorker constructs a Worker backed by db and hub.
+func NewWorker(db *sql.DB, hub *tunnel.Hub) *Worker {
+	return &Worker{db: db, hub: hub}
 }
 
 // Run blocks until ctx is cancelled, polling for pending tasks every 500 ms.
@@ -57,7 +54,7 @@ func (w *Worker) processOne(ctx context.Context) {
 	dispatchCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	result, errMsg, dispatchErr := w.dispatcher.Dispatch(dispatchCtx, agentID, taskType, payload, timeoutSec)
+	result, errMsg, dispatchErr := w.hub.DispatchSync(dispatchCtx, agentID, taskType, payload, timeoutSec)
 	w.recordResult(ctx, taskID, agentID, resourceID, retries, reqVcpu, reqRam, reqDisk, result, errMsg, dispatchErr)
 }
 
@@ -66,7 +63,7 @@ func (w *Worker) processOne(ctx context.Context) {
 // subsequent UPDATEs are atomic.  Both rows are locked with FOR UPDATE SKIP
 // LOCKED so concurrent workers never pick the same pair.
 func (w *Worker) claimTask(ctx context.Context) (taskID, agentID, taskType string, payload []byte, timeoutSec, reqVcpu int, reqRam, reqDisk int64, resourceID string, retries int, err error) {
-	tx, err := w.db.BeginTx(ctx, database.TxOptions{})
+	tx, err := w.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return
 	}
@@ -78,28 +75,28 @@ func (w *Worker) claimTask(ctx context.Context) (taskID, agentID, taskType strin
 	// Rollback on any failure path; a no-op after a successful Commit.
 	defer func() {
 		if err != nil || taskID == "" {
-			_ = tx.Rollback(ctx)
+			_ = tx.Rollback()
 		}
 	}()
 
-	row := tx.QueryRow(ctx, `
+	row := tx.QueryRowContext(ctx, database.Q(`
 		SELECT id, type, payload, timeout_sec, req_vcpu, req_ram_mb, req_disk_gb, resource_id, retries
 		FROM tasks
 		WHERE status = 'pending'
 		  AND (next_retry_at IS NULL OR next_retry_at <= now())
 		ORDER BY created_at
 		FOR UPDATE SKIP LOCKED
-		LIMIT 1`)
+		LIMIT 1`))
 
 	err = row.Scan(&taskID, &taskType, &payload, &timeoutSec, &reqVcpu, &reqRam, &reqDisk, &resourceID, &retries)
 	if err != nil {
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
 		}
 		return
 	}
 
-	agentRow := tx.QueryRow(ctx, `
+	agentRow := tx.QueryRowContext(ctx, database.Q(`
 		SELECT id FROM compute_nodes
 		WHERE status = 'active'
 		  AND stats_updated_at > now() - interval '30 seconds'
@@ -108,29 +105,29 @@ func (w *Worker) claimTask(ctx context.Context) (taskID, agentID, taskType strin
 		  AND (total_disk_gb - reserved_disk_gb) >= $3
 		ORDER BY (total_vcpu - reserved_vcpu) DESC
 		FOR UPDATE SKIP LOCKED
-		LIMIT 1`, reqVcpu, reqRam, reqDisk)
+		LIMIT 1`), reqVcpu, reqRam, reqDisk)
 
 	err = agentRow.Scan(&agentID)
 	if err != nil {
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
 			taskID = ""
 		}
 		return
 	}
 
-	_, err = tx.Exec(ctx, `UPDATE tasks SET status='dispatched', agent_id=$1, dispatched_at=now() WHERE id=$2`, agentID, taskID)
+	_, err = tx.ExecContext(ctx, database.Q(`UPDATE tasks SET status='dispatched', agent_id=$1, dispatched_at=now() WHERE id=$2`), agentID, taskID)
 	if err != nil {
 		taskID = ""
 		return
 	}
-	_, err = tx.Exec(ctx, `UPDATE compute_nodes SET reserved_vcpu=reserved_vcpu+$1, reserved_ram_mb=reserved_ram_mb+$2, reserved_disk_gb=reserved_disk_gb+$3 WHERE id=$4`, reqVcpu, reqRam, reqDisk, agentID)
+	_, err = tx.ExecContext(ctx, database.Q(`UPDATE compute_nodes SET reserved_vcpu=reserved_vcpu+$1, reserved_ram_mb=reserved_ram_mb+$2, reserved_disk_gb=reserved_disk_gb+$3 WHERE id=$4`), reqVcpu, reqRam, reqDisk, agentID)
 	if err != nil {
 		taskID = ""
 		return
 	}
 
-	err = tx.Commit(ctx)
+	err = tx.Commit()
 	if err != nil {
 		taskID = ""
 	}
@@ -147,29 +144,29 @@ func (w *Worker) recordResult(ctx context.Context, taskID, agentID, resourceID s
 			errorText = dispatchErr.Error()
 		}
 		if retries >= maxTaskRetries {
-			if _, err := w.db.Exec(ctx, `UPDATE tasks SET status='failed', error=$1, completed_at=now() WHERE id=$2`, errorText, taskID); err != nil {
+			if _, err := w.db.ExecContext(ctx, database.Q(`UPDATE tasks SET status='failed', error=$1, completed_at=now() WHERE id=$2`), errorText, taskID); err != nil {
 				log.Error().Err(err).Str("task_id", taskID).Msg("CRITICAL: failed to update task status to failed")
 			}
-			if _, err := w.db.Exec(ctx, `UPDATE instances SET status='ERROR', task_state=NULL WHERE id=$1`, resourceID); err != nil {
+			if _, err := w.db.ExecContext(ctx, database.Q(`UPDATE instances SET status='ERROR', task_state=NULL WHERE id=$1`), resourceID); err != nil {
 				log.Error().Err(err).Str("resource_id", resourceID).Msg("CRITICAL: failed to update instance status to ERROR")
 			}
 		} else {
 			backoff := time.Duration((retries+1)*5) * time.Second
-			if _, err := w.db.Exec(ctx, `UPDATE tasks SET status='pending', agent_id=NULL, next_retry_at=$1, error=$2, retries=retries+1 WHERE id=$3`,
+			if _, err := w.db.ExecContext(ctx, database.Q(`UPDATE tasks SET status='pending', agent_id=NULL, next_retry_at=$1, error=$2, retries=retries+1 WHERE id=$3`),
 				time.Now().Add(backoff), errorText, taskID); err != nil {
 				log.Error().Err(err).Str("task_id", taskID).Msg("CRITICAL: failed to requeue task for retry")
 			}
 		}
 	} else {
-		if _, err := w.db.Exec(ctx, `UPDATE tasks SET status='completed', completed_at=now() WHERE id=$1`, taskID); err != nil {
+		if _, err := w.db.ExecContext(ctx, database.Q(`UPDATE tasks SET status='completed', completed_at=now() WHERE id=$1`), taskID); err != nil {
 			log.Error().Err(err).Str("task_id", taskID).Msg("CRITICAL: failed to mark task completed")
 		}
-		if _, err := w.db.Exec(ctx, `UPDATE instances SET status='ACTIVE', task_state=NULL, power_state=1 WHERE id=$1`, resourceID); err != nil {
+		if _, err := w.db.ExecContext(ctx, database.Q(`UPDATE instances SET status='ACTIVE', task_state=NULL, power_state=1 WHERE id=$1`), resourceID); err != nil {
 			log.Error().Err(err).Str("resource_id", resourceID).Msg("CRITICAL: failed to update instance status to ACTIVE")
 		}
 	}
 
-	if _, err := w.db.Exec(ctx, `UPDATE compute_nodes SET reserved_vcpu=GREATEST(0,reserved_vcpu-$1), reserved_ram_mb=GREATEST(0,reserved_ram_mb-$2), reserved_disk_gb=GREATEST(0,reserved_disk_gb-$3) WHERE id=$4`,
+	if _, err := w.db.ExecContext(ctx, database.Q(`UPDATE compute_nodes SET reserved_vcpu=GREATEST(0,reserved_vcpu-$1), reserved_ram_mb=GREATEST(0,reserved_ram_mb-$2), reserved_disk_gb=GREATEST(0,reserved_disk_gb-$3) WHERE id=$4`),
 		reqVcpu, reqRam, reqDisk, agentID); err != nil {
 		log.Error().Err(err).Str("agent_id", agentID).Msg("CRITICAL: failed to release compute node resources")
 	}
