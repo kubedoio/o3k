@@ -360,7 +360,7 @@ func (svc *Service) FlavorAction(c *gin.Context) {
 		}
 
 		_, err := svc.activeDB().ExecContext(c.Request.Context(),
-			"DELETE FROM flavor_access WHERE flavor_id = $1 AND project_id = $2",
+			database.Q("DELETE FROM flavor_access WHERE flavor_id = $1 AND project_id::text = $2"),
 			flavorID, tenantID,
 		)
 

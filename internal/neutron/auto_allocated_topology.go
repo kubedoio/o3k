@@ -2,6 +2,7 @@ package neutron
 
 import (
 	"errors"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -19,12 +20,12 @@ func (svc *Service) GetAutoAllocatedTopology(c *gin.Context) {
 
 	// Check if auto-allocated network exists for this project
 	var networkID, networkName string
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name
 		FROM networks
-		WHERE project_id = $1 AND name = 'auto-allocated-network'
+		WHERE project_id::text = $1 AND name = 'auto-allocated-network'
 		LIMIT 1
-	`, projectID).Scan(&networkID, &networkName)
+	`), projectID).Scan(&networkID, &networkName)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -56,12 +57,12 @@ func (svc *Service) CreateAutoAllocatedTopology(c *gin.Context) {
 
 	// Check if auto-allocated network already exists
 	var existingNetworkID string
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id
 		FROM networks
-		WHERE project_id = $1 AND name = 'auto-allocated-network'
+		WHERE project_id::text = $1 AND name = 'auto-allocated-network'
 		LIMIT 1
-	`, projectID).Scan(&existingNetworkID)
+	`), projectID).Scan(&existingNetworkID)
 
 	if err == nil {
 		// Already exists, return it
@@ -127,12 +128,12 @@ func (svc *Service) DeleteAutoAllocatedTopology(c *gin.Context) {
 
 	// Find auto-allocated network
 	var networkID string
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id
 		FROM networks
-		WHERE project_id = $1 AND name = 'auto-allocated-network'
+		WHERE project_id::text = $1 AND name = 'auto-allocated-network'
 		LIMIT 1
-	`, projectID).Scan(&networkID)
+	`), projectID).Scan(&networkID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("auto-allocated topology"))

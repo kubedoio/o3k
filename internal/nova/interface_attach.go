@@ -41,7 +41,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 	// Verify instance exists
 	var libvirtDomainID, status string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id, status FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT libvirt_domain_id, status FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &status)
 
@@ -63,7 +63,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		var deviceID string
 		var fixedIPsJSON []byte
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT network_id, fixed_ips, mac_address, device_id FROM ports WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT network_id, fixed_ips, mac_address, device_id FROM ports WHERE id = $1 AND project_id::text = $2"),
 			portID, projectID,
 		).Scan(&networkID, &fixedIPsJSON, &macAddress, &deviceID)
 
@@ -95,7 +95,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		// Verify network exists
 		var networkExists bool
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT EXISTS(SELECT 1 FROM networks WHERE id = $1 AND project_id = $2)",
+			database.Q("SELECT EXISTS(SELECT 1 FROM networks WHERE id = $1 AND project_id::text = $2)"),
 			networkID, projectID,
 		).Scan(&networkExists)
 
@@ -200,7 +200,7 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	// Verify instance exists
 	var instanceExists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&instanceExists)
 
@@ -265,7 +265,7 @@ func (svc *Service) ListInterfaceAttachments(c *gin.Context) {
 	// Verify instance exists
 	var instanceExists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&instanceExists)
 

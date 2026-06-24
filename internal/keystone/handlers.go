@@ -441,14 +441,14 @@ func (svc *Service) ListAuthProjects(c *gin.Context) {
 	}
 
 	// Query projects the user has access to
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id, d.name as domain_name
 		FROM projects p
 		JOIN role_assignments ra ON ra.project_id = p.id
 		JOIN domains d ON p.domain_id = d.id
-		WHERE ra.user_id = $1 AND p.enabled = true
+		WHERE ra.user_id::text = $1 AND p.enabled = true
 		ORDER BY p.name
-	`, claims.UserID)
+	`), claims.UserID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_auth_projects").Str("user_id", claims.UserID).Msg("Failed to query auth projects")
@@ -634,7 +634,7 @@ func (svc *Service) ListProjects(c *gin.Context) {
 			database.Q(`SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id
 			 FROM projects p
 			 JOIN role_assignments ra ON ra.project_id = p.id
-			 WHERE ra.user_id = $1
+			 WHERE ra.user_id::text = $1
 			 ORDER BY p.name`), userID)
 	}
 	if err != nil {
@@ -1102,7 +1102,7 @@ func (svc *Service) UnassignRole(c *gin.Context) {
 	roleID := c.Param("role_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM role_assignments WHERE user_id = $1 AND project_id = $2 AND role_id = $3",
+		database.Q("DELETE FROM role_assignments WHERE user_id::text = $1 AND project_id::text = $2 AND role_id = $3"),
 		userID, projectID, roleID,
 	)
 	if err != nil {
@@ -1141,10 +1141,10 @@ func (svc *Service) ListUserProjectRoles(c *gin.Context) {
 	}
 
 	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
-		`SELECT r.id, r.name
+		database.Q(`SELECT r.id, r.name
 		 FROM roles r
 		 INNER JOIN role_assignments ra ON r.id = ra.role_id
-		 WHERE ra.user_id = $1 AND ra.project_id = $2`,
+		 WHERE ra.user_id::text = $1 AND ra.project_id::text = $2`),
 		userID, projectID,
 	)
 	if err != nil {
@@ -1187,10 +1187,10 @@ func (svc *Service) CheckRoleAssignment(c *gin.Context) {
 
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		`SELECT EXISTS(
+		database.Q(`SELECT EXISTS(
 			SELECT 1 FROM role_assignments
-			WHERE user_id = $1 AND project_id = $2 AND role_id = $3
-		)`,
+			WHERE user_id::text = $1 AND project_id::text = $2 AND role_id = $3
+		)`),
 		userID, projectID, roleID,
 	).Scan(&exists)
 
@@ -1648,11 +1648,11 @@ func (svc *Service) GetUserProjects(c *gin.Context) {
 
 	// Fetch projects via role_assignments
 	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
-		`SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id
+		database.Q(`SELECT DISTINCT p.id, p.name, p.description, p.enabled, p.domain_id
 		 FROM projects p
 		 INNER JOIN role_assignments ra ON ra.project_id = p.id
-		 WHERE ra.user_id = $1
-		 ORDER BY p.name`,
+		 WHERE ra.user_id::text = $1
+		 ORDER BY p.name`),
 		userID,
 	)
 
@@ -1752,11 +1752,11 @@ func (svc *Service) GetUserGroups(c *gin.Context) {
 
 	// Fetch groups via group_members
 	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
-		`SELECT g.id, g.name, g.description, g.domain_id
+		database.Q(`SELECT g.id, g.name, g.description, g.domain_id
 		 FROM groups g
 		 INNER JOIN group_members gm ON gm.group_id = g.id
-		 WHERE gm.user_id = $1
-		 ORDER BY g.name`,
+		 WHERE gm.user_id::text = $1
+		 ORDER BY g.name`),
 		userID,
 	)
 

@@ -38,12 +38,12 @@ func (svc *Service) ListApplicationCredentials(c *gin.Context) {
 		}
 	}
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, created_at, access_rules
 		FROM application_credentials
-		WHERE user_id = $1
+		WHERE user_id::text = $1
 		ORDER BY created_at DESC
-	`, userID)
+	`), userID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_application_credentials").Str("user_id", userID).Msg("Failed to query application credentials")
 		common.SendError(c, common.NewInternalServerError("failed to query application credentials"))
@@ -239,7 +239,7 @@ func (svc *Service) CreateApplicationCredential(c *gin.Context) {
 
 		var exists bool
 		err := svc.activeDB().QueryRowContext(ctx,
-			database.Q(`SELECT EXISTS(SELECT 1 FROM role_assignments WHERE user_id=$1 AND project_id=$2 AND role_id=$3)`),
+			database.Q(`SELECT EXISTS(SELECT 1 FROM role_assignments WHERE user_id::text=$1 AND project_id::text=$2 AND role_id=$3)`),
 			callerID, callerProjectID, roleID,
 		).Scan(&exists)
 		if err != nil || !exists {
@@ -332,11 +332,11 @@ func (svc *Service) GetApplicationCredential(c *gin.Context) {
 	var unrestricted bool
 	var accessRulesJSON []byte
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, user_id, project_id, name, description, expires_at, unrestricted, access_rules
 		FROM application_credentials
-		WHERE id = $1 AND user_id = $2
-	`, credID, userID).Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted, &accessRulesJSON)
+		WHERE id = $1 AND user_id::text = $2
+	`), credID, userID).Scan(&id, &userIDVal, &projectID, &name, &description, &expiresAt, &unrestricted, &accessRulesJSON)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("application credential"))
@@ -424,7 +424,7 @@ func (svc *Service) DeleteApplicationCredential(c *gin.Context) {
 	}
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM application_credentials WHERE id = $1 AND user_id = $2",
+		database.Q("DELETE FROM application_credentials WHERE id = $1 AND user_id::text = $2"),
 		credID, userID)
 
 	if err != nil {

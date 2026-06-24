@@ -9,6 +9,7 @@ import (
 	"database/sql"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,7 +21,7 @@ func (svc *Service) StageImageData(c *gin.Context) {
 	// Verify image exists and is owned by project
 	var status string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT status FROM images WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT status FROM images WHERE id = $1 AND project_id::text = $2"),
 		imageID, projectID,
 	).Scan(&status)
 
@@ -84,7 +85,7 @@ func (svc *Service) ImportImage(c *gin.Context) {
 	// Verify image exists
 	var status string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT status FROM images WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT status FROM images WHERE id = $1 AND project_id::text = $2"),
 		imageID, projectID,
 	).Scan(&status)
 
@@ -123,7 +124,7 @@ func (svc *Service) GetImageImportInfo(c *gin.Context) {
 	// Verify image exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM images WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM images WHERE id = $1 AND project_id::text = $2)"),
 		imageID, projectID,
 	).Scan(&exists)
 

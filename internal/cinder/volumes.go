@@ -266,13 +266,13 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 	// Load per-project quota limits inside the transaction (fall back to defaults).
 	var quotaVolumes, quotaGigabytes int
 	if err := tx.QueryRowContext(c.Request.Context(),
-		`SELECT "limit" FROM cinder_quotas WHERE project_id = $1 AND resource = 'volumes'`,
+		database.Q(`SELECT "limit" FROM cinder_quotas WHERE project_id::text = $1 AND resource = 'volumes'`),
 		projectID,
 	).Scan(&quotaVolumes); err != nil {
 		quotaVolumes = defaultMaxVolumes
 	}
 	if err := tx.QueryRowContext(c.Request.Context(),
-		`SELECT "limit" FROM cinder_quotas WHERE project_id = $1 AND resource = 'gigabytes'`,
+		database.Q(`SELECT "limit" FROM cinder_quotas WHERE project_id::text = $1 AND resource = 'gigabytes'`),
 		projectID,
 	).Scan(&quotaGigabytes); err != nil {
 		quotaGigabytes = defaultMaxGigabytes
@@ -280,7 +280,7 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 
 	var usedCount, usedGB int
 	if err := tx.QueryRowContext(c.Request.Context(),
-		`SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id = $1 AND status != 'deleted'`,
+		database.Q(`SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id::text = $1 AND status != 'deleted'`),
 		projectID,
 	).Scan(&usedCount, &usedGB); err != nil {
 		log.Error().Err(err).Str("operation", "create_volume_quota_check").Msg("failed to query volume usage")
@@ -459,7 +459,7 @@ func (svc *Service) ListVolumes(c *gin.Context) {
 		markerQuery := "SELECT created_at FROM volumes WHERE id = $1"
 		markerArgs := []interface{}{marker}
 		if !allTenants {
-			markerQuery += " AND project_id = $2"
+			markerQuery += database.Q(" AND project_id::text = $2")
 			markerArgs = append(markerArgs, projectID)
 		}
 		err := svc.activeDB().QueryRowContext(c.Request.Context(), markerQuery, markerArgs...).Scan(&markerCreatedAt)
@@ -571,7 +571,7 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 		markerQuery := "SELECT created_at FROM volumes WHERE id = $1"
 		markerArgs := []interface{}{marker}
 		if !allTenants {
-			markerQuery += " AND project_id = $2"
+			markerQuery += database.Q(" AND project_id::text = $2")
 			markerArgs = append(markerArgs, projectID)
 		}
 		err := svc.activeDB().QueryRowContext(c.Request.Context(), markerQuery, markerArgs...).Scan(&markerCreatedAt)
@@ -611,13 +611,13 @@ func (svc *Service) ListVolumesDetail(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit, offset)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(database.Q(`
 		SELECT v.id, v.name, v.size_gb, v.status, v.bootable, v.attached_to_instance_id, v.created_at, v.updated_at, COALESCE(v.volume_type, '__DEFAULT__'), COALESCE(v.availability_zone, 'nova'), COALESCE(v.encrypted, false), v.description, v.user_id::text
 		FROM volumes v
 		%s
 		ORDER BY v.created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIdx, argIdx+1), queryArgs...)
+	`), whereClause, argIdx, argIdx+1), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_volumes_detail").Msg("failed to query volumes")
@@ -726,11 +726,11 @@ func (svc *Service) GetVolume(c *gin.Context) {
 	var createdAt, updatedAt time.Time
 
 	// Support lookup by ID or name
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, size_gb, status, bootable, attached_to_instance_id, created_at, updated_at, COALESCE(volume_type, '__DEFAULT__'), COALESCE(availability_zone, 'nova'), COALESCE(encrypted, false), description, user_id::text
 		FROM volumes
-		WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))
-	`, volumeID, projectID).Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt, &volumeType, &availabilityZone, &encrypted, &description, &userID)
+		WHERE project_id::text = $2 AND ((id::text = $1) OR (name = $1))
+	`), volumeID, projectID).Scan(&id, &name, &size, &status, &bootable, &attachedTo, &createdAt, &updatedAt, &volumeType, &availabilityZone, &encrypted, &description, &userID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("volume"))
@@ -792,10 +792,10 @@ func (svc *Service) GetVolume(c *gin.Context) {
 				{"rel": "self", "href": fmt.Sprintf("/v3/%s/volumes/%s", projectID, id)},
 				{"rel": "bookmark", "href": fmt.Sprintf("/volumes/%s", id)},
 			},
-			"os-vol-host-attr:host":              "localhost",
-			"os-vol-mig-status-attr:migstat":     nil,
-			"os-vol-mig-status-attr:name_id":     nil,
-			"os-vol-tenant-attr:tenant_id":        projectID,
+			"os-vol-host-attr:host":          "localhost",
+			"os-vol-mig-status-attr:migstat": nil,
+			"os-vol-mig-status-attr:name_id": nil,
+			"os-vol-tenant-attr:tenant_id":   projectID,
 		},
 	})
 }
@@ -814,7 +814,7 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 	var actualVolumeID string
 	var volumeUserID sql.NullString
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id, attached_to_instance_id, user_id FROM volumes WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		database.Q("SELECT id, attached_to_instance_id, user_id FROM volumes WHERE project_id::text = $2 AND ((id::text = $1) OR (name = $1))"),
 		volumeID, projectID,
 	).Scan(&actualVolumeID, &attachedTo, &volumeUserID)
 
@@ -847,7 +847,7 @@ func (svc *Service) DeleteVolume(c *gin.Context) {
 
 	// Delete from database first (recoverable if Ceph cleanup fails)
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM volumes WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM volumes WHERE id = $1 AND project_id::text = $2"),
 		actualVolumeID, projectID,
 	)
 	if err != nil {
@@ -886,7 +886,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 	var currentStatus string
 	var currentSizeGB int
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT status, size_gb FROM volumes WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT status, size_gb FROM volumes WHERE id = $1 AND project_id::text = $2"),
 		volumeID, projectID,
 	).Scan(&currentStatus, &currentSizeGB)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -915,7 +915,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		// Verify the instance belongs to the caller's project.
 		var instanceExists bool
 		if err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+			database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 			instanceID, projectID,
 		).Scan(&instanceExists); err != nil || !instanceExists {
 			common.SendError(c, common.NewNotFoundError("instance"))
@@ -934,7 +934,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 
 		var txStatus string
 		if err := tx.QueryRowContext(c.Request.Context(),
-			"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT status FROM volumes WHERE id = $1 AND project_id::text = $2"),
 			volumeID, projectID,
 		).Scan(&txStatus); err != nil {
 			log.Error().Err(err).Str("operation", "attach_volume_tx_status").Str("volume_id", volumeID).Msg("failed to query volume status in transaction")
@@ -952,11 +952,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			return
 		}
 
-		if _, err := tx.ExecContext(c.Request.Context(), `
+		if _, err := tx.ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET attached_to_instance_id = $1, status = $2, updated_at = $3
-			WHERE id = $4 AND project_id = $5
-		`, instanceID, "in-use", time.Now(), volumeID, projectID); err != nil {
+			WHERE id = $4 AND project_id::text = $5
+		`), instanceID, "in-use", time.Now(), volumeID, projectID); err != nil {
 			log.Error().Err(err).Str("operation", "attach_volume").Str("volume_id", volumeID).Msg("failed to attach volume")
 			common.SendError(c, common.NewInternalServerError("failed to attach volume"))
 			return
@@ -986,7 +986,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 
 		var txStatus string
 		if err := tx.QueryRowContext(c.Request.Context(),
-			"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT status FROM volumes WHERE id = $1 AND project_id::text = $2"),
 			volumeID, projectID,
 		).Scan(&txStatus); err != nil {
 			log.Error().Err(err).Str("operation", "detach_volume_tx_status").Str("volume_id", volumeID).Msg("failed to query volume status in transaction")
@@ -1004,11 +1004,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			return
 		}
 
-		if _, err := tx.ExecContext(c.Request.Context(), `
+		if _, err := tx.ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET attached_to_instance_id = NULL, status = $1, updated_at = $2
-			WHERE id = $3 AND project_id = $4
-		`, "available", time.Now(), volumeID, projectID); err != nil {
+			WHERE id = $3 AND project_id::text = $4
+		`), "available", time.Now(), volumeID, projectID); err != nil {
 			log.Error().Err(err).Str("operation", "detach_volume").Str("volume_id", volumeID).Msg("failed to detach volume")
 			common.SendError(c, common.NewInternalServerError("failed to detach volume"))
 			return
@@ -1075,7 +1075,7 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		var txStatus string
 		var txSizeGB int
 		if err := tx.QueryRowContext(c.Request.Context(),
-			"SELECT status, size_gb FROM volumes WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT status, size_gb FROM volumes WHERE id = $1 AND project_id::text = $2"),
 			volumeID, projectID,
 		).Scan(&txStatus, &txSizeGB); err != nil {
 			log.Error().Err(err).Str("operation", "extend_volume_tx_status").Str("volume_id", volumeID).Msg("failed to query volume in transaction")
@@ -1099,11 +1099,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 			return
 		}
 
-		if _, err := tx.ExecContext(c.Request.Context(), `
+		if _, err := tx.ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET size_gb = $1, updated_at = $2
-			WHERE id = $3 AND project_id = $4
-		`, newSize, time.Now(), volumeID, projectID); err != nil {
+			WHERE id = $3 AND project_id::text = $4
+		`), newSize, time.Now(), volumeID, projectID); err != nil {
 			log.Error().Err(err).Str("operation", "extend_volume").Str("volume_id", volumeID).Msg("failed to extend volume")
 			common.SendError(c, common.NewInternalServerError("failed to extend volume"))
 			return
@@ -1154,11 +1154,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		}
 
 		// Update volume type
-		_, err = svc.activeDB().ExecContext(c.Request.Context(), `
+		_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET volume_type = $1, updated_at = $2
-			WHERE id = $3 AND project_id = $4
-		`, newType, time.Now(), volumeID, projectID)
+			WHERE id = $3 AND project_id::text = $4
+		`), newType, time.Now(), volumeID, projectID)
 
 		if err != nil {
 			log.Error().Err(err).Str("operation", "retype_volume").Str("volume_id", volumeID).Msg("failed to retype volume")
@@ -1284,11 +1284,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		}
 
 		// Update volume to bootable and store image ID
-		_, err := svc.activeDB().ExecContext(c.Request.Context(), `
+		_, err := svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET bootable = true, updated_at = $1
-			WHERE id = $2 AND project_id = $3
-		`, time.Now(), volumeID, projectID)
+			WHERE id = $2 AND project_id::text = $3
+		`), time.Now(), volumeID, projectID)
 
 		if err != nil {
 			log.Error().Err(err).Str("operation", "reimage_volume").Str("volume_id", volumeID).Msg("failed to reimage volume")
@@ -1319,11 +1319,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		// Force detach volume from any server
 		// In stub mode, just mark as available
 		// In real mode, would force detach from hypervisor
-		_, err := svc.activeDB().ExecContext(c.Request.Context(), `
+		_, err := svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET status = $1, attached_to_instance_id = NULL, updated_at = $2
-			WHERE id = $3 AND project_id = $4
-		`, "available", time.Now(), volumeID, projectID)
+			WHERE id = $3 AND project_id::text = $4
+		`), "available", time.Now(), volumeID, projectID)
 
 		if err != nil {
 			log.Error().Err(err).Str("operation", "force_detach_volume").Str("volume_id", volumeID).Msg("failed to force detach volume")
@@ -1370,11 +1370,11 @@ func (svc *Service) VolumeAction(c *gin.Context) {
 		}
 
 		// Admin operation to manually set volume status
-		_, err := svc.activeDB().ExecContext(c.Request.Context(), `
+		_, err := svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 			UPDATE volumes
 			SET status = $1, updated_at = $2
-			WHERE id = $3 AND project_id = $4
-		`, newStatus, time.Now(), volumeID, projectID)
+			WHERE id = $3 AND project_id::text = $4
+		`), newStatus, time.Now(), volumeID, projectID)
 
 		if err != nil {
 			log.Error().Err(err).Str("operation", "reset_volume_status").Str("volume_id", volumeID).Msg("failed to reset volume status")
@@ -1428,7 +1428,7 @@ func (svc *Service) CreateSnapshot(c *gin.Context) {
 	var volumeID, volStatus string
 	var size int
 	err = tx.QueryRowContext(c.Request.Context(),
-		"SELECT id, size_gb, status FROM volumes WHERE id = $1 AND project_id = $2 FOR UPDATE",
+		database.Q("SELECT id, size_gb, status FROM volumes WHERE id = $1 AND project_id::text = $2 FOR UPDATE"),
 		req.Snapshot.VolumeID, projectID,
 	).Scan(&volumeID, &size, &volStatus)
 
@@ -1524,7 +1524,7 @@ func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
 	}
 	limit = common.CapLimit(limit)
 
-	conditions := []string{"project_id = $1"}
+	conditions := []string{database.Q("project_id::text = $1")}
 	queryArgs := []interface{}{projectID}
 	argIdx := 2
 
@@ -1532,7 +1532,7 @@ func (svc *Service) ListSnapshotsDetail(c *gin.Context) {
 	if marker := c.Query("marker"); marker != "" {
 		var markerCreatedAt time.Time
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT created_at FROM snapshots WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT created_at FROM snapshots WHERE id = $1 AND project_id::text = $2"),
 			marker, projectID,
 		).Scan(&markerCreatedAt)
 		if err == nil {
@@ -1625,7 +1625,7 @@ func (svc *Service) ListSnapshots(c *gin.Context) {
 	}
 	limit = common.CapLimit(limit)
 
-	conditions := []string{"project_id = $1"}
+	conditions := []string{database.Q("project_id::text = $1")}
 	queryArgs := []interface{}{projectID}
 	argIdx := 2
 
@@ -1633,7 +1633,7 @@ func (svc *Service) ListSnapshots(c *gin.Context) {
 	if marker := c.Query("marker"); marker != "" {
 		var markerCreatedAt time.Time
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT created_at FROM snapshots WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT created_at FROM snapshots WHERE id = $1 AND project_id::text = $2"),
 			marker, projectID,
 		).Scan(&markerCreatedAt)
 		if err == nil {
@@ -1709,11 +1709,11 @@ func (svc *Service) GetSnapshot(c *gin.Context) {
 	var size int
 	var createdAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, volume_id, size_gb, status, created_at
 		FROM snapshots
-		WHERE id = $1 AND project_id = $2
-	`, snapshotID, projectID).Scan(&id, &name, &volumeID, &size, &status, &createdAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), snapshotID, projectID).Scan(&id, &name, &volumeID, &size, &status, &createdAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("snapshot"))
@@ -1751,7 +1751,7 @@ func (svc *Service) DeleteSnapshot(c *gin.Context) {
 	// Get volume ID
 	var volumeID string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT volume_id FROM snapshots WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT volume_id FROM snapshots WHERE id = $1 AND project_id::text = $2"),
 		snapshotID, projectID,
 	).Scan(&volumeID)
 
@@ -1762,7 +1762,7 @@ func (svc *Service) DeleteSnapshot(c *gin.Context) {
 
 	// Delete from database first (recoverable if Ceph cleanup fails)
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM snapshots WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM snapshots WHERE id = $1 AND project_id::text = $2"),
 		snapshotID, projectID,
 	)
 	if err != nil {
@@ -1892,7 +1892,7 @@ func (svc *Service) UpdateVolume(c *gin.Context) {
 	var existingEncrypted bool
 	var createdAt, updatedAt time.Time
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT name, COALESCE(description, ''), size_gb, status, bootable, attached_to_instance_id, COALESCE(volume_type, '__DEFAULT__'), created_at, updated_at, COALESCE(availability_zone, 'nova'), COALESCE(encrypted, false) FROM volumes WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT name, COALESCE(description, ''), size_gb, status, bootable, attached_to_instance_id, COALESCE(volume_type, '__DEFAULT__'), created_at, updated_at, COALESCE(availability_zone, 'nova'), COALESCE(encrypted, false) FROM volumes WHERE id = $1 AND project_id::text = $2"),
 		volumeID, projectID,
 	).Scan(&currentName, &currentDesc, &sizeGB, &status, &bootable, &attachedTo, &existingVolumeType, &createdAt, &updatedAt, &existingAZ, &existingEncrypted)
 
@@ -1976,7 +1976,7 @@ func (svc *Service) UpdateSnapshot(c *gin.Context) {
 	var status string
 	var createdAt time.Time
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT name, COALESCE(description, ''), volume_id, size_gb, status, created_at FROM snapshots WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT name, COALESCE(description, ''), volume_id, size_gb, status, created_at FROM snapshots WHERE id = $1 AND project_id::text = $2"),
 		snapshotID, projectID,
 	).Scan(&currentName, &currentDesc, &volumeID, &sizeGB, &status, &createdAt)
 
@@ -2031,7 +2031,7 @@ func (svc *Service) GetVolumeMetadata(c *gin.Context) {
 	// Check volume exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)"),
 		volumeID, projectID,
 	).Scan(&exists)
 
@@ -2085,7 +2085,7 @@ func (svc *Service) SetVolumeMetadata(c *gin.Context) {
 	// Check volume exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)"),
 		volumeID, projectID,
 	).Scan(&exists)
 
@@ -2129,7 +2129,7 @@ func (svc *Service) GetVolumeMetadataKey(c *gin.Context) {
 	// Check volume exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)"),
 		volumeID, projectID,
 	).Scan(&exists)
 
@@ -2180,7 +2180,7 @@ func (svc *Service) UpdateVolumeMetadataKey(c *gin.Context) {
 	// Check volume exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)"),
 		volumeID, projectID,
 	).Scan(&exists)
 
@@ -2215,7 +2215,7 @@ func (svc *Service) DeleteVolumeMetadataKey(c *gin.Context) {
 	// Check volume exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)"),
 		volumeID, projectID,
 	).Scan(&exists)
 
@@ -2245,7 +2245,7 @@ func (svc *Service) GetSnapshotMetadata(c *gin.Context) {
 	// Check snapshot exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id::text = $2)"),
 		snapshotID, projectID,
 	).Scan(&exists)
 
@@ -2299,7 +2299,7 @@ func (svc *Service) SetSnapshotMetadata(c *gin.Context) {
 	// Check snapshot exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id::text = $2)"),
 		snapshotID, projectID,
 	).Scan(&exists)
 
@@ -2343,7 +2343,7 @@ func (svc *Service) GetSnapshotMetadataKey(c *gin.Context) {
 	// Check snapshot exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id::text = $2)"),
 		snapshotID, projectID,
 	).Scan(&exists)
 
@@ -2394,7 +2394,7 @@ func (svc *Service) UpdateSnapshotMetadataKey(c *gin.Context) {
 	// Check snapshot exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id::text = $2)"),
 		snapshotID, projectID,
 	).Scan(&exists)
 
@@ -2429,7 +2429,7 @@ func (svc *Service) DeleteSnapshotMetadataKey(c *gin.Context) {
 	// Check snapshot exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1 AND project_id::text = $2)"),
 		snapshotID, projectID,
 	).Scan(&exists)
 
@@ -2459,12 +2459,12 @@ func (svc *Service) GetLimits(c *gin.Context) {
 	var volumesUsed, snapshotsUsed, gigabytesUsed int
 
 	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id = $1 AND status != 'deleted'",
+		database.Q("SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id::text = $1 AND status != 'deleted'"),
 		projectID,
 	).Scan(&volumesUsed, &gigabytesUsed)
 
 	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COUNT(*) FROM snapshots WHERE project_id = $1 AND status != 'deleted'",
+		database.Q("SELECT COUNT(*) FROM snapshots WHERE project_id::text = $1 AND status != 'deleted'"),
 		projectID,
 	).Scan(&snapshotsUsed)
 
@@ -2497,12 +2497,12 @@ func (svc *Service) GetLimitsNoProject(c *gin.Context) {
 	var volumesUsed, snapshotsUsed, gigabytesUsed int
 
 	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id = $1 AND status != 'deleted'",
+		database.Q("SELECT COUNT(*), COALESCE(SUM(size_gb), 0) FROM volumes WHERE project_id::text = $1 AND status != 'deleted'"),
 		projectID,
 	).Scan(&volumesUsed, &gigabytesUsed)
 
 	_ = svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COUNT(*) FROM snapshots WHERE project_id = $1 AND status != 'deleted'",
+		database.Q("SELECT COUNT(*) FROM snapshots WHERE project_id::text = $1 AND status != 'deleted'"),
 		projectID,
 	).Scan(&snapshotsUsed)
 

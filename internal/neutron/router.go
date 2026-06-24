@@ -95,14 +95,14 @@ func (svc *Service) ListRouters(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(database.Q(`
 		SELECT id, name, project_id, admin_state_up, status, external_gateway_info,
 		       distributed, ha, created_at, updated_at
 		FROM routers
-		WHERE project_id = $1%s
+		WHERE project_id::text = $1%s
 		ORDER BY created_at ASC, id ASC
 		LIMIT $%d
-	`, markerCondition, argIdx), queryArgs...)
+	`), markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_routers").Msg("database error")
@@ -259,12 +259,12 @@ func (svc *Service) GetRouter(c *gin.Context) {
 	var r Router
 	var gatewayInfo sql.NullString
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, project_id, admin_state_up, status, external_gateway_info,
 		       distributed, ha, created_at, updated_at
 		FROM routers
-		WHERE id = $1 AND project_id = $2
-	`, routerID, projectID).Scan(&r.ID, &r.Name, &r.ProjectID, &r.AdminStateUp, &r.Status,
+		WHERE id = $1 AND project_id::text = $2
+	`), routerID, projectID).Scan(&r.ID, &r.Name, &r.ProjectID, &r.AdminStateUp, &r.Status,
 		&gatewayInfo, &r.Distributed, &r.HA, &r.CreatedAt, &r.UpdatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -401,7 +401,7 @@ func (svc *Service) DeleteRouter(c *gin.Context) {
 
 	// Delete from database
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM routers WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM routers WHERE id = $1 AND project_id::text = $2"),
 		routerID, projectID,
 	)
 	if err != nil {
@@ -431,7 +431,7 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	// Verify router exists
 	var routerExists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM routers WHERE id = $1 AND project_id::text = $2)"),
 		routerID, projectID,
 	).Scan(&routerExists)
 
@@ -443,9 +443,9 @@ func (svc *Service) AddRouterInterface(c *gin.Context) {
 	// Get subnet information (must belong to same project via network ownership)
 	var subnetID, networkID, cidr, gatewayIP string
 	err = svc.activeDB().QueryRowContext(c.Request.Context(),
-		`SELECT s.id, s.network_id, s.cidr, s.gateway_ip FROM subnets s
+		database.Q(`SELECT s.id, s.network_id, s.cidr, s.gateway_ip FROM subnets s
 		 JOIN networks n ON n.id = s.network_id
-		 WHERE s.id = $1 AND n.project_id = $2`,
+		 WHERE s.id = $1 AND n.project_id::text = $2`),
 		req.SubnetID, projectID,
 	).Scan(&subnetID, &networkID, &cidr, &gatewayIP)
 
@@ -582,7 +582,7 @@ func (svc *Service) RemoveRouterInterface(c *gin.Context) {
 
 	// Delete the port
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM ports WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM ports WHERE id = $1 AND project_id::text = $2"),
 		portID, projectID,
 	)
 	if err != nil {

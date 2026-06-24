@@ -1,6 +1,7 @@
 package cinder
 
 import (
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -82,7 +83,7 @@ func (svc *Service) VolumeTypeAction(c *gin.Context) {
 
 		// Remove access
 		result, err := svc.activeDB().ExecContext(c.Request.Context(),
-			"DELETE FROM volume_type_access WHERE volume_type_id = $1 AND project_id = $2",
+			database.Q("DELETE FROM volume_type_access WHERE volume_type_id = $1 AND project_id::text = $2"),
 			typeID, projectID,
 		)
 

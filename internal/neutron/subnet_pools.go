@@ -3,6 +3,7 @@ package neutron
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -18,13 +19,13 @@ import (
 func (svc *Service) ListSubnetPools(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, name, prefixes, min_prefixlen, max_prefixlen, default_prefixlen,
 		       shared, is_default, ip_version, created_at, updated_at
 		FROM subnet_pools
-		WHERE project_id = $1 OR shared = true
+		WHERE project_id::text = $1 OR shared = true
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_subnet_pools").Msg("failed to query subnet pools")
@@ -173,12 +174,12 @@ func (svc *Service) GetSubnetPool(c *gin.Context) {
 	var shared, isDefault bool
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, prefixes, min_prefixlen, max_prefixlen, default_prefixlen,
 		       shared, is_default, ip_version, created_at, updated_at
 		FROM subnet_pools
-		WHERE id = $1 AND (project_id = $2 OR shared = true)
-	`, poolID, projectID).Scan(&id, &name, &prefixes, &minPrefixlen, &maxPrefixlen, &defaultPrefixlen,
+		WHERE id = $1 AND (project_id::text = $2 OR shared = true)
+	`), poolID, projectID).Scan(&id, &name, &prefixes, &minPrefixlen, &maxPrefixlen, &defaultPrefixlen,
 		&shared, &isDefault, &ipVersion, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -301,10 +302,10 @@ func (svc *Service) DeleteSubnetPool(c *gin.Context) {
 	poolID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().ExecContext(c.Request.Context(), `
+	result, err := svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		DELETE FROM subnet_pools
-		WHERE id = $1 AND project_id = $2
-	`, poolID, projectID)
+		WHERE id = $1 AND project_id::text = $2
+	`), poolID, projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "delete_subnet_pool").Msg("failed to delete subnet pool")

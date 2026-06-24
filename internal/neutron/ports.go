@@ -55,7 +55,7 @@ func (svc *Service) CreatePort(c *gin.Context) {
 	// Get network and subnet info to allocate IP
 	var networkID string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id FROM networks WHERE id = $1 AND (project_id = $2 OR shared = true)",
+		database.Q("SELECT id FROM networks WHERE id = $1 AND (project_id::text = $2 OR shared = true)"),
 		req.Port.NetworkID, projectID,
 	).Scan(&networkID)
 
@@ -176,7 +176,7 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		// Get default security group for project
 		var defaultSGID string
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT id FROM security_groups WHERE project_id = $1 AND name = 'default'",
+			database.Q("SELECT id FROM security_groups WHERE project_id::text = $1 AND name = 'default'"),
 			projectID,
 		).Scan(&defaultSGID)
 
@@ -190,7 +190,7 @@ func (svc *Service) CreatePort(c *gin.Context) {
 		// Verify security group exists and belongs to project
 		var exists bool
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT EXISTS(SELECT 1 FROM security_groups WHERE id = $1 AND project_id = $2)",
+			database.Q("SELECT EXISTS(SELECT 1 FROM security_groups WHERE id = $1 AND project_id::text = $2)"),
 			sgID, projectID,
 		).Scan(&exists)
 
@@ -297,7 +297,7 @@ func (svc *Service) ListPorts(c *gin.Context) {
 	limit = common.CapLimit(limit)
 
 	// Build dynamic WHERE clause.
-	conditions := []string{"(p.project_id = $1 OR n.shared = true)"}
+	conditions := []string{database.Q("(p.project_id::text = $1 OR n.shared = true)")}
 	queryArgs := []interface{}{projectID}
 	argIdx := 2
 
@@ -482,12 +482,12 @@ func (svc *Service) GetPort(c *gin.Context) {
 	var fixedIPsJSON, allowedAddrPairJSON []byte
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT p.id, p.name, p.network_id, p.device_id, p.device_owner, p.mac_address, p.admin_state_up, p.status, p.fixed_ips, p.allowed_address_pairs, p.created_at, p.updated_at
 		FROM ports p
 		JOIN networks n ON p.network_id = n.id
-		WHERE p.id = $1 AND (p.project_id = $2 OR n.shared = true)
-	`, portID, projectID).Scan(&id, &name, &networkID, &deviceID, &deviceOwner, &macAddress, &adminStateUp, &status, &fixedIPsJSON, &allowedAddrPairJSON, &createdAt, &updatedAt)
+		WHERE p.id = $1 AND (p.project_id::text = $2 OR n.shared = true)
+	`), portID, projectID).Scan(&id, &name, &networkID, &deviceID, &deviceOwner, &macAddress, &adminStateUp, &status, &fixedIPsJSON, &allowedAddrPairJSON, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("port"))
@@ -598,7 +598,7 @@ func (svc *Service) DeletePort(c *gin.Context) {
 
 	// Delete from database
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM ports WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM ports WHERE id = $1 AND project_id::text = $2"),
 		portID, projectID,
 	)
 	if err != nil {
@@ -695,7 +695,7 @@ func (svc *Service) UpdatePort(c *gin.Context) {
 		for _, sgID := range req.Port.SecurityGroups {
 			var exists bool
 			if err := svc.activeDB().QueryRowContext(c.Request.Context(),
-				"SELECT EXISTS(SELECT 1 FROM security_groups WHERE id = $1 AND project_id = $2)",
+				database.Q("SELECT EXISTS(SELECT 1 FROM security_groups WHERE id = $1 AND project_id::text = $2)"),
 				sgID, projectID,
 			).Scan(&exists); err != nil || !exists {
 				common.SendError(c, common.NewNotFoundError(fmt.Sprintf("security group %s", sgID)))
@@ -983,13 +983,13 @@ func (svc *Service) ListSecurityGroups(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(database.Q(`
 		SELECT id, name, description, created_at, updated_at
 		FROM security_groups
-		WHERE project_id = $1%s
+		WHERE project_id::text = $1%s
 		ORDER BY id ASC
 		LIMIT $%d
-	`, markerCondition, argIdx), queryArgs...)
+	`), markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_security_groups").Msg("database error")
@@ -1119,11 +1119,11 @@ func (svc *Service) GetSecurityGroup(c *gin.Context) {
 	var id, name, description string
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, created_at, updated_at
 		FROM security_groups
-		WHERE id = $1 AND project_id = $2
-	`, sgID, projectID).Scan(&id, &name, &description, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), sgID, projectID).Scan(&id, &name, &description, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("security group"))
@@ -1163,7 +1163,7 @@ func (svc *Service) DeleteSecurityGroup(c *gin.Context) {
 
 	// Delete from database
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM security_groups WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM security_groups WHERE id = $1 AND project_id::text = $2"),
 		sgID, projectID,
 	)
 	if err != nil {
@@ -1194,7 +1194,7 @@ func (svc *Service) UpdateSecurityGroup(c *gin.Context) {
 	// Check security group exists
 	var currentName, currentDesc string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT name, description FROM security_groups WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT name, description FROM security_groups WHERE id = $1 AND project_id::text = $2"),
 		sgID, projectID,
 	).Scan(&currentName, &currentDesc)
 
@@ -1403,13 +1403,13 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 func (svc *Service) ListSecurityGroupRules(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT sgr.id, sgr.security_group_id, sgr.direction, sgr.ethertype, sgr.protocol, sgr.port_range_min, sgr.port_range_max, sgr.remote_ip_prefix, sgr.remote_group_id, sgr.created_at
 		FROM security_group_rules sgr
 		JOIN security_groups sg ON sgr.security_group_id = sg.id
-		WHERE sg.project_id = $1
+		WHERE sg.project_id::text = $1
 		ORDER BY sgr.created_at DESC
-	`, projectID)
+	`), projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_sg_rules").Msg("database error")
@@ -1502,7 +1502,7 @@ func (svc *Service) DeleteSecurityGroupRule(c *gin.Context) {
 	// Delete from database (with ownership check)
 	projectID := c.GetString("project_id")
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM security_group_rules WHERE id = $1 AND security_group_id IN (SELECT id FROM security_groups WHERE project_id = $2)",
+		database.Q("DELETE FROM security_group_rules WHERE id = $1 AND security_group_id IN (SELECT id FROM security_groups WHERE project_id::text = $2)"),
 		ruleID, projectID,
 	)
 	if err != nil {
@@ -1531,7 +1531,7 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 	// Get network and subnet info to allocate IP
 	var netID string
 	err := svc.activeDB().QueryRowContext(ctx,
-		database.Q("SELECT id FROM networks WHERE id = $1 AND (project_id = $2 OR shared = true)"),
+		database.Q("SELECT id FROM networks WHERE id = $1 AND (project_id::text = $2 OR shared = true)"),
 		networkID, projectID,
 	).Scan(&netID)
 

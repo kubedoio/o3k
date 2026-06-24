@@ -3,6 +3,7 @@ package cinder
 import (
 	"encoding/json"
 	"errors"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 
 	"database/sql"
@@ -44,11 +45,11 @@ func (svc *Service) GetQuotaSet(c *gin.Context) {
 	}
 
 	// Load custom quotas from database
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT resource, "limit"
 		FROM cinder_quotas
-		WHERE project_id = $1
-	`, targetProjectID)
+		WHERE project_id::text = $1
+	`), targetProjectID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -150,11 +151,11 @@ func (svc *Service) UpdateQuotaSet(c *gin.Context) {
 		"per_volume_gigabytes": 1000,
 	}
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT resource, "limit"
 		FROM cinder_quotas
-		WHERE project_id = $1
-	`, projectUUID)
+		WHERE project_id::text = $1
+	`), projectUUID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -196,7 +197,7 @@ func (svc *Service) DeleteQuotaSet(c *gin.Context) {
 	}
 
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM cinder_quotas WHERE project_id = $1",
+		database.Q("DELETE FROM cinder_quotas WHERE project_id::text = $1"),
 		targetProjectID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Error().Err(err).Str("operation", "delete_quota_set").Msg("failed to reset quotas")

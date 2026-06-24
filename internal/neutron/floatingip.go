@@ -66,15 +66,15 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(database.Q(`
 		SELECT id, project_id, floating_network_id, floating_ip_address,
 		       fixed_ip_address, port_id, router_id, status, description,
 		       created_at, updated_at
 		FROM floating_ips
-		WHERE project_id = $1%s
+		WHERE project_id::text = $1%s
 		ORDER BY created_at ASC, id ASC
 		LIMIT $%d
-	`, markerCondition, argIdx), queryArgs...)
+	`), markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_floatingips").Msg("database error")
@@ -214,7 +214,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 		// Get fixed IP from port
 		var fixedIPsJSON string
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT fixed_ips FROM ports WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT fixed_ips FROM ports WHERE id = $1 AND project_id::text = $2"),
 			req.FloatingIP.PortID, projectID,
 		).Scan(&fixedIPsJSON)
 
@@ -350,13 +350,13 @@ func (svc *Service) GetFloatingIP(c *gin.Context) {
 	var fip FloatingIP
 	var fixedIP, portID, routerID, description sql.NullString
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, floating_network_id, floating_ip_address,
 		       fixed_ip_address, port_id, router_id, status, description,
 		       created_at, updated_at
 		FROM floating_ips
-		WHERE id = $1 AND project_id = $2
-	`, floatingIPID, projectID).Scan(&fip.ID, &fip.ProjectID, &fip.FloatingNetworkID, &fip.FloatingIPAddress,
+		WHERE id = $1 AND project_id::text = $2
+	`), floatingIPID, projectID).Scan(&fip.ID, &fip.ProjectID, &fip.FloatingNetworkID, &fip.FloatingIPAddress,
 		&fixedIP, &portID, &routerID, &fip.Status, &description, &fip.CreatedAt, &fip.UpdatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -445,7 +445,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	var currentFloatingIP, currentFixedIP, currentRouterID sql.NullString
 	var currentPortID sql.NullString
 	err = tx.QueryRowContext(c.Request.Context(),
-		"SELECT floating_ip_address, fixed_ip_address, port_id, router_id FROM floating_ips WHERE id = $1 AND project_id = $2 FOR UPDATE",
+		database.Q("SELECT floating_ip_address, fixed_ip_address, port_id, router_id FROM floating_ips WHERE id = $1 AND project_id::text = $2 FOR UPDATE"),
 		floatingIPID, projectID,
 	).Scan(&currentFloatingIP, &currentFixedIP, &currentPortID, &currentRouterID)
 
@@ -637,7 +637,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 	var floatingIPAddr, fixedIPAddr, portID, routerID string
 	err = tx.QueryRowContext(c.Request.Context(),
 		"SELECT floating_ip_address, fixed_ip_address, COALESCE(port_id, ''), COALESCE(router_id, '') "+
-			"FROM floating_ips WHERE id = $1 AND project_id = $2 FOR UPDATE",
+			database.Q("FROM floating_ips WHERE id = $1 AND project_id::text = $2 FOR UPDATE"),
 		floatingIPID, projectID,
 	).Scan(&floatingIPAddr, &fixedIPAddr, &portID, &routerID)
 
@@ -652,7 +652,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 	}
 
 	_, err = tx.ExecContext(c.Request.Context(),
-		"DELETE FROM floating_ips WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM floating_ips WHERE id = $1 AND project_id::text = $2"),
 		floatingIPID, projectID,
 	)
 	if err != nil {

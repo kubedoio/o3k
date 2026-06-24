@@ -81,7 +81,7 @@ func (svc *Service) instanceFromRequest(c *gin.Context) (string, error) {
 	clientIP := c.ClientIP()
 	var instanceID string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		`SELECT device_id FROM ports WHERE fixed_ips @> jsonb_build_array(jsonb_build_object('ip_address', $1::text)) LIMIT 1`,
+		database.Q(`SELECT device_id FROM ports WHERE fixed_ips @> jsonb_build_array(jsonb_build_object('ip_address', $1::text)) LIMIT 1`),
 		clientIP,
 	).Scan(&instanceID)
 	if err != nil {
@@ -150,11 +150,11 @@ func (svc *Service) GetMetaDataJSON(c *gin.Context) {
 	}
 
 	// Fetch SSH keys
-	keyRows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	keyRows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT k.name, k.public_key
 		FROM keypairs k
-		WHERE k.user_id = $1
-	`, userID)
+		WHERE k.user_id::text = $1
+	`), userID)
 	if err == nil {
 		defer keyRows.Close()
 		keysMap := make(map[string]string)

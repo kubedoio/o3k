@@ -1,6 +1,7 @@
 package cinder
 
 import (
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -84,11 +85,11 @@ func (svc *Service) UnmanageVolume(c *gin.Context, volumeID string) {
 	var id uuid.UUID
 	var status string
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, status
 		FROM volumes
-		WHERE id = $1 AND project_id = $2
-	`, volumeID, projectID).Scan(&id, &status)
+		WHERE id = $1 AND project_id::text = $2
+	`), volumeID, projectID).Scan(&id, &status)
 
 	if err != nil {
 		common.SendError(c, common.NewNotFoundError("volume"))
@@ -103,7 +104,7 @@ func (svc *Service) UnmanageVolume(c *gin.Context, volumeID string) {
 
 	// Remove from database (in real implementation, would leave on backend)
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM volumes WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM volumes WHERE id = $1 AND project_id::text = $2"),
 		volumeID, projectID,
 	)
 
@@ -136,9 +137,9 @@ func (svc *Service) ManageSnapshot(c *gin.Context) {
 
 	// Verify volume exists
 	var volumeExists bool
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
-		SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)
-	`, req.Snapshot.VolumeID, projectID).Scan(&volumeExists)
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
+		SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)
+	`), req.Snapshot.VolumeID, projectID).Scan(&volumeExists)
 
 	if err != nil || !volumeExists {
 		common.SendError(c, common.NewNotFoundError("volume"))

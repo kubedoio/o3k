@@ -2,6 +2,7 @@ package neutron
 
 import (
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -15,11 +16,11 @@ import (
 func (svc *Service) ListTrunks(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE project_id = $1
-	`, projectID)
+		WHERE project_id::text = $1
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_trunks").Msg("failed to query trunks")
 		common.SendError(c, common.NewInternalServerError("failed to list trunks"))
@@ -157,11 +158,11 @@ func (svc *Service) GetTrunk(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		common.SendError(c, common.NewNotFoundError("trunk"))
@@ -226,7 +227,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	// Verify trunk exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id::text = $2)"),
 		trunkID, projectID,
 	).Scan(&exists)
 
@@ -286,11 +287,11 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_trunk_fetch").Msg("failed to fetch updated trunk")
@@ -345,7 +346,7 @@ func (svc *Service) DeleteTrunk(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM trunks WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM trunks WHERE id = $1 AND project_id::text = $2"),
 		trunkID, projectID,
 	)
 
@@ -385,7 +386,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	// Verify trunk exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id::text = $2)"),
 		trunkID, projectID,
 	).Scan(&exists)
 
@@ -427,11 +428,11 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "add_subports_fetch").Msg("failed to fetch trunk after adding subports")
@@ -499,7 +500,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	// Verify trunk exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id::text = $2)"),
 		trunkID, projectID,
 	).Scan(&exists)
 
@@ -535,11 +536,11 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "remove_subports_fetch").Msg("failed to fetch trunk after removing subports")

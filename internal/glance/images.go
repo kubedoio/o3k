@@ -429,19 +429,19 @@ func (svc *Service) ListImages(c *gin.Context) {
 		case "community":
 			conditions = append(conditions, "visibility = 'community'")
 		case "private":
-			conditions = append(conditions, fmt.Sprintf("(visibility = 'private' AND project_id = $%d)", argIdx))
+			conditions = append(conditions, fmt.Sprintf(database.Q("(visibility = 'private' AND project_id::text = $%d)"), argIdx))
 			queryArgs = append(queryArgs, projectID)
 			argIdx++
 		case "shared":
 			conditions = append(conditions, fmt.Sprintf(
-				"(id IN (SELECT image_id FROM image_members WHERE member_id = $%d AND status = 'accepted'))",
+				database.Q("(id IN (SELECT image_id FROM image_members WHERE member_id::text = $%d AND status = 'accepted'))"),
 				argIdx))
 			queryArgs = append(queryArgs, projectID)
 			argIdx++
 		default:
 			// unknown visibility filter: show public + community + owned + shared with this project
 			conditions = append(conditions, fmt.Sprintf(
-				"(visibility IN ('public', 'community') OR project_id = $%d OR id IN (SELECT image_id FROM image_members WHERE member_id = $%d AND status = 'accepted'))",
+				database.Q("(visibility IN ('public', 'community') OR project_id::text = $%d OR id IN (SELECT image_id FROM image_members WHERE member_id::text = $%d AND status = 'accepted'))"),
 				argIdx, argIdx+1))
 			queryArgs = append(queryArgs, projectID, projectID)
 			argIdx += 2
@@ -449,7 +449,7 @@ func (svc *Service) ListImages(c *gin.Context) {
 	} else {
 		// No visibility param: show public + community + owned + shared with this project
 		conditions = append(conditions, fmt.Sprintf(
-			"(visibility IN ('public', 'community') OR project_id = $%d OR id IN (SELECT image_id FROM image_members WHERE member_id = $%d AND status = 'accepted'))",
+			database.Q("(visibility IN ('public', 'community') OR project_id::text = $%d OR id IN (SELECT image_id FROM image_members WHERE member_id::text = $%d AND status = 'accepted'))"),
 			argIdx, argIdx+1))
 		queryArgs = append(queryArgs, projectID, projectID)
 		argIdx += 2
@@ -459,7 +459,7 @@ func (svc *Service) ListImages(c *gin.Context) {
 	if marker := c.Query("marker"); marker != "" {
 		var markerCreatedAt time.Time
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT created_at FROM images WHERE id = $1 AND (visibility = 'public' OR project_id = $2)",
+			database.Q("SELECT created_at FROM images WHERE id = $1 AND (visibility = 'public' OR project_id::text = $2)"),
 			marker, projectID,
 		).Scan(&markerCreatedAt)
 		if err == nil {
@@ -491,7 +491,7 @@ func (svc *Service) ListImages(c *gin.Context) {
 		argIdx++
 	}
 	if owner := c.Query("owner"); owner != "" {
-		conditions = append(conditions, fmt.Sprintf("project_id = $%d", argIdx))
+		conditions = append(conditions, fmt.Sprintf(database.Q("project_id::text = $%d"), argIdx))
 		queryArgs = append(queryArgs, owner)
 		argIdx++
 	}
@@ -508,13 +508,13 @@ func (svc *Service) ListImages(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit, offset)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(fmt.Sprintf(`
 		SELECT id, name, status, visibility, size_bytes, disk_format, container_format, min_disk_gb, min_ram_mb, COALESCE(protected, false), created_at, updated_at, COALESCE(project_id, ''), checksum, os_hash_algo, os_hash_value
 		FROM images
 		%s
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIdx, argIdx+1), queryArgs...)
+	`, whereClause, argIdx, argIdx+1)), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_images").Msg("failed to query images")
@@ -631,8 +631,8 @@ func (svc *Service) GetImage(c *gin.Context) {
 		FROM images
 		WHERE (id::text = $1 OR name = $2) AND (
 			visibility IN ('public', 'community') OR
-			project_id = $3 OR
-			EXISTS (SELECT 1 FROM image_members WHERE image_id = images.id AND member_id = $4 AND status = 'accepted')
+			project_id::text = $3 OR
+			EXISTS (SELECT 1 FROM image_members WHERE image_id = images.id AND member_id::text = $4 AND status = 'accepted')
 		)
 		LIMIT 1
 	`), imageID, imageID, projectID, projectID).Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &protected, &checksum, &osHashAlgo, &osHashValue, &propertiesRaw, &createdAtRaw, &updatedAtRaw, &imageOwner)
@@ -817,7 +817,7 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 	var protected bool
 	var propertiesRaw sql.NullString
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COALESCE(protected, false), properties FROM images WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT COALESCE(protected, false), properties FROM images WHERE id = $1 AND project_id::text = $2"),
 		imageID, projectID,
 	).Scan(&protected, &propertiesRaw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -860,7 +860,7 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 			if op != "replace" {
 				continue
 			}
-			query := fmt.Sprintf("UPDATE images SET %s = $1, updated_at = $2 WHERE id = $3 AND project_id = $4", field)
+			query := database.Q(fmt.Sprintf("UPDATE images SET %s = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4", field))
 			if _, err := svc.activeDB().ExecContext(c.Request.Context(), query, value, time.Now(), imageID, projectID); err != nil {
 				log.Error().Err(err).Str("field", field).Str("image_id", imageID).Msg("failed to update image field")
 				common.SendError(c, common.NewInternalServerError("failed to update image"))
@@ -902,7 +902,7 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 			return
 		}
 		if _, err := svc.activeDB().ExecContext(c.Request.Context(),
-			"UPDATE images SET properties = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+			database.Q("UPDATE images SET properties = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4"),
 			string(blob), time.Now(), imageID, projectID,
 		); err != nil {
 			log.Error().Err(err).Str("image_id", imageID).Msg("failed to update image properties")
@@ -928,7 +928,7 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 
 	// Atomically transition status from queued to saving to prevent concurrent uploads
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4 AND status = 'queued'",
+		database.Q("UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4 AND status = 'queued'"),
 		"saving", time.Now(), imageID, projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "upload_image").Str("image_id", imageID).Msg("failed to update image status")
@@ -939,7 +939,7 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 		// Either image doesn't exist or it's not in queued state
 		var status string
 		checkErr := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT status FROM images WHERE id = $1 AND project_id = $2", imageID, projectID,
+			database.Q("SELECT status FROM images WHERE id = $1 AND project_id::text = $2"), imageID, projectID,
 		).Scan(&status)
 		if errors.Is(checkErr, sql.ErrNoRows) {
 			common.SendError(c, common.NewNotFoundError("image"))
@@ -990,7 +990,7 @@ func (svc *Service) DownloadImageData(c *gin.Context) {
 	var status string
 	var sizeBytes sql.NullInt64
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT status, size_bytes FROM images WHERE id = $1 AND (visibility = 'public' OR project_id = $2)",
+		database.Q("SELECT status, size_bytes FROM images WHERE id = $1 AND (visibility = 'public' OR project_id::text = $2)"),
 		imageID, projectID,
 	).Scan(&status, &sizeBytes)
 
@@ -1222,11 +1222,11 @@ func (svc *Service) GetImageMember(c *gin.Context) {
 
 	var status string
 	var createdAt, updatedAt time.Time
-	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT status, created_at, updated_at
 		FROM image_members
-		WHERE image_id = $1 AND member_id = $2
-	`, imageID, memberID).Scan(&status, &createdAt, &updatedAt)
+		WHERE image_id = $1 AND member_id::text = $2
+	`), imageID, memberID).Scan(&status, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("member"))
@@ -1303,11 +1303,11 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 	}
 
 	// Update member status
-	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		UPDATE image_members
 		SET status = $1, updated_at = $2
-		WHERE image_id = $3 AND member_id = $4
-	`, req.Status, time.Now(), imageID, memberID)
+		WHERE image_id = $3 AND member_id::text = $4
+	`), req.Status, time.Now(), imageID, memberID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_image_member").Str("image_id", imageID).Msg("failed to update image member")
@@ -1318,11 +1318,11 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 	// Return updated member
 	var status string
 	var createdAt, updatedAt time.Time
-	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT status, created_at, updated_at
 		FROM image_members
-		WHERE image_id = $1 AND member_id = $2
-	`, imageID, memberID).Scan(&status, &createdAt, &updatedAt)
+		WHERE image_id = $1 AND member_id::text = $2
+	`), imageID, memberID).Scan(&status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_image_member_fetch").Str("image_id", imageID).Msg("failed to fetch updated image member")
@@ -1371,7 +1371,7 @@ func (svc *Service) DeleteImageMember(c *gin.Context) {
 
 	// Delete member
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM image_members WHERE image_id = $1 AND member_id = $2",
+		database.Q("DELETE FROM image_members WHERE image_id = $1 AND member_id::text = $2"),
 		imageID, memberID,
 	)
 	if err != nil {

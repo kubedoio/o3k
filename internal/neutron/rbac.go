@@ -2,6 +2,7 @@ package neutron
 
 import (
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"strings"
 	"time"
@@ -60,12 +61,12 @@ func (svc *Service) CreateRBACPolicy(c *gin.Context) {
 func (svc *Service) ListRBACPolicies(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, object_type, object_id, target_tenant, action
 		FROM rbac_policies
-		WHERE project_id = $1
+		WHERE project_id::text = $1
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_rbac_policies").Msg("failed to query RBAC policies")
 		common.SendError(c, common.NewInternalServerError("failed to list RBAC policies"))
@@ -106,11 +107,11 @@ func (svc *Service) GetRBACPolicy(c *gin.Context) {
 
 	var projID, objectType, objectID, targetTenant, action string
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT project_id, object_type, object_id, target_tenant, action
 		FROM rbac_policies
-		WHERE id = $1 AND project_id = $2
-	`, policyID, projectID).Scan(&projID, &objectType, &objectID, &targetTenant, &action)
+		WHERE id = $1 AND project_id::text = $2
+	`), policyID, projectID).Scan(&projID, &objectType, &objectID, &targetTenant, &action)
 
 	if err != nil {
 		common.SendError(c, common.NewNotFoundError("RBAC policy"))
@@ -187,7 +188,7 @@ func (svc *Service) DeleteRBACPolicy(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM rbac_policies WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM rbac_policies WHERE id = $1 AND project_id::text = $2"),
 		policyID, projectID,
 	)
 

@@ -2,6 +2,7 @@ package cinder
 
 import (
 	"errors"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -17,12 +18,12 @@ import (
 func (svc *Service) ListQosSpecs(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, name, consumer, specs, created_at
 		FROM qos_specs
-		WHERE project_id = $1
+		WHERE project_id::text = $1
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_qos_specs").Msg("failed to query QoS specs")
 		common.SendError(c, common.NewInternalServerError("failed to list QoS specs"))
@@ -124,11 +125,11 @@ func (svc *Service) GetQosSpec(c *gin.Context) {
 		createdAt time.Time
 	)
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, consumer, specs, created_at
 		FROM qos_specs
-		WHERE id = $1 AND project_id = $2
-	`, qosID, projectID).Scan(&name, &consumer, &specs, &createdAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), qosID, projectID).Scan(&name, &consumer, &specs, &createdAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("QoS spec"))
@@ -167,7 +168,7 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	// Check if QoS spec exists and get current specs
 	var currentSpecs map[string]string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT specs FROM qos_specs WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT specs FROM qos_specs WHERE id = $1 AND project_id::text = $2"),
 		qosID, projectID,
 	).Scan(&currentSpecs)
 
@@ -190,11 +191,11 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	}
 
 	// Update database
-	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		UPDATE qos_specs
 		SET specs = $1, updated_at = $2
-		WHERE id = $3 AND project_id = $4
-	`, currentSpecs, time.Now(), qosID, projectID)
+		WHERE id = $3 AND project_id::text = $4
+	`), currentSpecs, time.Now(), qosID, projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_qos_spec").Str("qos_id", qosID).Msg("failed to update QoS spec")
@@ -237,7 +238,7 @@ func (svc *Service) DeleteQosSpec(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM qos_specs WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM qos_specs WHERE id = $1 AND project_id::text = $2"),
 		qosID, projectID,
 	)
 

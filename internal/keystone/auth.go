@@ -350,7 +350,7 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 			SELECT r.name
 			FROM role_assignments ra
 			JOIN roles r ON ra.role_id = r.id
-			WHERE ra.user_id = $1 AND ra.project_id = $2
+			WHERE ra.user_id::text = $1 AND ra.project_id::text = $2
 		`), user.ID, projectID)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to fetch roles: %w", err)
@@ -548,7 +548,7 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 			SELECT r.name
 			FROM role_assignments ra
 			JOIN roles r ON ra.role_id = r.id
-			WHERE ra.user_id = $1 AND ra.project_id = $2
+			WHERE ra.user_id::text = $1 AND ra.project_id::text = $2
 		`), user.ID, projectID)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to fetch roles: %w", err)

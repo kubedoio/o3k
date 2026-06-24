@@ -3,6 +3,7 @@ package keystone
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"time"
 
 	"database/sql"
@@ -17,12 +18,12 @@ import (
 func (svc *Service) ListCredentials(c *gin.Context) {
 	userID := c.GetString("user_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, user_id, project_id, type, blob, created_at
 		FROM credentials
-		WHERE user_id = $1
+		WHERE user_id::text = $1
 		ORDER BY created_at DESC
-	`, userID)
+	`), userID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_credentials").Msg("Failed to query credentials")
 		common.SendError(c, common.NewInternalServerError("failed to query credentials"))
@@ -143,11 +144,11 @@ func (svc *Service) GetCredential(c *gin.Context) {
 	var id, userID, credType, blob string
 	var projectID *string
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, user_id, project_id, type, blob
 		FROM credentials
-		WHERE id = $1 AND user_id = $2
-	`, credID, authUserID).Scan(&id, &userID, &projectID, &credType, &blob)
+		WHERE id = $1 AND user_id::text = $2
+	`), credID, authUserID).Scan(&id, &userID, &projectID, &credType, &blob)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("credential"))
@@ -238,7 +239,7 @@ func (svc *Service) DeleteCredential(c *gin.Context) {
 	authUserID := c.GetString("user_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM credentials WHERE id = $1 AND user_id = $2",
+		database.Q("DELETE FROM credentials WHERE id = $1 AND user_id::text = $2"),
 		credID, authUserID)
 
 	if err != nil {

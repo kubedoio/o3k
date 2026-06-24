@@ -16,25 +16,6 @@ import (
 // IS supplied we validate its shape so an SCS-conformance test will not see
 // invalid values stored against a property name it knows.
 
-// scsMandatoryProps lists the SCS-0102 mandatory property names. Used by the
-// scs-alignment doc and as the canonical reference; not used to reject create
-// requests that omit them (see comment above).
-var scsMandatoryProps = []string{
-	"architecture",
-	"min_disk",
-	"min_ram",
-	"os_version",
-	"os_distro",
-	"hw_disk_bus",
-	"replace_frequency",
-	"provided_until",
-	"uuid_validity",
-	"image_source",
-	"image_description",
-	"image_build_date",
-	"image_original_user",
-}
-
 // scsReplaceFrequencyValues is the closed enum from SCS-0102 §replace_frequency.
 var scsReplaceFrequencyValues = map[string]struct{}{
 	"yearly": {}, "quarterly": {}, "monthly": {}, "weekly": {},

@@ -954,7 +954,7 @@ func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keysto
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	placement.RegisterRoutes(r.Group(""))
+	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Nova.Port),
@@ -984,7 +984,7 @@ func createNeutronServer(cfg *common.Config, svc *neutron.Service, authService *
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	placement.RegisterRoutes(r.Group(""))
+	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Neutron.Port),
@@ -1014,7 +1014,7 @@ func createCinderServer(cfg *common.Config, svc *cinder.Service, authService *ke
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	placement.RegisterRoutes(r.Group(""))
+	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Cinder.Port),
@@ -1106,7 +1106,7 @@ func createMetadataServer(cfg *common.Config, svc *metadata.Service, port int) *
 	r.HandleMethodNotAllowed = true
 	r.NoMethod(middleware.MethodNotAllowedHandler())
 
-	placement.RegisterRoutes(r.Group(""))
+	svc.RegisterRoutes(r.Group(""))
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, port),

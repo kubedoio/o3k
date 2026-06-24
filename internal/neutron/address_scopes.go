@@ -2,6 +2,7 @@ package neutron
 
 import (
 	"errors"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -17,12 +18,12 @@ import (
 func (svc *Service) ListAddressScopes(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, name, ip_version, shared, created_at, updated_at
 		FROM address_scopes
-		WHERE project_id = $1
+		WHERE project_id::text = $1
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_address_scopes").Msg("failed to query address scopes")
 		common.SendError(c, common.NewInternalServerError("failed to list address scopes"))
@@ -134,11 +135,11 @@ func (svc *Service) GetAddressScope(c *gin.Context) {
 		updatedAt time.Time
 	)
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT project_id, name, ip_version, shared, created_at, updated_at
 		FROM address_scopes
-		WHERE id = $1 AND project_id = $2
-	`, scopeID, projectID).Scan(&projID, &name, &ipVersion, &shared, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), scopeID, projectID).Scan(&projID, &name, &ipVersion, &shared, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("address scope"))
@@ -184,7 +185,7 @@ func (svc *Service) UpdateAddressScope(c *gin.Context) {
 	// Check if scope exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM address_scopes WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM address_scopes WHERE id = $1 AND project_id::text = $2)"),
 		scopeID, projectID,
 	).Scan(&exists)
 
@@ -194,13 +195,13 @@ func (svc *Service) UpdateAddressScope(c *gin.Context) {
 	}
 
 	// Update scope
-	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		UPDATE address_scopes
 		SET name = COALESCE($1, name),
 		    shared = COALESCE($2, shared),
 		    updated_at = $3
-		WHERE id = $4 AND project_id = $5
-	`, req.AddressScope.Name, req.AddressScope.Shared, time.Now(), scopeID, projectID)
+		WHERE id = $4 AND project_id::text = $5
+	`), req.AddressScope.Name, req.AddressScope.Shared, time.Now(), scopeID, projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_address_scope").Msg("failed to update address scope")
@@ -218,11 +219,11 @@ func (svc *Service) UpdateAddressScope(c *gin.Context) {
 		updatedAt time.Time
 	)
 
-	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT project_id, name, ip_version, shared, created_at, updated_at
 		FROM address_scopes
-		WHERE id = $1 AND project_id = $2
-	`, scopeID, projectID).Scan(&projID, &name, &ipVersion, &shared, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), scopeID, projectID).Scan(&projID, &name, &ipVersion, &shared, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_address_scope_fetch").Msg("failed to fetch updated address scope")
@@ -250,7 +251,7 @@ func (svc *Service) DeleteAddressScope(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM address_scopes WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM address_scopes WHERE id = $1 AND project_id::text = $2"),
 		scopeID, projectID,
 	)
 

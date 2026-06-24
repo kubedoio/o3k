@@ -239,7 +239,7 @@ func (s *AuthService) resolveFederatedScope(
 		SELECT r.name
 		FROM role_assignments ra
 		JOIN roles r ON ra.role_id = r.id
-		WHERE ra.user_id = $1 AND ra.project_id = $2
+		WHERE ra.user_id::text = $1 AND ra.project_id::text = $2
 	`), user.ID, proj.ID)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("federated scope: role fetch failed: %w", err)
@@ -282,7 +282,7 @@ func (s *AuthService) ensureFederatedDefaultRole(ctx context.Context, userID, pr
 	var existing string
 	err = s.activeDB().QueryRowContext(ctx, database.Q(`
 		SELECT id FROM role_assignments
-		WHERE user_id = $1 AND project_id = $2 AND role_id = $3
+		WHERE user_id::text = $1 AND project_id::text = $2 AND role_id = $3
 	`), userID, projectID, roleID).Scan(&existing)
 	if err == nil {
 		return nil // already assigned

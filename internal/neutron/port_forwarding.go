@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func (svc *Service) ListPortForwardings(c *gin.Context) {
 	// Verify floating IP exists and belongs to project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM floating_ips WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM floating_ips WHERE id = $1 AND project_id::text = $2)"),
 		floatingIPID, projectID,
 	).Scan(&exists)
 
@@ -71,14 +72,14 @@ func (svc *Service) ListPortForwardings(c *gin.Context) {
 	}
 
 	// List port forwardings
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, floatingip_id, internal_port_id, internal_ip_address,
 		       external_port, internal_port, protocol, status, description,
 		       created_at, updated_at
 		FROM port_forwardings
-		WHERE floatingip_id = $1 AND project_id = $2
+		WHERE floatingip_id = $1 AND project_id::text = $2
 		ORDER BY external_port ASC
-	`, floatingIPID, projectID)
+	`), floatingIPID, projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_port_forwardings").Msg("failed to query port forwardings")
@@ -156,11 +157,11 @@ func (svc *Service) CreatePortForwarding(c *gin.Context) {
 
 	// Fetch floating IP details (for NAT configuration)
 	var floatingIP, routerID sql.NullString
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT floating_ip_address, router_id
 		FROM floating_ips
-		WHERE id = $1 AND project_id = $2
-	`, floatingIPID, projectID).Scan(&floatingIP, &routerID)
+		WHERE id = $1 AND project_id::text = $2
+	`), floatingIPID, projectID).Scan(&floatingIP, &routerID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("floating IP"))
@@ -252,13 +253,13 @@ func (svc *Service) GetPortForwarding(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	var pf PortForwarding
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, floatingip_id, internal_port_id, internal_ip_address,
 		       external_port, internal_port, protocol, status, description,
 		       created_at, updated_at
 		FROM port_forwardings
-		WHERE id = $1 AND floatingip_id = $2 AND project_id = $3
-	`, pfID, floatingIPID, projectID).Scan(&pf.ID, &pf.ProjectID, &pf.FloatingIPID,
+		WHERE id = $1 AND floatingip_id = $2 AND project_id::text = $3
+	`), pfID, floatingIPID, projectID).Scan(&pf.ID, &pf.ProjectID, &pf.FloatingIPID,
 		&pf.InternalPortID, &pf.InternalIPAddress, &pf.ExternalPort, &pf.InternalPort,
 		&pf.Protocol, &pf.Status, &pf.Description, &pf.CreatedAt, &pf.UpdatedAt)
 
@@ -305,13 +306,13 @@ func (svc *Service) UpdatePortForwarding(c *gin.Context) {
 	// Fetch current state
 	var currentPF PortForwarding
 	var floatingIP, routerID sql.NullString
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT pf.id, pf.internal_port_id, pf.internal_ip_address, pf.external_port,
 		       pf.internal_port, pf.protocol, fi.floating_ip_address, fi.router_id
 		FROM port_forwardings pf
 		JOIN floating_ips fi ON pf.floatingip_id = fi.id
-		WHERE pf.id = $1 AND pf.floatingip_id = $2 AND pf.project_id = $3
-	`, pfID, floatingIPID, projectID).Scan(&currentPF.ID, &currentPF.InternalPortID,
+		WHERE pf.id = $1 AND pf.floatingip_id = $2 AND pf.project_id::text = $3
+	`), pfID, floatingIPID, projectID).Scan(&currentPF.ID, &currentPF.InternalPortID,
 		&currentPF.InternalIPAddress, &currentPF.ExternalPort, &currentPF.InternalPort,
 		&currentPF.Protocol, &floatingIP, &routerID)
 
@@ -428,13 +429,13 @@ func (svc *Service) DeletePortForwarding(c *gin.Context) {
 	var protocol, internalIP string
 	var floatingIP, routerID sql.NullString
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT pf.external_port, pf.internal_port, pf.protocol, pf.internal_ip_address,
 		       fi.floating_ip_address, fi.router_id
 		FROM port_forwardings pf
 		JOIN floating_ips fi ON pf.floatingip_id = fi.id
-		WHERE pf.id = $1 AND pf.floatingip_id = $2 AND pf.project_id = $3
-	`, pfID, floatingIPID, projectID).Scan(&externalPort, &internalPort, &protocol,
+		WHERE pf.id = $1 AND pf.floatingip_id = $2 AND pf.project_id::text = $3
+	`), pfID, floatingIPID, projectID).Scan(&externalPort, &internalPort, &protocol,
 		&internalIP, &floatingIP, &routerID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -465,7 +466,7 @@ func (svc *Service) DeletePortForwarding(c *gin.Context) {
 
 	// Delete from database
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM port_forwardings WHERE id = $1 AND floatingip_id = $2 AND project_id = $3",
+		database.Q("DELETE FROM port_forwardings WHERE id = $1 AND floatingip_id = $2 AND project_id::text = $3"),
 		pfID, floatingIPID, projectID,
 	)
 	if err != nil {

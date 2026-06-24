@@ -3,6 +3,7 @@ package keystone
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"time"
 
 	"database/sql"
@@ -312,7 +313,7 @@ func (svc *Service) RemoveUserFromGroup(c *gin.Context) {
 	userID := c.Param("user_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM group_members WHERE group_id = $1 AND user_id = $2",
+		database.Q("DELETE FROM group_members WHERE group_id = $1 AND user_id::text = $2"),
 		groupID, userID,
 	)
 	if err != nil {

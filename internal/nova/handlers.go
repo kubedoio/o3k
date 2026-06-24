@@ -337,7 +337,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 	if err := tx.QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT COUNT(*), COALESCE(SUM(f.vcpus), 0), COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id = $1 AND i.status NOT IN ('DELETED', 'SOFT_DELETED', 'ERROR')
+		WHERE i.project_id::text = $1 AND i.status NOT IN ('DELETED', 'SOFT_DELETED', 'ERROR')
 	`), projectID).Scan(&instanceCount, &coreSum, &ramSum); err != nil {
 		log.Error().Err(err).Str("operation", "quota_usage").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to check quota usage"))
@@ -353,7 +353,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			COALESCE(MAX(CASE WHEN resource='instances' THEN hard_limit END), 10),
 			COALESCE(MAX(CASE WHEN resource='cores'     THEN hard_limit END), 20),
 			COALESCE(MAX(CASE WHEN resource='ram'       THEN hard_limit END), 51200)
-		FROM quotas WHERE project_id = $1 AND resource IN ('instances','cores','ram')
+		FROM quotas WHERE project_id::text = $1 AND resource IN ('instances','cores','ram')
 	`), projectID).Scan(&instanceLimit, &coreLimit, &ramLimit); err != nil {
 		log.Error().Err(err).Str("operation", "quota_limits").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to check quota limits"))
@@ -525,7 +525,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				// Fetch SSH public key from database
 				var publicKey string
 				err := svc.activeDB().QueryRowContext(ctx,
-					database.Q("SELECT public_key FROM keypairs WHERE user_id = $1 AND name = $2"),
+					database.Q("SELECT public_key FROM keypairs WHERE user_id::text = $1 AND name = $2"),
 					userID, req.Server.KeyName,
 				).Scan(&publicKey)
 
@@ -949,7 +949,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 	// Marker-based keyset pagination.
 	if marker := c.Query("marker"); marker != "" {
 		baseQuery += fmt.Sprintf(
-			" AND (i.created_at, i.id::text) < (SELECT created_at, id::text FROM instances WHERE id = $%d)",
+			database.Q(" AND (i.created_at, i.id::text) < (SELECT created_at, id::text FROM instances WHERE id = $%d)"),
 			argIdx,
 		)
 		queryArgs = append(queryArgs, marker)
@@ -1189,7 +1189,7 @@ func (svc *Service) getInstanceAddresses(ctx context.Context, instanceID, projec
 		SELECT p.network_id, p.fixed_ips, n.name, p.mac_address
 		FROM ports p
 		JOIN networks n ON p.network_id = n.id
-		WHERE p.device_id = $1 AND p.project_id = $2
+		WHERE p.device_id = $1 AND p.project_id::text = $2
 	`), instanceID, projectID)
 
 	if err != nil {
@@ -1285,7 +1285,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 		       i.task_state, i.key_name, i.fault_message
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id = $2 AND (
+		WHERE i.project_id::text = $2 AND (
 			(i.id::text = $1) OR (i.name = $1)
 		)
 	`), instanceID, projectID).Scan(&id, &name, &status, &powerState, &projID, &userID, &flavorID, &imageID, &createdAt, &updatedAt, &host, &launchedAt, &locked, &vcpus, &ramMB, &diskGB, &flavorName, &taskStateDB, &keyNameDB, &faultMsgDB)
@@ -1463,7 +1463,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	var instanceStatus string
 	queryStart := time.Now()
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id, user_id, status FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		database.Q("SELECT libvirt_domain_id, user_id, status FROM instances WHERE project_id::text = $2 AND ((id::text = $1) OR (name = $1))"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &instanceUserID, &instanceStatus)
 	middleware.LogDatabaseQuery(c, "SELECT libvirt_domain_id", time.Since(queryStart), err)
@@ -1525,7 +1525,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	if svc.neutronSvc != nil {
 		ctx := c.Request.Context()
 		rows, portErr := svc.activeDB().QueryContext(ctx,
-			database.Q("SELECT id, mac_address, network_id FROM ports WHERE device_id = $1 AND project_id = $2"),
+			database.Q("SELECT id, mac_address, network_id FROM ports WHERE device_id = $1 AND project_id::text = $2"),
 			instanceID, projectID)
 		if portErr == nil {
 			defer rows.Close()
@@ -1542,7 +1542,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 
 	// Delete orphaned ports for this instance
 	if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM ports WHERE device_id = $1 AND project_id = $2",
+		database.Q("DELETE FROM ports WHERE device_id = $1 AND project_id::text = $2"),
 		instanceID, projectID); derr != nil {
 		log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to delete orphaned ports during instance deletion")
 	}
@@ -1550,7 +1550,7 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 	// Delete from database (support lookup by ID or name)
 	queryStart = time.Now()
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		database.Q("DELETE FROM instances WHERE project_id::text = $2 AND ((id::text = $1) OR (name = $1))"),
 		instanceID, projectID,
 	)
 	middleware.LogDatabaseQuery(c, "DELETE instance", time.Since(queryStart), err)
@@ -1697,7 +1697,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 	var libvirtDomainID interface{}
 	var instanceStatus string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id, status FROM instances WHERE project_id = $2 AND ((id::text = $1) OR (name = $1))",
+		database.Q("SELECT libvirt_domain_id, status FROM instances WHERE project_id::text = $2 AND ((id::text = $1) OR (name = $1))"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &instanceStatus)
 
@@ -1730,7 +1730,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 		if _, ok := req["reboot"]; ok {
 			// Just mark as rebooting then active
 			if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
-				"UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4",
+				database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id::text = $4"),
 				"REBOOT", time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to set instance to REBOOT (stub)")
 			}
@@ -1745,7 +1745,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
 				defer cancel()
 				if _, derr := svc.activeDB().ExecContext(ctx,
-					database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id = $4"),
+					database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE (id::text = $3 OR name = $3) AND project_id::text = $4"),
 					"ACTIVE", time.Now(), instanceID, projectID); derr != nil {
 					log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to restore instance to ACTIVE after reboot (stub)")
 				}
@@ -1761,7 +1761,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				return
 			}
 			if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
-				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+				database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id::text = $5"),
 				"SHUTOFF", 4, time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to set instance SHUTOFF (stub)")
 			}
@@ -1776,7 +1776,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 				return
 			}
 			if _, derr := svc.activeDB().ExecContext(c.Request.Context(),
-				"UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5",
+				database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id::text = $5"),
 				"ACTIVE", 1, time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to set instance ACTIVE (stub)")
 			}
@@ -1814,7 +1814,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			return
 		}
 		if _, err := svc.activeDB().ExecContext(ctx,
-			database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5"),
+			database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id::text = $5"),
 			"SHUTOFF", 4, time.Now(), instanceID, projectID); err != nil {
 			log.Error().Err(err).Str("instance_id", instanceID).Msg("VM stopped in libvirt but failed to update DB status — state divergence")
 		}
@@ -1834,7 +1834,7 @@ func (svc *Service) ServerAction(c *gin.Context) {
 			return
 		}
 		if _, err := svc.activeDB().ExecContext(ctx,
-			database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id = $5"),
+			database.Q("UPDATE instances SET status = $1, power_state = $2, updated_at = $3 WHERE (id::text = $4 OR name = $4) AND project_id::text = $5"),
 			"ACTIVE", 1, time.Now(), instanceID, projectID); err != nil {
 			log.Error().Err(err).Str("instance_id", instanceID).Msg("VM started in libvirt but failed to update DB status — state divergence")
 		}
@@ -2294,7 +2294,7 @@ func (svc *Service) GetLimits(c *gin.Context) {
 			COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id = $1 AND i.status != 'DELETED'`),
+		WHERE i.project_id::text = $1 AND i.status != 'DELETED'`),
 		projectID,
 	).Scan(&instancesUsed, &coresUsed, &ramUsed); err != nil {
 		instancesUsed, coresUsed, ramUsed = 0, 0, 0
@@ -2319,7 +2319,7 @@ func (svc *Service) GetLimits(c *gin.Context) {
 	}
 
 	quotaRows, err := svc.activeDB().QueryContext(ctx,
-		database.Q(`SELECT resource, hard_limit FROM quotas WHERE project_id = $1`), projectID)
+		database.Q(`SELECT resource, hard_limit FROM quotas WHERE project_id::text = $1`), projectID)
 	if err == nil {
 		defer quotaRows.Close()
 		for quotaRows.Next() {
@@ -2415,7 +2415,7 @@ func (svc *Service) GetServerMetadata(c *gin.Context) {
 	// Check if server exists and belongs to this project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		serverID, c.GetString("project_id"),
 	).Scan(&exists)
 
@@ -2466,7 +2466,7 @@ func (svc *Service) UpdateServerMetadata(c *gin.Context) {
 	// Check if server exists and belongs to this project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		serverID, c.GetString("project_id"),
 	).Scan(&exists)
 
@@ -2534,7 +2534,7 @@ func (svc *Service) ResetServerMetadata(c *gin.Context) {
 	// Check if server exists and belongs to this project
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		serverID, projectID,
 	).Scan(&exists)
 
@@ -2593,7 +2593,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 	// Update instance in database
 	now := time.Now()
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE instances SET image_id = $1, name = COALESCE(NULLIF($2, ''), name), status = $3, updated_at = $4 WHERE id = $5 AND project_id = $6",
+		database.Q("UPDATE instances SET image_id = $1, name = COALESCE(NULLIF($2, ''), name), status = $3, updated_at = $4 WHERE id = $5 AND project_id::text = $6"),
 		imageRef, name, "REBUILD", now, instanceID, projectID,
 	)
 	if err != nil {
@@ -2615,7 +2615,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 			ctx, cancel := context.WithTimeout(svc.ctx, 5*time.Second)
 			defer cancel()
 			if _, derr := svc.activeDB().ExecContext(ctx,
-				database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4"),
+				database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4"),
 				"ACTIVE", time.Now(), instanceID, projectID); derr != nil {
 				log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to restore instance to ACTIVE after rebuild (stub)")
 			}
@@ -2628,7 +2628,7 @@ func (svc *Service) RebuildInstanceAction(c *gin.Context, rebuildData interface{
 	var nullImageID sql.NullString
 	var createdAt, updatedAt time.Time
 	err = svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id, name, flavor_id, image_id, user_id, status, created_at, updated_at FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT id, name, flavor_id, image_id, user_id, status, created_at, updated_at FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&instanceID, &serverName, &flavorID, &nullImageID, &userID, &status, &createdAt, &updatedAt)
 
@@ -2668,7 +2668,7 @@ func (svc *Service) RescueInstanceAction(c *gin.Context, rescueData interface{})
 	// Update instance status to RESCUE
 	now := time.Now()
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+		database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4"),
 		"RESCUE", now, instanceID, projectID,
 	)
 	if err != nil {
@@ -2746,7 +2746,7 @@ func (svc *Service) PauseInstanceAction(c *gin.Context) {
 
 	// Update instance status to PAUSED
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+		database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4"),
 		"PAUSED", time.Now(), instanceID, projectID,
 	)
 	if err != nil {
@@ -2765,7 +2765,7 @@ func (svc *Service) UnpauseInstanceAction(c *gin.Context) {
 
 	// Update instance status to ACTIVE
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id = $4",
+		database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4"),
 		"ACTIVE", time.Now(), instanceID, projectID,
 	)
 	if err != nil {
@@ -2784,7 +2784,7 @@ func (svc *Service) LockInstanceAction(c *gin.Context) {
 
 	// Update instance locked status
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE instances SET locked = true, updated_at = $1 WHERE id = $2 AND project_id = $3",
+		database.Q("UPDATE instances SET locked = true, updated_at = $1 WHERE id = $2 AND project_id::text = $3"),
 		time.Now(), instanceID, projectID,
 	)
 	if err != nil {
@@ -2803,7 +2803,7 @@ func (svc *Service) UnlockInstanceAction(c *gin.Context) {
 
 	// Update instance locked status
 	_, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"UPDATE instances SET locked = false, updated_at = $1 WHERE id = $2 AND project_id = $3",
+		database.Q("UPDATE instances SET locked = false, updated_at = $1 WHERE id = $2 AND project_id::text = $3"),
 		time.Now(), instanceID, projectID,
 	)
 	if err != nil {
@@ -2823,7 +2823,7 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 	// In stub mode, just delete from database
 	if svc.libvirtMode == "stub" || svc.vmManager == nil {
 		_, err := svc.activeDB().ExecContext(c.Request.Context(),
-			"DELETE FROM instances WHERE id = $1 AND project_id = $2",
+			database.Q("DELETE FROM instances WHERE id = $1 AND project_id::text = $2"),
 			instanceID, projectID,
 		)
 		if err != nil {
@@ -2838,7 +2838,7 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 	// In real mode, destroy VM then delete from database
 	var libvirtDomainID interface{}
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
 
@@ -2852,7 +2852,7 @@ func (svc *Service) ForceDeleteInstanceAction(c *gin.Context) {
 	}
 
 	_, err = svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	)
 	if err != nil {

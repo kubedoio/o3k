@@ -3,6 +3,7 @@ package cinder
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -18,12 +19,12 @@ import (
 func (svc *Service) ListBackups(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, volume_id, name, description, status, size_gb, created_at, updated_at
 		FROM volume_backups
-		WHERE project_id = $1
+		WHERE project_id::text = $1
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_backups").Msg("failed to query backups")
 		common.SendError(c, common.NewInternalServerError("failed to list backups"))
@@ -99,7 +100,7 @@ func (svc *Service) CreateBackup(c *gin.Context) {
 	// Check if volume exists and get its size
 	var volumeSize int
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT size_gb FROM volumes WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT size_gb FROM volumes WHERE id = $1 AND project_id::text = $2"),
 		req.Backup.VolumeID, projectID,
 	).Scan(&volumeSize)
 
@@ -156,11 +157,11 @@ func (svc *Service) GetBackup(c *gin.Context) {
 		updatedAt   time.Time
 	)
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT volume_id, name, description, status, size_gb, created_at, updated_at
 		FROM volume_backups
-		WHERE id = $1 AND project_id = $2
-	`, backupID, projectID).Scan(&volumeID, &name, &description, &status, &sizeGB, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), backupID, projectID).Scan(&volumeID, &name, &description, &status, &sizeGB, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("backup"))
@@ -192,7 +193,7 @@ func (svc *Service) DeleteBackup(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM volume_backups WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM volume_backups WHERE id = $1 AND project_id::text = $2"),
 		backupID, projectID,
 	)
 
@@ -238,7 +239,7 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 	var sizeGB int
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT volume_id, size_gb FROM volume_backups WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT volume_id, size_gb FROM volume_backups WHERE id = $1 AND project_id::text = $2"),
 		backupID, projectID,
 	).Scan(new(string), &sizeGB)
 
@@ -260,7 +261,7 @@ func (svc *Service) RestoreBackup(c *gin.Context) {
 		// Verify target volume exists
 		var exists bool
 		err = svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id = $2)",
+			database.Q("SELECT EXISTS(SELECT 1 FROM volumes WHERE id = $1 AND project_id::text = $2)"),
 			restoredVolumeID, projectID,
 		).Scan(&exists)
 

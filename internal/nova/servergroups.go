@@ -1,6 +1,7 @@
 package nova
 
 import (
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -15,8 +16,8 @@ func (svc *Service) ListServerGroups(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
-		`SELECT id, name, policies, members, project_id, created_at, updated_at
-		 FROM server_groups WHERE project_id = $1`,
+		database.Q(`SELECT id, name, policies, members, project_id, created_at, updated_at
+		 FROM server_groups WHERE project_id::text = $1`),
 		projectID,
 	)
 	if err != nil {
@@ -109,8 +110,8 @@ func (svc *Service) GetServerGroup(c *gin.Context) {
 	var createdAt, updatedAt time.Time
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		`SELECT name, policies, members, project_id, created_at, updated_at
-		 FROM server_groups WHERE id = $1 AND project_id = $2`,
+		database.Q(`SELECT name, policies, members, project_id, created_at, updated_at
+		 FROM server_groups WHERE id = $1 AND project_id::text = $2`),
 		groupID, projectID,
 	).Scan(&name, &policies, &members, &projectIDFromDB, &createdAt, &updatedAt)
 
@@ -137,7 +138,7 @@ func (svc *Service) DeleteServerGroup(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM server_groups WHERE id = $1 AND project_id = $2",
+		database.Q("DELETE FROM server_groups WHERE id = $1 AND project_id::text = $2"),
 		groupID, projectID,
 	)
 	if err != nil {

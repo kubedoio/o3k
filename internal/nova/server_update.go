@@ -3,6 +3,7 @@ package nova
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -39,11 +40,11 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 		updatedAt       time.Time
 	)
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, status, flavor_id, image_id, created_at, updated_at
 		FROM instances
-		WHERE id = $1 AND project_id = $2
-	`, instanceID, projectID).Scan(
+		WHERE id = $1 AND project_id::text = $2
+	`), instanceID, projectID).Scan(
 		&currentName, &currentStatus,
 		&currentFlavorID, &currentImageID, &createdAt, &updatedAt,
 	)
@@ -85,7 +86,7 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 			}
 			query += update
 		}
-		query += " WHERE id = $1 AND project_id = $2"
+		query += database.Q(" WHERE id = $1 AND project_id::text = $2")
 
 		_, err = svc.activeDB().ExecContext(c.Request.Context(), query, params...)
 		if err != nil {

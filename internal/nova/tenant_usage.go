@@ -17,12 +17,12 @@ import (
 // buildServerUsages queries per-instance usage data for a project within the given time range.
 // startParam and stopParam may be empty strings (in which case no time filter is applied).
 func (svc *Service) buildServerUsages(ctx context.Context, projectID, startParam, stopParam string) []gin.H {
-	query := `
+	query := database.Q(`
 		SELECT i.id, i.name, COALESCE(f.vcpus, 0), COALESCE(f.ram_mb, 0), COALESCE(f.disk_gb, 0),
 		       i.created_at, i.status, COALESCE(f.name, '') as flavor_name
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id = $1`
+		WHERE i.project_id::text = $1`)
 	args := []interface{}{projectID}
 	argIdx := 2
 
@@ -128,7 +128,7 @@ func (svc *Service) ListTenantUsage(c *gin.Context) {
 				COALESCE(SUM(f.disk_gb), 0) as total_local_gb_usage
 			 FROM instances i
 			 LEFT JOIN flavors f ON i.flavor_id = f.id
-			 WHERE i.project_id = $1
+			 WHERE i.project_id::text = $1
 			 GROUP BY i.project_id`),
 			projectID,
 		)
@@ -190,7 +190,7 @@ func (svc *Service) GetTenantUsage(c *gin.Context) {
 	var totalHours, totalVCPUs, totalMemoryMB, totalLocalGB float64
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		`SELECT
+		database.Q(`SELECT
 			COUNT(*) as total_instances,
 			COALESCE(SUM(EXTRACT(EPOCH FROM (NOW() - i.created_at)) / 3600), 0) as total_hours,
 			COALESCE(SUM(f.vcpus), 0) as total_vcpus_usage,
@@ -198,8 +198,8 @@ func (svc *Service) GetTenantUsage(c *gin.Context) {
 			COALESCE(SUM(f.disk_gb), 0) as total_local_gb_usage
 		 FROM instances i
 		 LEFT JOIN flavors f ON i.flavor_id = f.id
-		 WHERE i.project_id = $1
-		 GROUP BY i.project_id`,
+		 WHERE i.project_id::text = $1
+		 GROUP BY i.project_id`),
 		tenantID,
 	).Scan(&totalInstances, &totalHours, &totalVCPUs, &totalMemoryMB, &totalLocalGB)
 

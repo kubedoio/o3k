@@ -1,6 +1,7 @@
 package nova
 
 import (
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
@@ -16,7 +17,7 @@ func (svc *Service) ListServerTags(c *gin.Context) {
 	// Verify server exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&exists)
 
@@ -70,7 +71,7 @@ func (svc *Service) ReplaceServerTags(c *gin.Context) {
 	// Verify server exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&exists)
 
@@ -115,7 +116,7 @@ func (svc *Service) AddServerTag(c *gin.Context) {
 	// Verify server exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&exists)
 
@@ -147,7 +148,7 @@ func (svc *Service) DeleteServerTag(c *gin.Context) {
 	// Verify server exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&exists)
 
@@ -183,7 +184,7 @@ func (svc *Service) DeleteAllServerTags(c *gin.Context) {
 	// Verify server exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&exists)
 

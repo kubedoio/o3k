@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -33,12 +34,12 @@ type CreateKeypairRequest struct {
 func (svc *Service) ListKeypairs(c *gin.Context) {
 	userID := c.GetString("user_id")
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, name, user_id, public_key, fingerprint, created_at
 		FROM keypairs
-		WHERE user_id = $1
+		WHERE user_id::text = $1
 		ORDER BY created_at DESC
-	`, userID)
+	`), userID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_keypairs").Msg("database error")
@@ -90,11 +91,11 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 	var name, publicKey, fingerprint string
 	var createdAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, public_key, fingerprint, created_at
 		FROM keypairs
-		WHERE user_id = $1 AND name = $2
-	`, userID, keypairName).Scan(&name, &publicKey, &fingerprint, &createdAt)
+		WHERE user_id::text = $1 AND name = $2
+	`), userID, keypairName).Scan(&name, &publicKey, &fingerprint, &createdAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("keypair"))
@@ -159,7 +160,7 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 	// Check if keypair with same name already exists
 	var existingID string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id FROM keypairs WHERE user_id = $1 AND name = $2",
+		database.Q("SELECT id FROM keypairs WHERE user_id::text = $1 AND name = $2"),
 		userID, req.Keypair.Name,
 	).Scan(&existingID)
 
@@ -206,7 +207,7 @@ func (svc *Service) DeleteKeypair(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		"DELETE FROM keypairs WHERE user_id = $1 AND name = $2",
+		database.Q("DELETE FROM keypairs WHERE user_id::text = $1 AND name = $2"),
 		userID, keypairName,
 	)
 

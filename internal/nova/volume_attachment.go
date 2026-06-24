@@ -48,7 +48,7 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	// Verify instance exists and get libvirt domain ID
 	var libvirtDomainID string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
 
@@ -65,9 +65,9 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 	// the WHERE clause.
 	now := time.Now()
 	tag, err := svc.activeDB().ExecContext(c.Request.Context(),
-		`UPDATE volumes
+		database.Q(`UPDATE volumes
 		 SET status = 'in-use', attached_to_instance_id = $1, updated_at = $2
-		 WHERE id = $3 AND project_id = $4 AND status = 'available'`,
+		 WHERE id = $3 AND project_id::text = $4 AND status = 'available'`),
 		instanceID, now, volumeID, projectID,
 	)
 	if err != nil {
@@ -79,7 +79,7 @@ func (svc *Service) AttachVolume(c *gin.Context) {
 		// Distinguish: not found vs. not available
 		var volStatus string
 		checkErr := svc.activeDB().QueryRowContext(c.Request.Context(),
-			"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+			database.Q("SELECT status FROM volumes WHERE id = $1 AND project_id::text = $2"),
 			volumeID, projectID,
 		).Scan(&volStatus)
 		if checkErr != nil {
@@ -190,7 +190,7 @@ func (svc *Service) DetachVolume(c *gin.Context) {
 	// Verify instance exists and get libvirt domain ID
 	var libvirtDomainID string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT libvirt_domain_id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID)
 
@@ -277,7 +277,7 @@ func (svc *Service) ListVolumeAttachments(c *gin.Context) {
 	// Verify instance exists
 	var exists bool
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&exists)
 

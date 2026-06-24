@@ -42,7 +42,7 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 	var vncPort int
 	var vncPassword string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
@@ -145,7 +145,7 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 	var vncPort int
 	var vncPassword string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
@@ -245,7 +245,7 @@ func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interfa
 	// Verify instance exists
 	var id string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
@@ -292,7 +292,7 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 	// Verify instance exists
 	var id string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
@@ -338,7 +338,7 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 	// Verify instance exists
 	var id string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
@@ -384,7 +384,7 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 	// Verify instance exists
 	var id string
 	err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
