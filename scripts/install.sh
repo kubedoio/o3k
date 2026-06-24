@@ -305,22 +305,6 @@ COMPRESS_OFFLINE = True
 EOF
     chmod 600 "$HORIZON_SETTINGS"
 
-    # Kolla images require a config.json that maps files into the container
-    HORIZON_KOLLA_CFG="/etc/o3k/horizon-kolla-config.json"
-    cat > "$HORIZON_KOLLA_CFG" <<'EOF'
-{
-    "command": "/usr/sbin/apache2ctl -DFOREGROUND",
-    "config_files": [
-        {
-            "source": "/var/lib/kolla/config_files/local_settings.py",
-            "dest": "/etc/openstack-dashboard/local_settings.py",
-            "owner": "horizon",
-            "perm": "0644"
-        }
-    ]
-}
-EOF
-
     # Stop existing container if running
     docker rm -f o3k-horizon 2>/dev/null || true
 
@@ -330,17 +314,15 @@ EOF
 
     # Run Horizon bypassing kolla_set_configs entirely.
     # We mount local_settings.py directly and start Apache ourselves.
-    # Apache log dirs may not exist in the image — create them first via entrypoint override.
+    # The Kolla image ships an empty ports.conf — we must inject Listen 80.
     docker run -d \
         --name o3k-horizon \
         --restart unless-stopped \
         --network host \
-        -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS \
         -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py" \
-        -v "$HORIZON_KOLLA_CFG:/var/lib/kolla/config_files/config.json:ro" \
         --entrypoint /bin/bash \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble \
-        -c "mkdir -p /var/log/apache2 /var/run/apache2 && apache2ctl -DFOREGROUND"
+        -c "mkdir -p /var/log/apache2 /var/run/apache2 && echo 'Listen 80' > /etc/apache2/ports.conf && apache2ctl -DFOREGROUND"
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
