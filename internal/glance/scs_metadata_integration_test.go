@@ -3,67 +3,26 @@ package glance
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
-	"github.com/gin-gonic/gin"
-
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
-// setupGlanceTestDB creates an in-memory-equivalent SQLite database with the
-// minimum schema needed to exercise CreateImage / GetImage / UpdateImage
-// against a real driver. We deliberately avoid the full migration chain so
-// the test stays independent of unrelated schema churn.
-func setupGlanceTestDB(t *testing.T) *database.SQLiteAdapter {
+// setupGlanceTestDB creates an in-memory SQLite database via the canonical
+// migration path and seeds the test project required by the images FK
+// constraint.
+func setupGlanceTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "glance_test.db")
-	adapter, err := database.NewSQLiteAdapter(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
+	db := database.NewTestDB(t)
+	if _, err := db.ExecContext(context.Background(), database.Q(`INSERT INTO projects (id, name) VALUES ($1, $2)`), "proj-test", "proj-test"); err != nil {
+		t.Fatalf("insert test project: %v", err)
 	}
-	t.Cleanup(adapter.Close)
-
-	ctx := context.Background()
-	_, err = adapter.Exec(ctx, `
-		CREATE TABLE images (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			project_id TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'queued',
-			visibility TEXT NOT NULL DEFAULT 'private',
-			disk_format TEXT,
-			container_format TEXT,
-			min_disk_gb INTEGER DEFAULT 0,
-			min_ram_mb INTEGER DEFAULT 0,
-			protected INTEGER DEFAULT 0,
-			rbd_pool TEXT,
-			rbd_image TEXT,
-			size_bytes INTEGER,
-			checksum TEXT,
-			os_hash_algo TEXT,
-			os_hash_value TEXT,
-			properties TEXT DEFAULT '{}',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-		)`)
-	if err != nil {
-		t.Fatalf("create images table: %v", err)
-	}
-	_, err = adapter.Exec(ctx, `
-		CREATE TABLE image_members (
-			image_id TEXT NOT NULL,
-			member_id TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			PRIMARY KEY(image_id, member_id)
-		)`)
-	if err != nil {
-		t.Fatalf("create image_members table: %v", err)
-	}
-	return adapter
+	return db
 }
 
 // callHandler runs a Gin handler against an HTTP request and returns the
@@ -154,7 +113,7 @@ func TestSCSImageMetadataRoundTrip(t *testing.T) {
 		t.Errorf("get: os_distro = %v, want ubuntu", got)
 	}
 
-	// PATCH: replace os_version, add patchlevel, remove os_hash_algo.
+	// PATCH: replace os_version, add patchlevel, remove hotfix_hours.
 	patch := []map[string]any{
 		{"op": "replace", "path": "/os_version", "value": "24.04.1"},
 		{"op": "add", "path": "/patchlevel", "value": "5"},

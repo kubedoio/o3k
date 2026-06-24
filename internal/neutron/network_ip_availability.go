@@ -1,6 +1,7 @@
 package neutron
 
 import (
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
@@ -13,15 +14,15 @@ func (svc *Service) ListNetworkIPAvailabilities(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	// Query networks with subnet information
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT n.id, n.name, n.project_id,
 		       COALESCE(COUNT(DISTINCT s.id), 0) as subnet_count
 		FROM networks n
 		LEFT JOIN subnets s ON n.id = s.network_id
-		WHERE n.project_id = $1
+		WHERE n.project_id::text = $1
 		GROUP BY n.id, n.name, n.project_id
 		ORDER BY n.created_at DESC
-	`, projectID)
+	`), projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_network_ip_availabilities").Msg("failed to query network IP availabilities")
@@ -45,11 +46,11 @@ func (svc *Service) ListNetworkIPAvailabilities(c *gin.Context) {
 		usedIPs := 0                  // Stub: assume no IPs used
 
 		availabilities = append(availabilities, gin.H{
-			"network_id":   networkID,
-			"network_name": name,
-			"project_id":   projID,
-			"total_ips":    totalIPs,
-			"used_ips":     usedIPs,
+			"network_id":             networkID,
+			"network_name":           name,
+			"project_id":             projID,
+			"total_ips":              totalIPs,
+			"used_ips":               usedIPs,
 			"subnet_ip_availability": []gin.H{
 				// Would list per-subnet availability in real mode
 			},
@@ -75,8 +76,8 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 
 	// Verify network exists and belongs to project
 	var name string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT name FROM networks WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT name FROM networks WHERE id = $1 AND project_id::text = $2"),
 		networkID, projectID,
 	).Scan(&name)
 
@@ -86,7 +87,7 @@ func (svc *Service) GetNetworkIPAvailability(c *gin.Context) {
 	}
 
 	// Query subnets for this network
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, cidr
 		FROM subnets
 		WHERE network_id = $1

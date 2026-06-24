@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -14,14 +16,14 @@ import (
 //
 // Uses fixed UUIDs so that repeated calls never duplicate rows and foreign
 // keys remain stable across restarts.
-func SeedDefaults(ctx context.Context, db database.DBIF, adminPassword string) error {
+func SeedDefaults(ctx context.Context, db *sql.DB, adminPassword string) error {
 	// Check if admin user already exists — if so, nothing to do.
 	var exists int
-	err := db.QueryRow(ctx, "SELECT 1 FROM users WHERE name = $1", "admin").Scan(&exists)
+	err := db.QueryRowContext(ctx, database.Q("SELECT 1 FROM users WHERE name = $1"), "admin").Scan(&exists)
 	if err == nil {
 		return nil // Already seeded.
 	}
-	if err != database.ErrNoRows {
+	if err != sql.ErrNoRows {
 		return fmt.Errorf("check existing seed: %w", err)
 	}
 
@@ -194,7 +196,7 @@ func SeedDefaults(ctx context.Context, db database.DBIF, adminPassword string) e
 	}
 
 	for _, s := range stmts {
-		if _, err := db.Exec(ctx, s.sql, s.args...); err != nil {
+		if _, err := db.ExecContext(ctx, s.sql, s.args...); err != nil {
 			return fmt.Errorf("seed: %w", err)
 		}
 	}

@@ -13,10 +13,10 @@ import (
 
 // NetworkNamespaceManager manages Linux network namespaces
 type NetworkNamespaceManager struct {
-	nsPrefix   string
-	mode       string // "stub", "iptables", or "ebpf"
-	mu         sync.Mutex
-	stubNS     map[string]bool // For stub mode
+	nsPrefix string
+	mode     string // "stub", "iptables", or "ebpf"
+	mu       sync.Mutex
+	stubNS   map[string]bool // For stub mode
 }
 
 // NewNetworkNamespaceManager creates a new namespace manager
@@ -189,9 +189,9 @@ func (m *NetworkNamespaceManager) ExecInNamespace(projectID string, args ...stri
 }
 
 // BridgeManager manages Linux bridges
-type BridgeManager struct{
-	mode      string // "stub", "iptables", or "ebpf"
-	mu        sync.Mutex
+type BridgeManager struct {
+	mode        string // "stub", "iptables", or "ebpf"
+	mu          sync.Mutex
 	stubBridges map[string]bool // For stub mode
 }
 
@@ -331,9 +331,9 @@ func (m *BridgeManager) AttachToBridge(ifName, bridgeName string, inNamespace bo
 }
 
 // TAPDeviceManager manages TAP devices
-type TAPDeviceManager struct{
-	mode    string // "stub", "iptables", or "ebpf"
-	mu      sync.Mutex
+type TAPDeviceManager struct {
+	mode     string // "stub", "iptables", or "ebpf"
+	mu       sync.Mutex
 	stubTAPs map[string]bool // For stub mode
 }
 

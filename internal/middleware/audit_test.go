@@ -251,16 +251,16 @@ func TestCADFActionMapping(t *testing.T) {
 // never drop an audit event on a new endpoint.
 func TestTargetTypeURI(t *testing.T) {
 	cases := map[string]string{
-		"/v2.1/project-id/servers":              "compute/server",
-		"/v2.1/project-id/flavors":              "compute/flavor",
-		"/v2.1/project-id/os-keypairs":          "compute/keypair",
-		"/v2.0/networks":                        "network/network",
-		"/v2.0/security-groups":                 "network/security_group",
+		"/v2.1/project-id/servers":                         "compute/server",
+		"/v2.1/project-id/flavors":                         "compute/flavor",
+		"/v2.1/project-id/os-keypairs":                     "compute/keypair",
+		"/v2.0/networks":                                   "network/network",
+		"/v2.0/security-groups":                            "network/security_group",
 		"/v3/volumes/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": "block-storage/volume",
-		"/v2/images":                            "image/image",
-		"/v3/projects":                          "identity/project",
-		"/v3/auth/tokens":                       "identity/auth",
-		"/placement/resource_providers":         "placement/resource_provider",
+		"/v2/images":                                       "image/image",
+		"/v3/projects":                                     "identity/project",
+		"/v3/auth/tokens":                                  "identity/auth",
+		"/placement/resource_providers":                    "placement/resource_provider",
 	}
 	for path, want := range cases {
 		if got := targetTypeURI(path); got != want {
@@ -279,7 +279,7 @@ func TestIsUUID(t *testing.T) {
 	no := []string{
 		"servers",
 		"abc",
-		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee", // 35 chars
+		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee",  // 35 chars
 		"aaaaaaaabbbbccccddddeeeeeeeeeeee0000", // no dashes
 	}
 	for _, s := range yes {

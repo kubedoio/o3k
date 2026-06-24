@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
@@ -39,12 +41,12 @@ func (svc *Service) GetRemoteConsole(c *gin.Context) {
 	var libvirtDomainID string
 	var vncPort int
 	var vncPassword string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -142,12 +144,12 @@ func (svc *Service) getVNCConsoleResponse(c *gin.Context, instanceID, projectID,
 	var libvirtDomainID string
 	var vncPort int
 	var vncPassword string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT libvirt_domain_id, console_vnc_port, console_vnc_password FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &vncPort, &vncPassword)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -196,11 +198,11 @@ func (svc *Service) setupVNCConsole(ctx context.Context, instanceID, libvirtDoma
 	// In real mode, we could configure VNC on the libvirt domain
 
 	// Update database
-	_, err := svc.activeDB().Exec(ctx, `
+	_, err := svc.activeDB().ExecContext(ctx, database.Q(`
 		UPDATE instances
 		SET console_vnc_port = $1, console_vnc_password = $2, updated_at = $3
 		WHERE id = $4
-	`, vncPort, password, time.Now(), instanceID)
+	`), vncPort, password, time.Now(), instanceID)
 
 	if err != nil {
 		return 0, "", err
@@ -242,12 +244,12 @@ func (svc *Service) GetConsoleOutputAction(c *gin.Context, consoleOutput interfa
 
 	// Verify instance exists
 	var id string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -289,12 +291,12 @@ func (svc *Service) GetSerialConsoleAction(c *gin.Context, serialConsole interfa
 
 	// Verify instance exists
 	var id string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -335,12 +337,12 @@ func (svc *Service) GetSPICEConsoleAction(c *gin.Context, spiceConsole interface
 
 	// Verify instance exists
 	var id string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -381,12 +383,12 @@ func (svc *Service) GetRDPConsoleAction(c *gin.Context, rdpConsole interface{}) 
 
 	// Verify instance exists
 	var id string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT id FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT id FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&id)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}

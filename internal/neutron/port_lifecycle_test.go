@@ -1,11 +1,12 @@
 package neutron
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,12 +19,11 @@ import (
 
 // neutronTestDB creates an in-memory SQLite database with the minimal schema
 // required for port lifecycle tests.
-func neutronTestDB(t *testing.T) database.DBIF {
+func neutronTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := database.NewSQLiteAdapter(filepath.Join(dir, "neutron_test.db"))
-	require.NoError(t, err, "creating SQLite adapter")
-	t.Cleanup(db.Close)
+	require.NoError(t, database.ConnectSQLite(context.Background(), ":memory:"), "connecting to test SQLite database")
+	db := database.DB
+	t.Cleanup(database.Close)
 
 	ctx := t.Context()
 
@@ -104,7 +104,7 @@ func neutronTestDB(t *testing.T) database.DBIF {
 	}
 
 	for _, stmt := range stmts {
-		_, err := db.Exec(ctx, stmt)
+		_, err := db.ExecContext(ctx, stmt)
 		require.NoError(t, err, "creating table: %s", stmt[:30])
 	}
 
@@ -112,20 +112,20 @@ func neutronTestDB(t *testing.T) database.DBIF {
 }
 
 // seedNetwork inserts a network + subnet for the test project.
-func seedNetwork(t *testing.T, db database.DBIF, networkID, subnetID, cidr, projectID string) {
+func seedNetwork(t *testing.T, db *sql.DB, networkID, subnetID, cidr, projectID string) {
 	t.Helper()
 	ctx := t.Context()
 
-	_, err := db.Exec(ctx,
-		`INSERT INTO networks (id, name, project_id, shared, admin_state_up, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, 0, 1, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	_, err := db.ExecContext(ctx,
+		database.Q(`INSERT INTO networks (id, name, project_id, shared, admin_state_up, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, 0, 1, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		networkID, "test-net", projectID,
 	)
 	require.NoError(t, err)
 
-	_, err = db.Exec(ctx,
-		`INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	_, err = db.ExecContext(ctx,
+		database.Q(`INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		subnetID, "test-subnet", networkID, projectID, cidr, firstIP(cidr),
 	)
 	require.NoError(t, err)
@@ -231,9 +231,9 @@ func TestDeleteSubnetWithPortsFails409(t *testing.T) {
 
 	// Insert a port that references this subnet via subnet_id column.
 	ctx := t.Context()
-	_, err := db.Exec(ctx,
-		`INSERT INTO ports (id, name, network_id, project_id, subnet_id, mac_address, admin_state_up, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, 1, 'ACTIVE', '[]', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	_, err := db.ExecContext(ctx,
+		database.Q(`INSERT INTO ports (id, name, network_id, project_id, subnet_id, mac_address, admin_state_up, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 1, 'ACTIVE', '[]', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		"port-003", "test-port", networkID, "test-project", subnetID, "fa:16:3e:00:01:02",
 	)
 	require.NoError(t, err)
@@ -264,9 +264,9 @@ func TestUpdatePortSecurityGroups(t *testing.T) {
 
 	// Pre-insert a security group.
 	const sgID = "sg-001"
-	_, err := db.Exec(ctx,
-		`INSERT INTO security_groups (id, name, project_id, description, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	_, err := db.ExecContext(ctx,
+		database.Q(`INSERT INTO security_groups (id, name, project_id, description, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		sgID, "test-sg", "test-project", "",
 	)
 	require.NoError(t, err)
@@ -300,8 +300,8 @@ func TestUpdatePortSecurityGroups(t *testing.T) {
 
 	// Confirm the association exists in the DB.
 	var count int
-	err = db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM port_security_groups WHERE port_id = $1 AND security_group_id = $2`,
+	err = db.QueryRowContext(ctx,
+		database.Q(`SELECT COUNT(*) FROM port_security_groups WHERE port_id = $1 AND security_group_id = $2`),
 		portID, sgID,
 	).Scan(&count)
 	require.NoError(t, err)
@@ -317,17 +317,17 @@ func TestFloatingIPAssociation(t *testing.T) {
 	const extNetID = "ext-net-001"
 
 	// Insert the external network + subnet so allocateFloatingIP can pick an IP.
-	_, err := db.Exec(ctx,
-		`INSERT INTO networks (id, name, project_id, shared, admin_state_up, status, created_at, updated_at)
-		 VALUES ($1, 'ext-net', 'admin', 1, 1, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	_, err := db.ExecContext(ctx,
+		database.Q(`INSERT INTO networks (id, name, project_id, shared, admin_state_up, status, created_at, updated_at)
+		 VALUES ($1, 'ext-net', 'admin', 1, 1, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		extNetID,
 	)
 	require.NoError(t, err)
 
 	const extSubnetID = "ext-sub-001"
-	_, err = db.Exec(ctx,
-		`INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, created_at, updated_at)
-		 VALUES ($1, 'ext-subnet', $2, 'admin', '203.0.113.0/24', '203.0.113.1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	_, err = db.ExecContext(ctx,
+		database.Q(`INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, created_at, updated_at)
+		 VALUES ($1, 'ext-subnet', $2, 'admin', '203.0.113.0/24', '203.0.113.1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
 		extSubnetID, extNetID,
 	)
 	require.NoError(t, err)

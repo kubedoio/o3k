@@ -15,10 +15,10 @@ import (
 
 func TestListProjectsWithMockDB(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewMockDB()
+	database.NewTestDB(t)
 
-	authSvc := keystone.NewAuthServiceWithDB(mock, "test-secret", 0, nil)
-	svc := keystone.NewServiceWithDB(mock, authSvc, nil)
+	authSvc := keystone.NewAuthServiceWithDB(database.DB, "test-secret", 0, nil)
+	svc := keystone.NewServiceWithDB(database.DB, authSvc, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

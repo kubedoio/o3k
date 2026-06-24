@@ -1,1 +1,1 @@
-ALTER TABLE instances ADD COLUMN IF NOT EXISTS key_name TEXT;
+ALTER TABLE instances ADD COLUMN key_name TEXT;

@@ -22,21 +22,21 @@ const (
 
 // SecurityGroupRule represents a security group rule
 type SecurityGroupRule struct {
-	Protocol      uint8  // syscall.IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP, 0=any
-	Direction     uint8  // 0=ingress, 1=egress
-	PortMin       uint16 // Minimum port (host byte order)
-	PortMax       uint16 // Maximum port (host byte order)
-	RemoteIPCIDR  string // "0.0.0.0/0", "192.168.1.0/24", etc.
+	Protocol     uint8  // syscall.IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP, 0=any
+	Direction    uint8  // 0=ingress, 1=egress
+	PortMin      uint16 // Minimum port (host byte order)
+	PortMax      uint16 // Maximum port (host byte order)
+	RemoteIPCIDR string // "0.0.0.0/0", "192.168.1.0/24", etc.
 }
 
 // SecurityGroupManager manages eBPF-based security groups
 type SecurityGroupManager struct {
-	mu       sync.Mutex
-	coll     *ebpf.Collection
-	prog     *ebpf.Program
-	sgRules  *ebpf.Map
-	sgStats  *ebpf.Map
-	links    map[string]link.Link // interface name -> XDP link
+	mu      sync.Mutex
+	coll    *ebpf.Collection
+	prog    *ebpf.Program
+	sgRules *ebpf.Map
+	sgStats *ebpf.Map
+	links   map[string]link.Link // interface name -> XDP link
 }
 
 // Statistics tracks packet counters
@@ -172,12 +172,12 @@ func (m *SecurityGroupManager) UpdateSecurityGroup(portID uint32, rules []Securi
 
 		// Serialize rule (24 bytes total)
 		ruleOffset := offset + i*24
-		buf[ruleOffset] = rule.Protocol                           // 1 byte
-		buf[ruleOffset+1] = rule.Direction                        // 1 byte
-		binary.LittleEndian.PutUint16(buf[ruleOffset+2:], rule.PortMin)  // 2 bytes
-		binary.LittleEndian.PutUint16(buf[ruleOffset+4:], rule.PortMax)  // 2 bytes
-		binary.LittleEndian.PutUint32(buf[ruleOffset+6:], ipPrefix)      // 4 bytes
-		binary.LittleEndian.PutUint32(buf[ruleOffset+10:], ipMask)       // 4 bytes
+		buf[ruleOffset] = rule.Protocol                                 // 1 byte
+		buf[ruleOffset+1] = rule.Direction                              // 1 byte
+		binary.LittleEndian.PutUint16(buf[ruleOffset+2:], rule.PortMin) // 2 bytes
+		binary.LittleEndian.PutUint16(buf[ruleOffset+4:], rule.PortMax) // 2 bytes
+		binary.LittleEndian.PutUint32(buf[ruleOffset+6:], ipPrefix)     // 4 bytes
+		binary.LittleEndian.PutUint32(buf[ruleOffset+10:], ipMask)      // 4 bytes
 		// Padding: 10 bytes reserved for future use
 	}
 

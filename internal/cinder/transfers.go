@@ -5,11 +5,12 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
+	"database/sql"
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -33,12 +34,12 @@ func (svc *Service) CreateVolumeTransfer(c *gin.Context) {
 
 	// Verify volume exists and belongs to project
 	var volumeStatus string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT status FROM volumes WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT status FROM volumes WHERE id = $1 AND project_id::text = $2"),
 		req.Transfer.VolumeID, projectID,
 	).Scan(&volumeStatus)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("volume"))
 		return
 	}
@@ -62,7 +63,7 @@ func (svc *Service) CreateVolumeTransfer(c *gin.Context) {
 	transferID := uuid.New().String()
 	now := time.Now()
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO volume_transfers (id, volume_id, name, source_project_id, auth_key, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, transferID, req.Transfer.VolumeID, req.Transfer.Name, projectID, authKey, now, now)
@@ -88,7 +89,7 @@ func (svc *Service) CreateVolumeTransfer(c *gin.Context) {
 func (svc *Service) ListVolumeTransfers(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, volume_id, name, created_at
 		FROM volume_transfers
 		WHERE source_project_id = $1 AND accepted = false
@@ -142,13 +143,13 @@ func (svc *Service) GetVolumeTransfer(c *gin.Context) {
 	var name *string
 	var createdAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT volume_id, name, created_at
 		FROM volume_transfers
 		WHERE id = $1 AND source_project_id = $2 AND accepted = false
 	`, transferID, projectID).Scan(&volumeID, &name, &createdAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("transfer"))
 		return
 	}
@@ -173,7 +174,7 @@ func (svc *Service) DeleteVolumeTransfer(c *gin.Context) {
 	transferID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM volume_transfers WHERE id = $1 AND source_project_id = $2 AND accepted = false",
 		transferID, projectID,
 	)
@@ -184,7 +185,7 @@ func (svc *Service) DeleteVolumeTransfer(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("transfer"))
 		return
 	}
@@ -212,13 +213,13 @@ func (svc *Service) AcceptVolumeTransfer(c *gin.Context) {
 	var volumeID, storedAuthKey, sourceProjectID string
 	var name *string
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT volume_id, name, auth_key, source_project_id
 		FROM volume_transfers
 		WHERE id = $1 AND accepted = false
 	`, transferID).Scan(&volumeID, &name, &storedAuthKey, &sourceProjectID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("transfer"))
 		return
 	}
@@ -235,16 +236,16 @@ func (svc *Service) AcceptVolumeTransfer(c *gin.Context) {
 	}
 
 	// Transfer volume ownership atomically
-	tx, err := svc.activeDB().BeginTx(c.Request.Context(), database.TxOptions{})
+	tx, err := svc.activeDB().BeginTx(c.Request.Context(), &sql.TxOptions{})
 	if err != nil {
 		log.Error().Err(err).Str("operation", "accept_transfer").Msg("failed to begin transaction")
 		common.SendError(c, common.NewInternalServerError("failed to accept transfer"))
 		return
 	}
-	defer func() { _ = tx.Rollback(c.Request.Context()) }()
+	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Exec(c.Request.Context(),
-		"UPDATE volumes SET project_id = $1 WHERE id = $2",
+	_, err = tx.ExecContext(c.Request.Context(),
+		database.Q("UPDATE volumes SET project_id::text = $1 WHERE id = $2"),
 		projectID, volumeID,
 	)
 	if err != nil {
@@ -253,7 +254,7 @@ func (svc *Service) AcceptVolumeTransfer(c *gin.Context) {
 		return
 	}
 
-	_, err = tx.Exec(c.Request.Context(),
+	_, err = tx.ExecContext(c.Request.Context(),
 		"UPDATE volume_transfers SET accepted = true, destination_project_id = $1 WHERE id = $2",
 		projectID, transferID,
 	)
@@ -263,7 +264,7 @@ func (svc *Service) AcceptVolumeTransfer(c *gin.Context) {
 		return
 	}
 
-	if err := tx.Commit(c.Request.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		log.Error().Err(err).Str("operation", "accept_transfer").Msg("failed to commit transfer")
 		common.SendError(c, common.NewInternalServerError("failed to accept transfer"))
 		return

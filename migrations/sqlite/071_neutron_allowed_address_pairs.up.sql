@@ -1,1 +1,1 @@
-ALTER TABLE ports ADD COLUMN IF NOT EXISTS allowed_address_pairs TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE ports ADD COLUMN allowed_address_pairs TEXT NOT NULL DEFAULT '[]';

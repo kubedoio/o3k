@@ -39,11 +39,10 @@ CREATE TABLE IF NOT EXISTS vxlan_fdb_entries (
 );
 
 -- Add VXLAN-related columns to networks table
-ALTER TABLE networks ADD COLUMN IF NOT EXISTS network_type TEXT DEFAULT 'flat';
-ALTER TABLE networks ADD COLUMN IF NOT EXISTS physical_network TEXT;
+ALTER TABLE networks ADD COLUMN network_type TEXT DEFAULT 'flat';
+ALTER TABLE networks ADD COLUMN physical_network TEXT;
 
--- Add MTU column to networks for VXLAN overhead handling
-ALTER TABLE networks ADD COLUMN IF NOT EXISTS mtu INTEGER DEFAULT 1500;
+-- MTU column is already created by the initial schema (001_initial_schema.up.sql).
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_compute_nodes_status ON compute_nodes(status);

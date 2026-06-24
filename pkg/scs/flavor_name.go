@@ -20,8 +20,8 @@ import (
 type CPUType string
 
 const (
-	CPUTypeCrowded         CPUType = "crowded-core"   // L: heavily oversubscribed
-	CPUTypeShared          CPUType = "shared-core"    // V: shared vCPU (default)
+	CPUTypeCrowded         CPUType = "crowded-core"     // L: heavily oversubscribed
+	CPUTypeShared          CPUType = "shared-core"      // V: shared vCPU (default)
 	CPUTypeDedicatedThread CPUType = "dedicated-thread" // T: dedicated SMT thread
 	CPUTypeDedicatedCore   CPUType = "dedicated-core"   // C: dedicated physical core
 )
@@ -39,9 +39,9 @@ const (
 
 // FlavorName is the parsed form of an SCS-0100-v3 flavor name.
 type FlavorName struct {
-	VCPUs             int
-	CPUType           CPUType
-	CPUInsecure       bool // `i` suffix on cpu-type letter
+	VCPUs       int
+	CPUType     CPUType
+	CPUInsecure bool // `i` suffix on cpu-type letter
 
 	RAMGiB            float64
 	RAMNoECC          bool // `u` suffix on RAM

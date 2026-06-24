@@ -2,6 +2,7 @@ package neutron
 
 import (
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -15,11 +16,11 @@ import (
 func (svc *Service) ListTrunks(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE project_id = $1
-	`, projectID)
+		WHERE project_id::text = $1
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_trunks").Msg("failed to query trunks")
 		common.SendError(c, common.NewInternalServerError("failed to list trunks"))
@@ -41,7 +42,7 @@ func (svc *Service) ListTrunks(c *gin.Context) {
 		}
 
 		// Get subports
-		subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
+		subPortRows, _ := svc.activeDB().QueryContext(c.Request.Context(), `
 			SELECT port_id, segmentation_type, segmentation_id
 			FROM trunk_subports
 			WHERE trunk_id = $1
@@ -118,7 +119,7 @@ func (svc *Service) CreateTrunk(c *gin.Context) {
 		return
 	}
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO trunks (id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, trunkID, req.Trunk.Name, req.Trunk.Description, projectID, portID, adminStateUp, "ACTIVE", time.Now(), time.Now())
@@ -157,11 +158,11 @@ func (svc *Service) GetTrunk(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		common.SendError(c, common.NewNotFoundError("trunk"))
@@ -169,7 +170,7 @@ func (svc *Service) GetTrunk(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1
@@ -225,8 +226,8 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 
 	// Verify trunk exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id::text = $2)"),
 		trunkID, projectID,
 	).Scan(&exists)
 
@@ -271,7 +272,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 		}
 		query += fmt.Sprintf(" WHERE id = $%d AND project_id = $%d", argPos, argPos+1)
 
-		_, err = svc.activeDB().Exec(c.Request.Context(), query, args...)
+		_, err = svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 		if err != nil {
 			log.Error().Err(err).Str("operation", "update_trunk").Msg("failed to update trunk")
 			common.SendError(c, common.NewInternalServerError("failed to update trunk"))
@@ -286,11 +287,11 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_trunk_fetch").Msg("failed to fetch updated trunk")
@@ -299,7 +300,7 @@ func (svc *Service) UpdateTrunk(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1
@@ -344,8 +345,8 @@ func (svc *Service) DeleteTrunk(c *gin.Context) {
 	trunkID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM trunks WHERE id = $1 AND project_id = $2",
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM trunks WHERE id = $1 AND project_id::text = $2"),
 		trunkID, projectID,
 	)
 
@@ -355,7 +356,7 @@ func (svc *Service) DeleteTrunk(c *gin.Context) {
 		return
 	}
 
-	rowsAffected := result.RowsAffected()
+	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		common.SendError(c, common.NewNotFoundError("trunk"))
 		return
@@ -384,8 +385,8 @@ func (svc *Service) AddSubports(c *gin.Context) {
 
 	// Verify trunk exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id::text = $2)"),
 		trunkID, projectID,
 	).Scan(&exists)
 
@@ -401,7 +402,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 			continue
 		}
 
-		_, err = svc.activeDB().Exec(c.Request.Context(), `
+		_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 			INSERT INTO trunk_subports (trunk_id, port_id, segmentation_type, segmentation_id, created_at)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (trunk_id, port_id) DO NOTHING
@@ -415,7 +416,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	}
 
 	// Update trunk updated_at
-	_, _ = svc.activeDB().Exec(c.Request.Context(),
+	_, _ = svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE trunks SET updated_at = $1 WHERE id = $2",
 		time.Now(), trunkID,
 	)
@@ -427,11 +428,11 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "add_subports_fetch").Msg("failed to fetch trunk after adding subports")
@@ -440,7 +441,7 @@ func (svc *Service) AddSubports(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1
@@ -498,8 +499,8 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 
 	// Verify trunk exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM trunks WHERE id = $1 AND project_id::text = $2)"),
 		trunkID, projectID,
 	).Scan(&exists)
 
@@ -510,7 +511,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 
 	// Remove subports
 	for _, subPort := range req.SubPorts {
-		_, err = svc.activeDB().Exec(c.Request.Context(),
+		_, err = svc.activeDB().ExecContext(c.Request.Context(),
 			"DELETE FROM trunk_subports WHERE trunk_id = $1 AND port_id = $2",
 			trunkID, subPort.PortID,
 		)
@@ -523,7 +524,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	}
 
 	// Update trunk updated_at
-	_, _ = svc.activeDB().Exec(c.Request.Context(),
+	_, _ = svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE trunks SET updated_at = $1 WHERE id = $2",
 		time.Now(), trunkID,
 	)
@@ -535,11 +536,11 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	var adminStateUp bool
 	var createdAt, updatedAt time.Time
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, project_id, port_id, admin_state_up, status, created_at, updated_at
 		FROM trunks
-		WHERE id = $1 AND project_id = $2
-	`, trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), trunkID, projectID).Scan(&id, &name, &description, &projectIDStr, &portID, &adminStateUp, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "remove_subports_fetch").Msg("failed to fetch trunk after removing subports")
@@ -548,7 +549,7 @@ func (svc *Service) RemoveSubports(c *gin.Context) {
 	}
 
 	// Get subports
-	subPortRows, _ := svc.activeDB().Query(c.Request.Context(), `
+	subPortRows, _ := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT port_id, segmentation_type, segmentation_id
 		FROM trunk_subports
 		WHERE trunk_id = $1

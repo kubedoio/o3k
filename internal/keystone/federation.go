@@ -34,21 +34,10 @@ import (
 	"fmt"
 )
 
-// FederationProvider is the contract a federated IdP adapter satisfies. One
-// concrete implementation (OIDCProvider) ships in v1; LDAP/OAuth2-direct
-// providers can be added without changing this interface.
-type FederationProvider interface {
-	// Name returns the provider identifier used in URLs and config
-	// (e.g. "keycloak-prod", "zitadel-staging").
-	Name() string
-
-	// Verify validates a credential presented by the caller (typically an
-	// OIDC ID token or an OAuth2 access token) and returns the verified
-	// identity claims. The credential format depends on the protocol:
-	//   - openid: a signed JWT ID token
-	//   - mapped: a bearer access token, verified against IdP JWKS
-	// Returns an error if the credential is invalid, expired, or the
-	// signature cannot be verified.
+// federationProvider is the internal contract for a federated IdP adapter.
+// v1 only ships OIDCProvider; the interface is unexported to avoid exposing
+// speculative abstraction in the public API.
+type federationProvider interface {
 	Verify(ctx context.Context, credential string) (*FederatedIdentity, error)
 }
 
@@ -180,31 +169,18 @@ type FederationAuthRequest struct {
 // API can return 400 vs 401 appropriately.
 var ErrUnknownProvider = errors.New("unknown federation provider")
 
-// ErrFederationDisabled is returned by federation entry points when the
-// keystone.federation.enabled flag is false.
-var ErrFederationDisabled = errors.New("federation disabled")
-
-// FederationRegistry holds the set of configured providers, keyed by Name.
-// Constructed once at startup from FederationConfig.Providers and passed
-// into AuthService. Read-only after construction — adding a provider
-// requires a restart, which matches the operational model for IdP trust.
-//
-// Configs are stored alongside providers so the auth path can read
-// per-provider knobs (AutoProvision, DefaultProject, DefaultRole) without
-// the adapter having to surface them.
+// FederationRegistry holds the configured providers and their configs,
+// keyed by provider name. Constructed once at startup and passed into AuthService.
 type FederationRegistry struct {
-	providers map[string]FederationProvider
+	providers map[string]federationProvider
 	configs   map[string]FederationProviderConfig
 }
 
 // NewFederationRegistry builds a registry from a slice of provider configs.
-// Each config triggers protocol-specific adapter construction (OIDC discovery
-// for "openid"). Returns an error if any provider fails to construct so a
-// half-configured deployment can't silently accept logins from a working
-// subset of IdPs.
+// v1 only supports "openid"; an empty protocol defaults to "openid".
 func NewFederationRegistry(ctx context.Context, configs []FederationProviderConfig) (*FederationRegistry, error) {
 	r := &FederationRegistry{
-		providers: make(map[string]FederationProvider, len(configs)),
+		providers: make(map[string]federationProvider, len(configs)),
 		configs:   make(map[string]FederationProviderConfig, len(configs)),
 	}
 	for _, cfg := range configs {
@@ -213,8 +189,6 @@ func NewFederationRegistry(ctx context.Context, configs []FederationProviderConf
 		}
 		switch cfg.Protocol {
 		case "openid", "":
-			// Empty protocol defaults to openid for v1 — the only adapter
-			// shipped today. ldap/oauth2 land in later slices.
 			p, err := NewOIDCProvider(ctx, cfg)
 			if err != nil {
 				return nil, err
@@ -230,7 +204,7 @@ func NewFederationRegistry(ctx context.Context, configs []FederationProviderConf
 
 // Provider looks up a provider by name. Returns ErrUnknownProvider if the
 // name isn't configured.
-func (r *FederationRegistry) Provider(name string) (FederationProvider, error) {
+func (r *FederationRegistry) Provider(name string) (federationProvider, error) {
 	p, ok := r.providers[name]
 	if !ok {
 		return nil, ErrUnknownProvider
@@ -238,29 +212,16 @@ func (r *FederationRegistry) Provider(name string) (FederationProvider, error) {
 	return p, nil
 }
 
-// config returns the per-provider configuration. Used by the auth path to
-// read AutoProvision, DefaultProject, DefaultRole knobs without exposing
-// them through the FederationProvider interface (which is concerned with
-// credential verification, not provisioning policy).
+// config returns the per-provider configuration.
 func (r *FederationRegistry) config(name string) (FederationProviderConfig, bool) {
 	c, ok := r.configs[name]
 	return c, ok
 }
 
-// Names returns the set of configured provider names. Used by the federation
-// discovery endpoint (`GET /v3/OS-FEDERATION/identity_providers`).
-func (r *FederationRegistry) Names() []string {
-	out := make([]string, 0, len(r.providers))
-	for name := range r.providers {
-		out = append(out, name)
-	}
-	return out
-}
-
 // newFederationRegistryWithProviders is a test seam that wires pre-built
 // providers into a registry without going through NewOIDCProvider's real
-// OIDC discovery. Production callers always go through NewFederationRegistry.
-func newFederationRegistryWithProviders(providers map[string]FederationProvider, configs map[string]FederationProviderConfig) *FederationRegistry {
+// OIDC discovery.
+func newFederationRegistryWithProviders(providers map[string]federationProvider, configs map[string]FederationProviderConfig) *FederationRegistry {
 	return &FederationRegistry{providers: providers, configs: configs}
 }
 

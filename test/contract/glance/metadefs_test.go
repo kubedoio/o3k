@@ -48,10 +48,10 @@ func TestGlanceCreateMetadefNamespace_Contract(t *testing.T) {
 
 	// Create namespace
 	payload := map[string]interface{}{
-		"namespace":     "test-namespace",
-		"display_name":  "Test Namespace",
-		"description":   "Test metadata namespace",
-		"visibility":    "public",
+		"namespace":    "test-namespace",
+		"display_name": "Test Namespace",
+		"description":  "Test metadata namespace",
+		"visibility":   "public",
 		"resource_type_associations": []map[string]interface{}{
 			{"name": "OS::Glance::Image"},
 		},
@@ -129,10 +129,10 @@ func TestGlanceUpdateMetadefNamespace_Contract(t *testing.T) {
 
 	// Update namespace
 	payload := map[string]interface{}{
-		"namespace":     nsName,
-		"display_name":  "Updated Namespace",
-		"description":   "Updated description",
-		"visibility":    "public",
+		"namespace":    nsName,
+		"display_name": "Updated Namespace",
+		"description":  "Updated description",
+		"visibility":   "public",
 	}
 
 	body, _ := json.Marshal(payload)

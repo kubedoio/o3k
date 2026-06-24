@@ -34,6 +34,8 @@ import (
 	"testing"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/compute"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/networking"
@@ -79,12 +81,12 @@ func resetSchema(t *testing.T, dbURL, migrationsPath string) {
 	}
 }
 
-// setupDB connects pgx and returns the DBIF. Caller must Close.
-func setupDB(t *testing.T, dbURL string) database.DBIF {
+// setupDB connects to Postgres and returns the *sql.DB. Caller must Close.
+func setupDB(t *testing.T, dbURL string) *sql.DB {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := database.ConnectSimple(ctx, dbURL, 8); err != nil {
+	if err := database.Connect(ctx, dbURL, &database.PoolConfig{MaxConns: 8, MinConns: 2, MaxConnLifetime: time.Hour, MaxConnIdleTime: 15 * time.Minute, HealthCheckPeriod: time.Minute}); err != nil {
 		t.Fatalf("database.Connect: %v", err)
 	}
 	return database.DB
@@ -92,15 +94,15 @@ func setupDB(t *testing.T, dbURL string) database.DBIF {
 
 // node bundles a simulated compute node's coordination components.
 type node struct {
-	hostname  string
-	tunnelIP  string
-	registry  *compute.NodeRegistry
-	vxlanMgr  *networking.VXLANManager
-	nsMgr     *networking.NetworkNamespaceManager
-	coord     *VXLANCoordinator
+	hostname string
+	tunnelIP string
+	registry *compute.NodeRegistry
+	vxlanMgr *networking.VXLANManager
+	nsMgr    *networking.NetworkNamespaceManager
+	coord    *VXLANCoordinator
 }
 
-func newNode(t *testing.T, hostname, tunnelIP string, db database.DBIF) *node {
+func newNode(t *testing.T, hostname, tunnelIP string, db *sql.DB) *node {
 	t.Helper()
 	reg := compute.NewNodeRegistryForTest(
 		uuid.NewString(),
@@ -130,13 +132,13 @@ func newNode(t *testing.T, hostname, tunnelIP string, db database.DBIF) *node {
 // seedProject inserts a project row tied to the seeded Default domain
 // so VXLAN networks created against it satisfy the FK on
 // networks.project_id.
-func seedProject(t *testing.T, db database.DBIF, ctx context.Context) string {
+func seedProject(t *testing.T, db *sql.DB, ctx context.Context) string {
 	t.Helper()
 	projectID := uuid.NewString()
-	_, err := db.Exec(ctx, `
+	_, err := db.ExecContext(ctx, database.Q(`
 		INSERT INTO projects (id, name, description, enabled, domain_id)
 		VALUES ($1, $2, $3, $4, $5)
-	`, projectID, "vxlan-test-"+projectID[:8], "vxlan multi-node test project", true, defaultDomainID)
+	`), projectID, "vxlan-test-"+projectID[:8], "vxlan multi-node test project", true, defaultDomainID)
 	if err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
@@ -145,13 +147,13 @@ func seedProject(t *testing.T, db database.DBIF, ctx context.Context) string {
 
 // seedVXLANNetwork inserts a VXLAN-typed network with a fresh UUID.
 // VNI is allocated lazily by the coordinator on its next sync.
-func seedVXLANNetwork(t *testing.T, db database.DBIF, ctx context.Context, projectID string) string {
+func seedVXLANNetwork(t *testing.T, db *sql.DB, ctx context.Context, projectID string) string {
 	t.Helper()
 	networkID := uuid.NewString()
-	_, err := db.Exec(ctx, `
+	_, err := db.ExecContext(ctx, database.Q(`
 		INSERT INTO networks (id, name, project_id, network_type, status)
 		VALUES ($1, $2, $3, 'vxlan', 'ACTIVE')
-	`, networkID, "net-"+networkID[:8], projectID)
+	`), networkID, "net-"+networkID[:8], projectID)
 	if err != nil {
 		t.Fatalf("seed VXLAN network: %v", err)
 	}
@@ -161,13 +163,13 @@ func seedVXLANNetwork(t *testing.T, db database.DBIF, ctx context.Context, proje
 // seedPort inserts a port row so vxlan_fdb_entries.port_id has a valid
 // FK target. The FDB sync test would otherwise fail with SQLSTATE 23503
 // because DistributeFDBEntry inserts into vxlan_fdb_entries directly.
-func seedPort(t *testing.T, db database.DBIF, ctx context.Context, networkID, projectID, mac string) string {
+func seedPort(t *testing.T, db *sql.DB, ctx context.Context, networkID, projectID, mac string) string {
 	t.Helper()
 	portID := uuid.NewString()
-	_, err := db.Exec(ctx, `
+	_, err := db.ExecContext(ctx, database.Q(`
 		INSERT INTO ports (id, name, network_id, project_id, mac_address, status)
 		VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
-	`, portID, "port-"+portID[:8], networkID, projectID, mac)
+	`), portID, "port-"+portID[:8], networkID, projectID, mac)
 	if err != nil {
 		t.Fatalf("seed port: %v", err)
 	}
@@ -287,8 +289,8 @@ func TestVXLANMultiNode_FDBSyncBetweenNodes(t *testing.T) {
 
 	// Verify the row landed with n1's tunnel IP.
 	var vtepIP string
-	if err := db.QueryRow(ctx,
-		`SELECT vtep_ip FROM vxlan_fdb_entries WHERE port_id = $1`, portID,
+	if err := db.QueryRowContext(ctx,
+		database.Q(`SELECT vtep_ip FROM vxlan_fdb_entries WHERE port_id = $1`), portID,
 	).Scan(&vtepIP); err != nil {
 		t.Fatalf("read FDB row: %v", err)
 	}
@@ -360,8 +362,8 @@ func TestVXLANMultiNode_StoppedHeartbeatDeactivates(t *testing.T) {
 	// Backdate n2's heartbeat to 3× the interval ago — past the
 	// 2× threshold ListActiveNodes uses.
 	stale := time.Now().Add(-3 * testHeartbeatInterval)
-	if _, err := db.Exec(ctx,
-		`UPDATE compute_nodes SET last_heartbeat = $1 WHERE hostname = $2`,
+	if _, err := db.ExecContext(ctx,
+		database.Q(`UPDATE compute_nodes SET last_heartbeat = $1 WHERE hostname = $2`),
 		stale, "test-node-2",
 	); err != nil {
 		t.Fatalf("backdate heartbeat: %v", err)

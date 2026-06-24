@@ -9,13 +9,13 @@ import (
 )
 
 func TestNewReconciler(t *testing.T) {
-	mock := database.NewMockDB()
-	r := scheduler.NewReconciler(mock, 30)
+	db := database.NewTestDB(t)
+	r := scheduler.NewReconciler(db, 30)
 	assert.NotNil(t, r)
 }
 
 func TestNewReconcilerDefaultInterval(t *testing.T) {
-	mock := database.NewMockDB()
-	r := scheduler.NewReconciler(mock, 0)
+	db := database.NewTestDB(t)
+	r := scheduler.NewReconciler(db, 0)
 	assert.NotNil(t, r)
 }

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/pkg/cache"
@@ -48,7 +50,7 @@ type AuthService struct {
 	jwtSecret     []byte
 	tokenTTL      time.Duration
 	cache         *cache.Cache
-	db            database.DBIF
+	db            *sql.DB
 	revokedTokens sync.Map // token hash -> expiry time
 	federation    *FederationRegistry
 }
@@ -76,7 +78,7 @@ func NewAuthService(jwtSecret string, tokenTTL time.Duration, cacheInstance *cac
 }
 
 // NewAuthServiceWithDB creates an AuthService with an injected DB for testing.
-func NewAuthServiceWithDB(db database.DBIF, jwtSecret string, tokenTTL time.Duration, cacheInstance *cache.Cache) *AuthService {
+func NewAuthServiceWithDB(db *sql.DB, jwtSecret string, tokenTTL time.Duration, cacheInstance *cache.Cache) *AuthService {
 	svc := NewAuthService(jwtSecret, tokenTTL, cacheInstance)
 	svc.db = db
 	return svc
@@ -91,8 +93,8 @@ func (s *AuthService) loadRevokedTokens() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rows, err := db.Query(ctx,
-		`SELECT token_hash, expires_at FROM revoked_tokens WHERE expires_at > NOW()`)
+	rows, err := db.QueryContext(ctx,
+		database.Q(`SELECT token_hash, expires_at FROM revoked_tokens WHERE expires_at > NOW()`))
 	if err != nil {
 		log.Warn().Err(err).Msg("keystone: failed to preload revoked tokens; in-memory map starts empty")
 		return
@@ -112,7 +114,7 @@ func (s *AuthService) loadRevokedTokens() {
 }
 
 // activeDB returns the injected DB or falls back to the global.
-func (s *AuthService) activeDB() database.DBIF {
+func (s *AuthService) activeDB() *sql.DB {
 	if s.db != nil {
 		return s.db
 	}
@@ -263,12 +265,12 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 
 	// Look up domain ID
 	var domainID string
-	err := s.activeDB().QueryRow(ctx,
-		"SELECT id FROM domains WHERE name = $1",
+	err := s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id FROM domains WHERE name = $1"),
 		domainName,
 	).Scan(&domainID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", common.NewUnauthorizedError("invalid domain")
 	}
 	if err != nil {
@@ -277,12 +279,12 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 
 	// Fetch user from database (with domain filter)
 	var user database.User
-	err = s.activeDB().QueryRow(ctx,
-		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE name = $1 AND domain_id = $2",
+	err = s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id, name, password_hash, enabled, domain_id FROM users WHERE name = $1 AND domain_id = $2"),
 		username, domainID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", common.NewUnauthorizedError("invalid credentials")
 	}
 	if err != nil {
@@ -326,10 +328,10 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 			params = []interface{}{projectName, domainID}
 		}
 
-		err := s.activeDB().QueryRow(ctx, query, params...).Scan(
+		err := s.activeDB().QueryRowContext(ctx, query, params...).Scan(
 			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, "", common.NewUnauthorizedError("project not found")
 		}
 		if err != nil {
@@ -344,12 +346,12 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		project = &proj
 
 		// Fetch roles
-		rows, err := s.activeDB().Query(ctx, `
+		rows, err := s.activeDB().QueryContext(ctx, database.Q(`
 			SELECT r.name
 			FROM role_assignments ra
 			JOIN roles r ON ra.role_id = r.id
-			WHERE ra.user_id = $1 AND ra.project_id = $2
-		`, user.ID, projectID)
+			WHERE ra.user_id::text = $1 AND ra.project_id::text = $2
+		`), user.ID, projectID)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to fetch roles: %w", err)
 		}
@@ -403,8 +405,8 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 
 	// Query user's domain name
 	var userDomainName string
-	err = s.activeDB().QueryRow(ctx,
-		"SELECT name FROM domains WHERE id = $1",
+	err = s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT name FROM domains WHERE id = $1"),
 		user.DomainID,
 	).Scan(&userDomainName)
 	if err != nil {
@@ -424,8 +426,8 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 	if projectID != "" {
 		// Query project's domain name
 		var projectDomainName string
-		err = s.activeDB().QueryRow(ctx,
-			"SELECT name FROM domains WHERE id = $1",
+		err = s.activeDB().QueryRowContext(ctx,
+			database.Q("SELECT name FROM domains WHERE id = $1"),
 			project.DomainID,
 		).Scan(&projectDomainName)
 		if err != nil {
@@ -445,8 +447,8 @@ func (s *AuthService) AuthenticatePassword(ctx context.Context, req *AuthRequest
 		// Add roles with proper IDs
 		for _, roleName := range roles {
 			var roleID string
-			_ = s.activeDB().QueryRow(ctx,
-				"SELECT id FROM roles WHERE name = $1", roleName,
+			_ = s.activeDB().QueryRowContext(ctx,
+				database.Q("SELECT id FROM roles WHERE name = $1"), roleName,
 			).Scan(&roleID)
 			if roleID == "" {
 				roleID = roleName // fallback
@@ -478,12 +480,12 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 
 	// Fetch user from database
 	var user database.User
-	err = s.activeDB().QueryRow(ctx,
-		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1",
+	err = s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1"),
 		claims.UserID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", common.NewUnauthorizedError("user not found")
 	}
 	if err != nil {
@@ -524,10 +526,10 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 			params = []interface{}{projectName, user.DomainID}
 		}
 
-		err := s.activeDB().QueryRow(ctx, query, params...).Scan(
+		err := s.activeDB().QueryRowContext(ctx, query, params...).Scan(
 			&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID,
 		)
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, "", common.NewUnauthorizedError("project not found")
 		}
 		if err != nil {
@@ -542,12 +544,12 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 		project = &proj
 
 		// Fetch roles
-		rows, err := s.activeDB().Query(ctx, `
+		rows, err := s.activeDB().QueryContext(ctx, database.Q(`
 			SELECT r.name
 			FROM role_assignments ra
 			JOIN roles r ON ra.role_id = r.id
-			WHERE ra.user_id = $1 AND ra.project_id = $2
-		`, user.ID, projectID)
+			WHERE ra.user_id::text = $1 AND ra.project_id::text = $2
+		`), user.ID, projectID)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to fetch roles: %w", err)
 		}
@@ -600,8 +602,8 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 
 	// Query user's domain name
 	var userDomainName string
-	err = s.activeDB().QueryRow(ctx,
-		"SELECT name FROM domains WHERE id = $1",
+	err = s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT name FROM domains WHERE id = $1"),
 		user.DomainID,
 	).Scan(&userDomainName)
 	if err != nil {
@@ -621,8 +623,8 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 	if projectID != "" {
 		// Query project's domain name
 		var projectDomainName string
-		err = s.activeDB().QueryRow(ctx,
-			"SELECT name FROM domains WHERE id = $1",
+		err = s.activeDB().QueryRowContext(ctx,
+			database.Q("SELECT name FROM domains WHERE id = $1"),
 			project.DomainID,
 		).Scan(&projectDomainName)
 		if err != nil {
@@ -642,8 +644,8 @@ func (s *AuthService) AuthenticateToken(ctx context.Context, req *AuthRequest) (
 		// Add roles with proper IDs
 		for _, roleName := range roles {
 			var roleID string
-			_ = s.activeDB().QueryRow(ctx,
-				"SELECT id FROM roles WHERE name = $1", roleName,
+			_ = s.activeDB().QueryRowContext(ctx,
+				database.Q("SELECT id FROM roles WHERE name = $1"), roleName,
 			).Scan(&roleID)
 			if roleID == "" {
 				roleID = roleName // fallback
@@ -682,13 +684,13 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 	var unrestricted bool
 	var legacyAuth bool
 	var accessRulesJSON []byte
-	err := s.activeDB().QueryRow(ctx, `
+	err := s.activeDB().QueryRowContext(ctx, database.Q(`
 		SELECT user_id, project_id, secret_hash, name, expires_at, unrestricted, COALESCE(legacy_auth, false), access_rules
 		FROM application_credentials
 		WHERE id = $1
-	`, credID).Scan(&userID, &projectID, &secretHash, &name, &expiresAt, &unrestricted, &legacyAuth, &accessRulesJSON)
+	`), credID).Scan(&userID, &projectID, &secretHash, &name, &expiresAt, &unrestricted, &legacyAuth, &accessRulesJSON)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", false, common.NewUnauthorizedError("invalid application credential")
 	}
 	if err != nil {
@@ -709,8 +711,8 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 		// Transparent upgrade: re-hash with bcrypt and clear legacy flag
 		newHash, hashErr := bcrypt.GenerateFromPassword([]byte(secret), 12)
 		if hashErr == nil {
-			_, _ = s.activeDB().Exec(ctx,
-				"UPDATE application_credentials SET secret_hash = $1, legacy_auth = false, updated_at = NOW() WHERE id = $2",
+			_, _ = s.activeDB().ExecContext(ctx,
+				database.Q("UPDATE application_credentials SET secret_hash = $1, legacy_auth = false, updated_at = NOW() WHERE id = $2"),
 				string(newHash), credID)
 		}
 		log.Warn().Str("credential_id", credID).Str("credential_name", name).Msg("legacy application credential used; please rotate to bcrypt")
@@ -732,11 +734,11 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 
 	// Fetch the associated user
 	var user database.User
-	err = s.activeDB().QueryRow(ctx,
-		"SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1",
+	err = s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT id, name, password_hash, enabled, domain_id FROM users WHERE id = $1"),
 		userID,
 	).Scan(&user.ID, &user.Name, &user.PasswordHash, &user.Enabled, &user.DomainID)
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", false, common.NewUnauthorizedError("user not found for application credential")
 	}
 	if err != nil {
@@ -762,8 +764,8 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 		requestedProjectID := req.Auth.Scope.Project.ID
 		// Resolve project name to ID if only name was provided
 		if requestedProjectID == "" && req.Auth.Scope.Project.Name != "" {
-			err := s.activeDB().QueryRow(ctx,
-				"SELECT id FROM projects WHERE name = $1 AND domain_id = $2",
+			err := s.activeDB().QueryRowContext(ctx,
+				database.Q("SELECT id FROM projects WHERE name = $1 AND domain_id = $2"),
 				req.Auth.Scope.Project.Name, user.DomainID,
 			).Scan(&requestedProjectID)
 			if err != nil {
@@ -777,12 +779,12 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 
 	// Get roles for this application credential
 	var roles []string
-	rows, err := s.activeDB().Query(ctx, `
+	rows, err := s.activeDB().QueryContext(ctx, database.Q(`
 		SELECT r.name
 		FROM application_credential_roles acr
 		JOIN roles r ON acr.role_id = r.id
 		WHERE acr.application_credential_id = $1
-	`, credID)
+	`), credID)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("failed to fetch application credential roles: %w", err)
 	}
@@ -833,8 +835,8 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 
 	// Query user's domain name
 	var userDomainName string
-	err = s.activeDB().QueryRow(ctx,
-		"SELECT name FROM domains WHERE id = $1",
+	err = s.activeDB().QueryRowContext(ctx,
+		database.Q("SELECT name FROM domains WHERE id = $1"),
 		user.DomainID,
 	).Scan(&userDomainName)
 	if err != nil {
@@ -853,14 +855,14 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 	// Add project and catalog if scoped
 	if scopeProjectID != "" {
 		var proj database.Project
-		err = s.activeDB().QueryRow(ctx,
-			"SELECT id, name, description, enabled, domain_id FROM projects WHERE id = $1",
+		err = s.activeDB().QueryRowContext(ctx,
+			database.Q("SELECT id, name, description, enabled, domain_id FROM projects WHERE id = $1"),
 			scopeProjectID,
 		).Scan(&proj.ID, &proj.Name, &proj.Description, &proj.Enabled, &proj.DomainID)
 		if err == nil {
 			var projectDomainName string
-			err = s.activeDB().QueryRow(ctx,
-				"SELECT name FROM domains WHERE id = $1",
+			err = s.activeDB().QueryRowContext(ctx,
+				database.Q("SELECT name FROM domains WHERE id = $1"),
 				proj.DomainID,
 			).Scan(&projectDomainName)
 			if err != nil {
@@ -881,8 +883,8 @@ func (s *AuthService) AuthenticateApplicationCredential(ctx context.Context, req
 		// Add roles with proper IDs
 		for _, roleName := range roles {
 			var roleID string
-			_ = s.activeDB().QueryRow(ctx,
-				"SELECT id FROM roles WHERE name = $1", roleName,
+			_ = s.activeDB().QueryRowContext(ctx,
+				database.Q("SELECT id FROM roles WHERE name = $1"), roleName,
 			).Scan(&roleID)
 			if roleID == "" {
 				roleID = roleName // fallback
@@ -943,8 +945,8 @@ func (s *AuthService) RevokeToken(tokenString string, expiresAt time.Time) {
 	if db := s.activeDB(); db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := db.Exec(ctx,
-			`INSERT INTO revoked_tokens (token_hash, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		if _, err := db.ExecContext(ctx,
+			database.Q(`INSERT INTO revoked_tokens (token_hash, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`),
 			hash, expiresAt,
 		); err != nil {
 			log.Error().Err(err).Str("token_hash", hash).Msg("failed to persist token revocation to DB")
@@ -979,8 +981,8 @@ func (s *AuthService) IsTokenRevoked(tokenString string) bool {
 	var expiresAt time.Time
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := db.QueryRow(ctx,
-		"SELECT expires_at FROM revoked_tokens WHERE token_hash = $1",
+	err := db.QueryRowContext(ctx,
+		database.Q("SELECT expires_at FROM revoked_tokens WHERE token_hash = $1"),
 		hash,
 	).Scan(&expiresAt)
 
@@ -993,7 +995,7 @@ func (s *AuthService) IsTokenRevoked(tokenString string) bool {
 	if time.Now().After(expiresAt) {
 		// Token expired anyway, clean it up from DB asynchronously
 		go func() {
-			_, _ = db.Exec(context.Background(),
+			_, _ = db.ExecContext(context.Background(),
 				"DELETE FROM revoked_tokens WHERE token_hash = $1", hash)
 		}()
 		return false
@@ -1017,7 +1019,7 @@ func (s *AuthService) CleanExpiredRevocations() {
 
 	// Also clean expired entries from the database
 	if db := s.activeDB(); db != nil {
-		_, _ = db.Exec(context.Background(),
+		_, _ = db.ExecContext(context.Background(),
 			"DELETE FROM revoked_tokens WHERE expires_at < $1", now)
 	}
 }
@@ -1064,13 +1066,13 @@ func (s *AuthService) BuildServiceCatalog(projectID string, cacheInstance *cache
 	catalog := []CatalogEntry{}
 
 	// Query services and their endpoints from database
-	rows, err := s.activeDB().Query(ctx, `
+	rows, err := s.activeDB().QueryContext(ctx, database.Q(`
 		SELECT s.id, s.type, s.name, e.id, e.interface, e.url, e.region
 		FROM services s
 		LEFT JOIN endpoints e ON s.id = e.service_id
 		WHERE s.enabled = true AND (e.enabled = true OR e.enabled IS NULL)
 		ORDER BY s.type, e.interface
-	`)
+	`))
 	if err != nil {
 		// Fall back to hardcoded catalog on error
 		return buildHardcodedCatalog(projectID)

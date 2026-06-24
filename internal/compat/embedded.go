@@ -1,11 +1,13 @@
 package compat
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/cobaltcore-dev/o3k/internal/cinder"
 	"github.com/cobaltcore-dev/o3k/internal/database"
@@ -14,19 +16,17 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/middleware"
 	"github.com/cobaltcore-dev/o3k/internal/neutron"
 	"github.com/cobaltcore-dev/o3k/internal/nova"
+	migrations "github.com/cobaltcore-dev/o3k/migrations"
 )
-
-// serviceRouter groups a path prefix with the gin.Engine that handles it.
-type serviceRouter struct {
-	prefix  string
-	handler http.Handler
-}
 
 // embeddedMux dispatches requests to the appropriate per-service router based
 // on URL path prefix. This mirrors production where each service runs on its
 // own port — here we keep them isolated to avoid Gin route conflicts.
 type embeddedMux struct {
-	routers []serviceRouter
+	routers []struct {
+		prefix  string
+		handler http.Handler
+	}
 }
 
 func (m *embeddedMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +38,32 @@ func (m *embeddedMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Keystone is the catch-all (handles /v3 and /)
 	m.routers[len(m.routers)-1].handler.ServeHTTP(w, r)
+}
+
+// seedEmbeddedDB inserts the standard admin user fixture used by the
+// compatibility-check router so token issuance works out of the box.
+func seedEmbeddedDB() {
+	ctx := context.Background()
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
+	_, err = database.DB.ExecContext(ctx, database.Q(`
+		INSERT INTO users (id, name, password_hash, enabled, domain_id)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash
+	`), "admin-user-id", "admin", string(hash), true, "00000000-0000-0000-0000-000000000100")
+	if err != nil {
+		panic(err)
+	}
+	_, err = database.DB.ExecContext(ctx, database.Q(`
+		INSERT INTO role_assignments (id, user_id, project_id, role_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (id) DO NOTHING
+	`), "00000000-0000-0000-0000-000000000200", "admin-user-id", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003")
+	if err != nil {
+		panic(err)
+	}
 }
 
 // newServiceGin builds a minimal gin.Engine for a single service.
@@ -53,7 +79,13 @@ func newServiceGin() *gin.Engine {
 // The returned cleanup function restores the global database.DB.
 func NewEmbeddedRouter() (http.Handler, func()) {
 	origDB := database.DB
-	database.DB = database.NewSeededMockDB()
+	if err := database.ConnectSQLite(context.Background(), ":memory:"); err != nil {
+		panic(err)
+	}
+	if err := database.MigrateSQLiteFS(migrations.SQLiteFS); err != nil {
+		panic(err)
+	}
+	seedEmbeddedDB()
 
 	gin.SetMode(gin.ReleaseMode)
 
@@ -96,7 +128,10 @@ func NewEmbeddedRouter() (http.Handler, func()) {
 	glanceSvc.RegisterRoutes(glanceGin.Group(""))
 
 	mux := &embeddedMux{
-		routers: []serviceRouter{
+		routers: []struct {
+			prefix  string
+			handler http.Handler
+		}{
 			{prefix: "/v2.1", handler: novaGin},
 			{prefix: "/v2.0", handler: neutronGin},
 			{prefix: "/v3/volumes", handler: cinderGin},
@@ -111,6 +146,7 @@ func NewEmbeddedRouter() (http.Handler, func()) {
 	}
 
 	cleanup := func() {
+		database.Close()
 		database.DB = origDB
 	}
 	return mux, cleanup

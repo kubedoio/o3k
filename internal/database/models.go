@@ -150,18 +150,18 @@ type SecurityGroupRule struct {
 
 // Cinder models
 type Volume struct {
-	ID                   string     `json:"id"`
-	Name                 string     `json:"name"`
-	ProjectID            string     `json:"tenant_id"`
-	UserID               string     `json:"user_id"`
-	SizeGB               int        `json:"size"`
-	Status               string     `json:"status"`
-	Bootable             bool       `json:"bootable"`
-	AttachedToInstanceID *string    `json:"attachments"`
-	RBDPool              string     `json:"-"`
-	RBDImage             string     `json:"-"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	ProjectID            string    `json:"tenant_id"`
+	UserID               string    `json:"user_id"`
+	SizeGB               int       `json:"size"`
+	Status               string    `json:"status"`
+	Bootable             bool      `json:"bootable"`
+	AttachedToInstanceID *string   `json:"attachments"`
+	RBDPool              string    `json:"-"`
+	RBDImage             string    `json:"-"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type VolumeType struct {

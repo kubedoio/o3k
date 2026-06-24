@@ -13,6 +13,7 @@ import (
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"github.com/cobaltcore-dev/o3k/pkg/networking"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -65,15 +66,15 @@ func (svc *Service) ListFloatingIPs(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(database.Q(`
 		SELECT id, project_id, floating_network_id, floating_ip_address,
 		       fixed_ip_address, port_id, router_id, status, description,
 		       created_at, updated_at
 		FROM floating_ips
-		WHERE project_id = $1%s
+		WHERE project_id::text = $1%s
 		ORDER BY created_at ASC, id ASC
 		LIMIT $%d
-	`, markerCondition, argIdx), queryArgs...)
+	`), markerCondition, argIdx), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_floatingips").Msg("database error")
@@ -170,12 +171,12 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 	// Get external network subnet to allocate IP from
 	var subnetCIDR string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT cidr FROM subnets WHERE network_id = $1 LIMIT 1",
 		req.FloatingIP.FloatingNetworkID,
 	).Scan(&subnetCIDR)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No subnet exists - use default external IP pool (RFC 5737 TEST-NET-1)
 		subnetCIDR = "192.0.2.0/24"
 	} else if err != nil {
@@ -197,7 +198,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 	allocTxDone := false
 	defer func() {
 		if !allocTxDone {
-			_ = allocTx.Rollback(c.Request.Context())
+			_ = allocTx.Rollback()
 		}
 	}()
 
@@ -212,8 +213,8 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 		// Get fixed IP from port
 		var fixedIPsJSON string
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT fixed_ips FROM ports WHERE id = $1 AND project_id = $2",
+		err := svc.activeDB().QueryRowContext(c.Request.Context(),
+			database.Q("SELECT fixed_ips FROM ports WHERE id = $1 AND project_id::text = $2"),
 			req.FloatingIP.PortID, projectID,
 		).Scan(&fixedIPsJSON)
 
@@ -253,14 +254,14 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 		// Get router ID from port's network
 		var networkID string
-		_ = svc.activeDB().QueryRow(c.Request.Context(),
+		_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 			"SELECT network_id FROM ports WHERE id = $1",
 			req.FloatingIP.PortID,
 		).Scan(&networkID)
 
 		// Find router with external gateway and interface to this network
 		var rID string
-		err = svc.activeDB().QueryRow(c.Request.Context(), `
+		err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 			SELECT DISTINCT r.id
 			FROM routers r
 			JOIN router_interfaces ri ON ri.router_id = r.id
@@ -278,7 +279,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 				rid = rid[:7]
 			}
 			externalInterface := "qg-ext-" + rid
-			if err := svc.routerManager.AddFloatingIP(rID, floatingIP, *fixedIP, externalInterface); err != nil {
+			if err := networking.AddFloatingIP(svc.mode, rID, floatingIP, *fixedIP, externalInterface); err != nil {
 				log.Warn().Err(err).Str("router_id", rID).Str("floating_ip", floatingIP).Msg("failed to configure floating IP NAT")
 			}
 		}
@@ -286,7 +287,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 
 	// Insert into database within the allocation transaction to prevent double-allocation.
 	now := time.Now()
-	_, err = allocTx.Exec(c.Request.Context(), `
+	_, err = allocTx.ExecContext(c.Request.Context(), `
 		INSERT INTO floating_ips (id, project_id, floating_network_id, floating_ip_address, fixed_ip_address, port_id, router_id, status, description, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, floatingIPID, projectID, req.FloatingIP.FloatingNetworkID, floatingIP, fixedIP, portID, routerID, status, req.FloatingIP.Description, now, now)
@@ -297,7 +298,7 @@ func (svc *Service) CreateFloatingIP(c *gin.Context) {
 		return
 	}
 
-	if err := allocTx.Commit(c.Request.Context()); err != nil {
+	if err := allocTx.Commit(); err != nil {
 		log.Error().Err(err).Str("operation", "create_floatingip_commit").Msg("transaction commit failed")
 		common.SendError(c, common.NewInternalServerError("failed to create floating IP"))
 		return
@@ -349,16 +350,16 @@ func (svc *Service) GetFloatingIP(c *gin.Context) {
 	var fip FloatingIP
 	var fixedIP, portID, routerID, description sql.NullString
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, floating_network_id, floating_ip_address,
 		       fixed_ip_address, port_id, router_id, status, description,
 		       created_at, updated_at
 		FROM floating_ips
-		WHERE id = $1 AND project_id = $2
-	`, floatingIPID, projectID).Scan(&fip.ID, &fip.ProjectID, &fip.FloatingNetworkID, &fip.FloatingIPAddress,
+		WHERE id = $1 AND project_id::text = $2
+	`), floatingIPID, projectID).Scan(&fip.ID, &fip.ProjectID, &fip.FloatingNetworkID, &fip.FloatingIPAddress,
 		&fixedIP, &portID, &routerID, &fip.Status, &description, &fip.CreatedAt, &fip.UpdatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
@@ -425,8 +426,8 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	// Begin a transaction so the read-modify-write on the floating IP binding
 	// is atomic. Without this, two concurrent reassignments can both read the
 	// same current state and corrupt the port bindings (TOCTOU race).
-	tx, err := svc.activeDB().BeginTx(c.Request.Context(), database.TxOptions{
-		IsoLevel: "serializable",
+	tx, err := svc.activeDB().BeginTx(c.Request.Context(), &sql.TxOptions{
+		Isolation: sql.LevelSerializable,
 	})
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_floatingip_begin_tx").Msg("failed to begin transaction")
@@ -436,19 +437,19 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	txDone := false
 	defer func() {
 		if !txDone {
-			_ = tx.Rollback(c.Request.Context())
+			_ = tx.Rollback()
 		}
 	}()
 
 	// Read current state within the transaction with a row-level lock.
 	var currentFloatingIP, currentFixedIP, currentRouterID sql.NullString
 	var currentPortID sql.NullString
-	err = tx.QueryRow(c.Request.Context(),
-		"SELECT floating_ip_address, fixed_ip_address, port_id, router_id FROM floating_ips WHERE id = $1 AND project_id = $2 FOR UPDATE",
+	err = tx.QueryRowContext(c.Request.Context(),
+		database.Q("SELECT floating_ip_address, fixed_ip_address, port_id, router_id FROM floating_ips WHERE id = $1 AND project_id::text = $2 FOR UPDATE"),
 		floatingIPID, projectID,
 	).Scan(&currentFloatingIP, &currentFixedIP, &currentPortID, &currentRouterID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
@@ -470,7 +471,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 					rid = rid[:7]
 				}
 				externalInterface := "qg-ext-" + rid
-				_ = svc.routerManager.RemoveFloatingIP(currentRouterID.String, currentFloatingIP.String, currentFixedIP.String, externalInterface)
+				_ = networking.RemoveFloatingIP(svc.mode, currentRouterID.String, currentFloatingIP.String, currentFixedIP.String, externalInterface)
 			}
 
 			if shouldDisassociate {
@@ -499,14 +500,14 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 				}
 				// Associate with new port
 				var networkID string
-				_ = svc.activeDB().QueryRow(c.Request.Context(),
+				_ = svc.activeDB().QueryRowContext(c.Request.Context(),
 					"SELECT network_id FROM ports WHERE id = $1",
 					newPortID,
 				).Scan(&networkID)
 
 				// Find router
 				var routerID string
-				err = svc.activeDB().QueryRow(c.Request.Context(), `
+				err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 				SELECT DISTINCT r.id
 				FROM routers r
 				JOIN router_interfaces ri ON ri.router_id = r.id
@@ -528,7 +529,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 				if fixedIP == "" {
 					// Look up the port's actual fixed IP from the fixed_ips JSONB column
 					var fixedIPsJSON string
-					if err := svc.activeDB().QueryRow(c.Request.Context(),
+					if err := svc.activeDB().QueryRowContext(c.Request.Context(),
 						"SELECT fixed_ips FROM ports WHERE id = $1",
 						newPortID,
 					).Scan(&fixedIPsJSON); err == nil {
@@ -551,7 +552,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 					rid = rid[:7]
 				}
 				externalInterface := "qg-ext-" + rid
-				if err := svc.routerManager.AddFloatingIP(routerID, currentFloatingIP.String, fixedIP, externalInterface); err != nil {
+				if err := networking.AddFloatingIP(svc.mode, routerID, currentFloatingIP.String, fixedIP, externalInterface); err != nil {
 					log.Error().Err(err).Str("operation", "configure_nat").Msg("failed to configure NAT rules")
 					common.SendError(c, common.NewInternalServerError("failed to configure NAT"))
 					return
@@ -588,7 +589,7 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	if len(updates) == 0 {
 		// No updates — commit the empty tx and return current state.
 		txDone = true
-		_ = tx.Commit(c.Request.Context())
+		_ = tx.Commit()
 		svc.GetFloatingIP(c)
 		return
 	}
@@ -602,14 +603,14 @@ func (svc *Service) UpdateFloatingIP(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE floating_ips SET %s WHERE id = $%d AND project_id = $%d",
 		updateString(updates), argID, argID+1)
 
-	_, err = tx.Exec(c.Request.Context(), query, args...)
+	_, err = tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_floatingip").Str("floatingip_id", floatingIPID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to update floating IP"))
 		return
 	}
 
-	if err := tx.Commit(c.Request.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		log.Error().Err(err).Str("operation", "update_floatingip_commit").Str("floatingip_id", floatingIPID).Msg("transaction commit failed")
 		common.SendError(c, common.NewInternalServerError("failed to update floating IP"))
 		return
@@ -625,22 +626,22 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 	floatingIPID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	tx, err := svc.activeDB().BeginTx(c.Request.Context(), database.TxOptions{})
+	tx, err := svc.activeDB().BeginTx(c.Request.Context(), &sql.TxOptions{})
 	if err != nil {
 		common.SendError(c, common.NewInternalServerError("failed to begin transaction"))
 		return
 	}
-	defer tx.Rollback(c.Request.Context()) //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck
 
 	// Lock the floating IP row
 	var floatingIPAddr, fixedIPAddr, portID, routerID string
-	err = tx.QueryRow(c.Request.Context(),
+	err = tx.QueryRowContext(c.Request.Context(),
 		"SELECT floating_ip_address, fixed_ip_address, COALESCE(port_id, ''), COALESCE(router_id, '') "+
-			"FROM floating_ips WHERE id = $1 AND project_id = $2 FOR UPDATE",
+			database.Q("FROM floating_ips WHERE id = $1 AND project_id::text = $2 FOR UPDATE"),
 		floatingIPID, projectID,
 	).Scan(&floatingIPAddr, &fixedIPAddr, &portID, &routerID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("floating IP"))
 		return
 	}
@@ -650,8 +651,8 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 		return
 	}
 
-	_, err = tx.Exec(c.Request.Context(),
-		"DELETE FROM floating_ips WHERE id = $1 AND project_id = $2",
+	_, err = tx.ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM floating_ips WHERE id = $1 AND project_id::text = $2"),
 		floatingIPID, projectID,
 	)
 	if err != nil {
@@ -660,7 +661,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 		return
 	}
 
-	if err := tx.Commit(c.Request.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		log.Error().Err(err).Str("operation", "delete_floatingip_commit").Str("floatingip_id", floatingIPID).Msg("transaction commit failed")
 		common.SendError(c, common.NewInternalServerError("failed to commit floating IP deletion"))
 		return
@@ -673,7 +674,7 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 			rid = rid[:7]
 		}
 		externalInterface := "qg-ext-" + rid
-		if err := svc.routerManager.RemoveFloatingIP(routerID, floatingIPAddr, fixedIPAddr, externalInterface); err != nil {
+		if err := networking.RemoveFloatingIP(svc.mode, routerID, floatingIPAddr, fixedIPAddr, externalInterface); err != nil {
 			log.Warn().Err(err).Str("router_id", routerID).Str("floating_ip", floatingIPAddr).Msg("failed to remove floating IP NAT rules")
 		}
 	}
@@ -685,14 +686,14 @@ func (svc *Service) DeleteFloatingIP(c *gin.Context) {
 // It returns the chosen IP and the open transaction that holds the lock — the
 // caller MUST INSERT the floating_ips row and then Commit (or Rollback) the
 // transaction. Keeping the lock across the INSERT prevents double-allocation.
-func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, subnetCIDR string) (string, database.Tx, error) {
+func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, subnetCIDR string) (string, *sql.Tx, error) {
 	_, ipNet, err := net.ParseCIDR(subnetCIDR)
 	if err != nil {
 		return "", nil, err
 	}
 
-	tx, err := svc.activeDB().BeginTx(ctx, database.TxOptions{
-		IsoLevel: "serializable",
+	tx, err := svc.activeDB().BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelSerializable,
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -700,12 +701,12 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, s
 
 	// Get all allocated floating IPs in this external network — lock the rows so
 	// a concurrent allocation cannot pick the same address before we INSERT.
-	rows, err := tx.Query(ctx,
-		"SELECT floating_ip_address FROM floating_ips WHERE floating_network_id = $1 FOR UPDATE",
+	rows, err := tx.QueryContext(ctx,
+		database.Q("SELECT floating_ip_address FROM floating_ips WHERE floating_network_id = $1 FOR UPDATE"),
 		floatingNetworkID,
 	)
 	if err != nil {
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback()
 		return "", nil, fmt.Errorf("failed to query allocated IPs: %w", err)
 	}
 
@@ -719,7 +720,7 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, s
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback()
 		return "", nil, fmt.Errorf("iterating allocated IPs: %w", err)
 	}
 
@@ -733,6 +734,6 @@ func (svc *Service) allocateFloatingIP(ctx context.Context, floatingNetworkID, s
 		ip = incrementIP(ip, 1)
 	}
 
-	_ = tx.Rollback(ctx)
+	_ = tx.Rollback()
 	return "", nil, fmt.Errorf("no available IPs in subnet %s", subnetCIDR)
 }

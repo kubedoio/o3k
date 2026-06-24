@@ -1,9 +1,9 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
@@ -16,17 +16,22 @@ func TestRewritePlaceholders(t *testing.T) {
 		{
 			name: "single param",
 			in:   "SELECT * FROM x WHERE id = $1",
-			want: "SELECT * FROM x WHERE id = ?",
+			want: "SELECT * FROM x WHERE id = ?1",
 		},
 		{
 			name: "two params",
 			in:   "WHERE a = $1 AND b = $2",
-			want: "WHERE a = ? AND b = ?",
+			want: "WHERE a = ?1 AND b = ?2",
 		},
 		{
 			name: "eleven params",
 			in:   "INSERT INTO t VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-			want: "INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			want: "INSERT INTO t VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+		},
+		{
+			name: "duplicate param",
+			in:   "WHERE a = $1 OR b = $1",
+			want: "WHERE a = ?1 OR b = ?1",
 		},
 		{
 			name: "no params",
@@ -135,12 +140,12 @@ func TestRewrite(t *testing.T) {
 		{
 			name: "placeholder + ilike",
 			in:   "WHERE name ILIKE $1",
-			want: "WHERE name LIKE ?",
+			want: "WHERE name LIKE ?1",
 		},
 		{
 			name: "placeholder + cast",
 			in:   "SELECT id::text FROM t WHERE project_id = $1",
-			want: "SELECT id FROM t WHERE project_id = ?",
+			want: "SELECT id FROM t WHERE project_id = ?1",
 		},
 	}
 	for _, tt := range tests {
@@ -173,36 +178,35 @@ func TestMapSQLError(t *testing.T) {
 	})
 }
 
-func TestSQLiteAdapter_BasicRoundtrip(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-
-	adapter, err := NewSQLiteAdapter(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-
+func openTestDB(t *testing.T) (*sql.DB, context.Context) {
+	t.Helper()
 	ctx := t.Context()
+	if err := ConnectSQLite(ctx, ":memory:"); err != nil {
+		t.Fatalf("connect sqlite: %v", err)
+	}
+	t.Cleanup(Close)
+	return DB, ctx
+}
 
-	// Create table.
-	_, err = adapter.Exec(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+func TestSQLite_BasicRoundtrip(t *testing.T) {
+	db, ctx := openTestDB(t)
+
+	_, err := db.ExecContext(ctx, Q(`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`))
 	if err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 
-	// Insert with PostgreSQL-style placeholder rewrite.
-	res, err := adapter.Exec(ctx, `INSERT INTO users (id, name) VALUES ($1, $2)`, 1, "alice")
+	res, err := db.ExecContext(ctx, Q(`INSERT INTO users (id, name) VALUES ($1, $2)`), 1, "alice")
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if n := res.RowsAffected(); n != 1 {
+	n, _ := res.RowsAffected()
+	if n != 1 {
 		t.Errorf("rows affected = %d, want 1", n)
 	}
 
-	// QueryRow with placeholder rewrite.
 	var name string
-	err = adapter.QueryRow(ctx, `SELECT name FROM users WHERE id = $1`, 1).Scan(&name)
+	err = db.QueryRowContext(ctx, Q(`SELECT name FROM users WHERE id = $1`), 1).Scan(&name)
 	if err != nil {
 		t.Fatalf("query row: %v", err)
 	}
@@ -210,35 +214,27 @@ func TestSQLiteAdapter_BasicRoundtrip(t *testing.T) {
 		t.Errorf("name = %q, want alice", name)
 	}
 
-	// ErrNoRows on missing row.
-	err = adapter.QueryRow(ctx, `SELECT name FROM users WHERE id = $1`, 99).Scan(&name)
+	err = db.QueryRowContext(ctx, Q(`SELECT name FROM users WHERE id = $1`), 99).Scan(&name)
 	if !errors.Is(err, ErrNoRows) {
 		t.Errorf("expected ErrNoRows, got %v", err)
 	}
 }
 
-func TestSQLiteAdapter_Query(t *testing.T) {
-	dir := t.TempDir()
-	adapter, err := NewSQLiteAdapter(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
+func TestSQLite_Query(t *testing.T) {
+	db, ctx := openTestDB(t)
 
-	ctx := t.Context()
-
-	_, err = adapter.Exec(ctx, `CREATE TABLE items (id INTEGER, val TEXT)`)
+	_, err := db.ExecContext(ctx, Q(`CREATE TABLE items (id INTEGER, val TEXT)`))
 	if err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	for i, v := range []string{"a", "b", "c"} {
-		_, err = adapter.Exec(ctx, `INSERT INTO items VALUES ($1, $2)`, i+1, v)
+		_, err = db.ExecContext(ctx, Q(`INSERT INTO items VALUES ($1, $2)`), i+1, v)
 		if err != nil {
 			t.Fatalf("insert %d: %v", i, err)
 		}
 	}
 
-	rows, err := adapter.Query(ctx, `SELECT id, val FROM items ORDER BY id`)
+	rows, err := db.QueryContext(ctx, Q(`SELECT id, val FROM items ORDER BY id`))
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -261,36 +257,29 @@ func TestSQLiteAdapter_Query(t *testing.T) {
 	}
 }
 
-func TestSQLiteAdapter_Transaction(t *testing.T) {
-	dir := t.TempDir()
-	adapter, err := NewSQLiteAdapter(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
+func TestSQLite_Transaction(t *testing.T) {
+	db, ctx := openTestDB(t)
 
-	ctx := t.Context()
-
-	_, err = adapter.Exec(ctx, `CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)`)
+	_, err := db.ExecContext(ctx, Q(`CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)`))
 	if err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 
 	t.Run("commit", func(t *testing.T) {
-		tx, err := adapter.BeginTx(ctx, TxOptions{})
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO kv VALUES ($1, $2)`, "key1", "val1")
+		_, err = tx.ExecContext(ctx, Q(`INSERT INTO kv VALUES ($1, $2)`), "key1", "val1")
 		if err != nil {
 			t.Fatalf("tx exec: %v", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 
 		var v string
-		err = adapter.QueryRow(ctx, `SELECT v FROM kv WHERE k = $1`, "key1").Scan(&v)
+		err = db.QueryRowContext(ctx, Q(`SELECT v FROM kv WHERE k = $1`), "key1").Scan(&v)
 		if err != nil {
 			t.Fatalf("query after commit: %v", err)
 		}
@@ -300,32 +289,121 @@ func TestSQLiteAdapter_Transaction(t *testing.T) {
 	})
 
 	t.Run("rollback", func(t *testing.T) {
-		tx, err := adapter.BeginTx(ctx, TxOptions{})
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO kv VALUES ($1, $2)`, "key2", "val2")
+		_, err = tx.ExecContext(ctx, Q(`INSERT INTO kv VALUES ($1, $2)`), "key2", "val2")
 		if err != nil {
 			t.Fatalf("tx exec: %v", err)
 		}
-		if err := tx.Rollback(ctx); err != nil {
+		if err := tx.Rollback(); err != nil {
 			t.Fatalf("rollback: %v", err)
 		}
 
 		var v string
-		err = adapter.QueryRow(ctx, `SELECT v FROM kv WHERE k = $1`, "key2").Scan(&v)
+		err = db.QueryRowContext(ctx, Q(`SELECT v FROM kv WHERE k = $1`), "key2").Scan(&v)
 		if !errors.Is(err, ErrNoRows) {
 			t.Errorf("expected ErrNoRows after rollback, got v=%q err=%v", v, err)
 		}
 	})
 }
 
-// Compile-time check: SQLiteAdapter satisfies DBIF.
-var _ DBIF = (*SQLiteAdapter)(nil)
+func TestSQLite_OnConflictDoNothing(t *testing.T) {
+	db, ctx := openTestDB(t)
 
-// ---------------------------------------------------------------------------
-// castRegex and rewriteExtractEpoch targeted tests
-// ---------------------------------------------------------------------------
+	_, err := db.ExecContext(ctx, Q(`CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)`))
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, Q(`INSERT INTO kv (k, v) VALUES ($1, $2)`), "key1", "first")
+	if err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, Q(`INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT (k) DO NOTHING`), "key1", "second")
+	if err != nil {
+		t.Fatalf("ON CONFLICT DO NOTHING: %v", err)
+	}
+
+	var v string
+	err = db.QueryRowContext(ctx, Q(`SELECT v FROM kv WHERE k = $1`), "key1").Scan(&v)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if v != "first" {
+		t.Errorf("value = %q, want \"first\" (DO NOTHING should preserve original)", v)
+	}
+}
+
+func TestSQLite_OnConflictDoUpdate(t *testing.T) {
+	db, ctx := openTestDB(t)
+
+	_, err := db.ExecContext(ctx, Q(`CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT, updated_at TEXT)`))
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, Q(`INSERT INTO kv (k, v, updated_at) VALUES ($1, $2, $3)`), "key1", "first", "2024-01-01")
+	if err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx,
+		Q(`INSERT INTO kv (k, v, updated_at) VALUES ($1, $2, $3) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, updated_at = EXCLUDED.updated_at`),
+		"key1", "updated", "2024-06-01")
+	if err != nil {
+		t.Fatalf("ON CONFLICT DO UPDATE: %v", err)
+	}
+
+	var v, ts string
+	err = db.QueryRowContext(ctx, Q(`SELECT v, updated_at FROM kv WHERE k = $1`), "key1").Scan(&v, &ts)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if v != "updated" {
+		t.Errorf("value = %q, want \"updated\"", v)
+	}
+	if ts != "2024-06-01" {
+		t.Errorf("updated_at = %q, want \"2024-06-01\"", ts)
+	}
+}
+
+func TestSQLite_Returning(t *testing.T) {
+	db, ctx := openTestDB(t)
+
+	_, err := db.ExecContext(ctx, Q(`CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active INTEGER DEFAULT 1)`))
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	var id int
+	var name string
+	err = db.QueryRowContext(ctx,
+		Q(`INSERT INTO items (name) VALUES ($1) RETURNING id, name`), "test-item",
+	).Scan(&id, &name)
+	if err != nil {
+		t.Fatalf("INSERT RETURNING: %v", err)
+	}
+	if id != 1 {
+		t.Errorf("id = %d, want 1", id)
+	}
+	if name != "test-item" {
+		t.Errorf("name = %q, want \"test-item\"", name)
+	}
+
+	var newName string
+	err = db.QueryRowContext(ctx,
+		Q(`UPDATE items SET name = $1 WHERE id = $2 RETURNING name`), "renamed", 1,
+	).Scan(&newName)
+	if err != nil {
+		t.Fatalf("UPDATE RETURNING: %v", err)
+	}
+	if newName != "renamed" {
+		t.Errorf("name after update = %q, want \"renamed\"", newName)
+	}
+}
 
 // TestCastRegexExpandedTypes verifies that all extended PostgreSQL type-cast
 // suffixes are stripped by rewriteDialect.
@@ -453,126 +531,5 @@ func TestExtractEpochMultipleWithSubtraction(t *testing.T) {
 	got := rewriteDialect(in)
 	if got != want {
 		t.Errorf("rewriteDialect multiple EXTRACT\n  got  %q\n  want %q", got, want)
-	}
-}
-
-func TestSQLiteAdapter_OnConflictDoNothing(t *testing.T) {
-	dir := t.TempDir()
-	adapter, err := NewSQLiteAdapter(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-	ctx := t.Context()
-
-	_, err = adapter.Exec(ctx, `CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)`)
-	if err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-
-	// First insert
-	_, err = adapter.Exec(ctx, `INSERT INTO kv (k, v) VALUES ($1, $2)`, "key1", "first")
-	if err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Duplicate insert with ON CONFLICT DO NOTHING — must not error
-	_, err = adapter.Exec(ctx, `INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT (k) DO NOTHING`, "key1", "second")
-	if err != nil {
-		t.Fatalf("ON CONFLICT DO NOTHING: %v", err)
-	}
-
-	// Value should still be "first"
-	var v string
-	err = adapter.QueryRow(ctx, `SELECT v FROM kv WHERE k = $1`, "key1").Scan(&v)
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if v != "first" {
-		t.Errorf("value = %q, want \"first\" (DO NOTHING should preserve original)", v)
-	}
-}
-
-func TestSQLiteAdapter_OnConflictDoUpdate(t *testing.T) {
-	dir := t.TempDir()
-	adapter, err := NewSQLiteAdapter(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-	ctx := t.Context()
-
-	_, err = adapter.Exec(ctx, `CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT, updated_at TEXT)`)
-	if err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-
-	// First insert
-	_, err = adapter.Exec(ctx, `INSERT INTO kv (k, v, updated_at) VALUES ($1, $2, $3)`, "key1", "first", "2024-01-01")
-	if err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Upsert with ON CONFLICT DO UPDATE
-	_, err = adapter.Exec(ctx,
-		`INSERT INTO kv (k, v, updated_at) VALUES ($1, $2, $3) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, updated_at = EXCLUDED.updated_at`,
-		"key1", "updated", "2024-06-01")
-	if err != nil {
-		t.Fatalf("ON CONFLICT DO UPDATE: %v", err)
-	}
-
-	var v, ts string
-	err = adapter.QueryRow(ctx, `SELECT v, updated_at FROM kv WHERE k = $1`, "key1").Scan(&v, &ts)
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if v != "updated" {
-		t.Errorf("value = %q, want \"updated\"", v)
-	}
-	if ts != "2024-06-01" {
-		t.Errorf("updated_at = %q, want \"2024-06-01\"", ts)
-	}
-}
-
-func TestSQLiteAdapter_Returning(t *testing.T) {
-	dir := t.TempDir()
-	adapter, err := NewSQLiteAdapter(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteAdapter: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-	ctx := t.Context()
-
-	_, err = adapter.Exec(ctx, `CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active INTEGER DEFAULT 1)`)
-	if err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-
-	// INSERT with RETURNING
-	var id int
-	var name string
-	err = adapter.QueryRow(ctx,
-		`INSERT INTO items (name) VALUES ($1) RETURNING id, name`, "test-item",
-	).Scan(&id, &name)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING: %v", err)
-	}
-	if id != 1 {
-		t.Errorf("id = %d, want 1", id)
-	}
-	if name != "test-item" {
-		t.Errorf("name = %q, want \"test-item\"", name)
-	}
-
-	// UPDATE with RETURNING
-	var newName string
-	err = adapter.QueryRow(ctx,
-		`UPDATE items SET name = $1 WHERE id = $2 RETURNING name`, "renamed", 1,
-	).Scan(&newName)
-	if err != nil {
-		t.Fatalf("UPDATE RETURNING: %v", err)
-	}
-	if newName != "renamed" {
-		t.Errorf("name after update = %q, want \"renamed\"", newName)
 	}
 }

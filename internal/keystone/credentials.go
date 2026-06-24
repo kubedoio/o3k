@@ -3,10 +3,12 @@ package keystone
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -16,12 +18,12 @@ import (
 func (svc *Service) ListCredentials(c *gin.Context) {
 	userID := c.GetString("user_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, user_id, project_id, type, blob, created_at
 		FROM credentials
-		WHERE user_id = $1
+		WHERE user_id::text = $1
 		ORDER BY created_at DESC
-	`, userID)
+	`), userID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_credentials").Msg("Failed to query credentials")
 		common.SendError(c, common.NewInternalServerError("failed to query credentials"))
@@ -109,7 +111,7 @@ func (svc *Service) CreateCredential(c *gin.Context) {
 		projectID = req.Credential.ProjectID
 	}
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO credentials (id, user_id, project_id, type, blob, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, credID, userID, projectID, req.Credential.Type, req.Credential.Blob, now, now)
@@ -142,13 +144,13 @@ func (svc *Service) GetCredential(c *gin.Context) {
 	var id, userID, credType, blob string
 	var projectID *string
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, user_id, project_id, type, blob
 		FROM credentials
-		WHERE id = $1 AND user_id = $2
-	`, credID, authUserID).Scan(&id, &userID, &projectID, &credType, &blob)
+		WHERE id = $1 AND user_id::text = $2
+	`), credID, authUserID).Scan(&id, &userID, &projectID, &credType, &blob)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("credential"))
 		return
 	}
@@ -215,14 +217,14 @@ func (svc *Service) UpdateCredential(c *gin.Context) {
 	}
 	query += fmt.Sprintf(" WHERE id = $%d AND user_id = $%d", argCount, argCount+1)
 
-	result, err := svc.activeDB().Exec(c.Request.Context(), query, args...)
+	result, err := svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_credential").Str("cred_id", credID).Msg("Failed to update credential")
 		common.SendError(c, common.NewInternalServerError("failed to update credential"))
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("credential"))
 		return
 	}
@@ -236,8 +238,8 @@ func (svc *Service) DeleteCredential(c *gin.Context) {
 	credID := c.Param("id")
 	authUserID := c.GetString("user_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM credentials WHERE id = $1 AND user_id = $2",
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM credentials WHERE id = $1 AND user_id::text = $2"),
 		credID, authUserID)
 
 	if err != nil {
@@ -246,7 +248,7 @@ func (svc *Service) DeleteCredential(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("credential"))
 		return
 	}

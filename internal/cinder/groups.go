@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -16,12 +18,12 @@ import (
 func (svc *Service) ListGroups(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, name, description, status, group_type, created_at, updated_at
 		FROM volume_groups
-		WHERE project_id = $1
+		WHERE project_id::text = $1
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_groups").Msg("failed to query volume groups")
 		common.SendError(c, common.NewInternalServerError("failed to list groups"))
@@ -89,7 +91,7 @@ func (svc *Service) CreateGroup(c *gin.Context) {
 	groupID := uuid.New().String()
 	now := time.Now()
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO volume_groups (id, project_id, name, description, status, group_type, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, groupID, projectID, req.Group.Name, req.Group.Description, "available", req.Group.GroupType, now, now)
@@ -127,13 +129,13 @@ func (svc *Service) GetGroup(c *gin.Context) {
 		updatedAt   time.Time
 	)
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, description, status, group_type, created_at, updated_at
 		FROM volume_groups
-		WHERE id = $1 AND project_id = $2
-	`, groupID, projectID).Scan(&name, &description, &status, &groupType, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), groupID, projectID).Scan(&name, &description, &status, &groupType, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("group"))
 		return
 	}
@@ -175,8 +177,8 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 
 	// Check if group exists
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM volume_groups WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM volume_groups WHERE id = $1 AND project_id::text = $2)"),
 		groupID, projectID,
 	).Scan(&exists)
 
@@ -186,13 +188,13 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 	}
 
 	// Update group
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		UPDATE volume_groups
 		SET name = COALESCE($1, name),
 		    description = COALESCE($2, description),
 		    updated_at = $3
-		WHERE id = $4 AND project_id = $5
-	`, req.Group.Name, req.Group.Description, time.Now(), groupID, projectID)
+		WHERE id = $4 AND project_id::text = $5
+	`), req.Group.Name, req.Group.Description, time.Now(), groupID, projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_group").Msg("failed to update volume group")
@@ -210,11 +212,11 @@ func (svc *Service) UpdateGroup(c *gin.Context) {
 		updatedAt   time.Time
 	)
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, description, status, group_type, created_at, updated_at
 		FROM volume_groups
-		WHERE id = $1 AND project_id = $2
-	`, groupID, projectID).Scan(&name, &description, &status, &groupType, &createdAt, &updatedAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), groupID, projectID).Scan(&name, &description, &status, &groupType, &createdAt, &updatedAt)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "fetch_updated_group").Msg("failed to fetch updated group")
@@ -240,8 +242,8 @@ func (svc *Service) DeleteGroup(c *gin.Context) {
 	groupID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM volume_groups WHERE id = $1 AND project_id = $2",
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM volume_groups WHERE id = $1 AND project_id::text = $2"),
 		groupID, projectID,
 	)
 
@@ -251,7 +253,7 @@ func (svc *Service) DeleteGroup(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("group"))
 		return
 	}

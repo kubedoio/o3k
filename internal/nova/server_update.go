@@ -3,11 +3,13 @@ package nova
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
@@ -38,16 +40,16 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 		updatedAt       time.Time
 	)
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, status, flavor_id, image_id, created_at, updated_at
 		FROM instances
-		WHERE id = $1 AND project_id = $2
-	`, instanceID, projectID).Scan(
+		WHERE id = $1 AND project_id::text = $2
+	`), instanceID, projectID).Scan(
 		&currentName, &currentStatus,
 		&currentFlavorID, &currentImageID, &createdAt, &updatedAt,
 	)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -84,9 +86,9 @@ func (svc *Service) UpdateServer(c *gin.Context) {
 			}
 			query += update
 		}
-		query += " WHERE id = $1 AND project_id = $2"
+		query += database.Q(" WHERE id = $1 AND project_id::text = $2")
 
-		_, err = svc.activeDB().Exec(c.Request.Context(), query, params...)
+		_, err = svc.activeDB().ExecContext(c.Request.Context(), query, params...)
 		if err != nil {
 			log.Error().Err(err).Str("operation", "update_server").Msg("database error")
 			common.SendError(c, common.NewInternalServerError("failed to update server"))

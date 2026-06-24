@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
@@ -38,12 +40,12 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 	// Verify instance exists
 	var libvirtDomainID, status string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT libvirt_domain_id, status FROM instances WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT libvirt_domain_id, status FROM instances WHERE id = $1 AND project_id::text = $2"),
 		instanceID, projectID,
 	).Scan(&libvirtDomainID, &status)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("instance"))
 		return
 	}
@@ -60,12 +62,12 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 		// Verify port exists and is available
 		var deviceID string
 		var fixedIPsJSON []byte
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT network_id, fixed_ips, mac_address, device_id FROM ports WHERE id = $1 AND project_id = $2",
+		err := svc.activeDB().QueryRowContext(c.Request.Context(),
+			database.Q("SELECT network_id, fixed_ips, mac_address, device_id FROM ports WHERE id = $1 AND project_id::text = $2"),
 			portID, projectID,
 		).Scan(&networkID, &fixedIPsJSON, &macAddress, &deviceID)
 
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			common.SendError(c, common.NewNotFoundError("port"))
 			return
 		}
@@ -92,8 +94,8 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 		// Verify network exists
 		var networkExists bool
-		err := svc.activeDB().QueryRow(c.Request.Context(),
-			"SELECT EXISTS(SELECT 1 FROM networks WHERE id = $1 AND project_id = $2)",
+		err := svc.activeDB().QueryRowContext(c.Request.Context(),
+			database.Q("SELECT EXISTS(SELECT 1 FROM networks WHERE id = $1 AND project_id::text = $2)"),
 			networkID, projectID,
 		).Scan(&networkExists)
 
@@ -108,12 +110,12 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 		// Get subnet info for IP allocation
 		var cidr string
-		err = svc.activeDB().QueryRow(c.Request.Context(),
+		err = svc.activeDB().QueryRowContext(c.Request.Context(),
 			"SELECT cidr FROM subnets WHERE network_id = $1 LIMIT 1",
 			networkID,
 		).Scan(&cidr)
 
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			common.SendError(c, common.NewBadRequestError("network has no subnet"))
 			return
 		}
@@ -133,7 +135,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 		// Create port
 		fixedIPsJSON := fmt.Sprintf(`[{"ip_address": "%s", "subnet_id": "%s"}]`, fixedIP, networkID)
-		_, err = svc.activeDB().Exec(c.Request.Context(), `
+		_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 			INSERT INTO ports (id, network_id, project_id, name, mac_address, fixed_ips, device_id, device_owner, status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
 		`, portID, networkID, projectID, fmt.Sprintf("port-%s", portID[:8]), macAddress, fixedIPsJSON, instanceID, "compute:nova", "ACTIVE", time.Now(), time.Now())
@@ -149,7 +151,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 	}
 
 	// Update port to attach to instance
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		UPDATE ports
 		SET device_id = $1, device_owner = $2, status = $3, updated_at = $4
 		WHERE id = $5
@@ -163,7 +165,7 @@ func (svc *Service) AttachInterface(c *gin.Context) {
 
 	// Store interface attachment record
 	attachmentID := uuid.New().String()
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO interface_attachments (id, instance_id, port_id, mac_address, attached_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`, attachmentID, instanceID, portID, macAddress, time.Now())
@@ -197,8 +199,8 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 
 	// Verify instance exists
 	var instanceExists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&instanceExists)
 
@@ -209,12 +211,12 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 
 	// Verify port is attached to this instance
 	var attachedInstanceID string
-	err = svc.activeDB().QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT device_id FROM ports WHERE id = $1",
 		portID,
 	).Scan(&attachedInstanceID)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("port"))
 		return
 	}
@@ -225,7 +227,7 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	}
 
 	// Delete interface attachment record
-	_, err = svc.activeDB().Exec(c.Request.Context(),
+	_, err = svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM interface_attachments WHERE instance_id = $1 AND port_id = $2",
 		instanceID, portID,
 	)
@@ -237,7 +239,7 @@ func (svc *Service) DetachInterface(c *gin.Context) {
 	}
 
 	// Update port to detach from instance
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		UPDATE ports
 		SET device_id = NULL, device_owner = NULL, status = $1, updated_at = $2
 		WHERE id = $3
@@ -262,8 +264,8 @@ func (svc *Service) ListInterfaceAttachments(c *gin.Context) {
 
 	// Verify instance exists
 	var instanceExists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM instances WHERE id = $1 AND project_id::text = $2)"),
 		instanceID, projectID,
 	).Scan(&instanceExists)
 
@@ -273,7 +275,7 @@ func (svc *Service) ListInterfaceAttachments(c *gin.Context) {
 	}
 
 	// Query all interface attachments
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT ia.id, ia.port_id, p.network_id, p.fixed_ips, ia.mac_address, p.status
 		FROM interface_attachments ia
 		JOIN ports p ON ia.port_id = p.id
@@ -337,7 +339,7 @@ func generateMACAddress() string {
 }
 
 // allocateNextIP allocates the next available IP from a subnet using proper CIDR parsing
-func allocateNextIP(ctx context.Context, db database.DBIF, networkID, cidr string) (string, error) {
+func allocateNextIP(ctx context.Context, db *sql.DB, networkID, cidr string) (string, error) {
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return "", fmt.Errorf("invalid CIDR %s: %w", cidr, err)
@@ -352,12 +354,12 @@ func allocateNextIP(ctx context.Context, db database.DBIF, networkID, cidr strin
 
 	// Check if any ports already exist and increment past the last used IP
 	var fixedIPsJSON []byte
-	err = db.QueryRow(ctx,
-		"SELECT fixed_ips FROM ports WHERE network_id = $1 ORDER BY created_at DESC LIMIT 1",
+	err = db.QueryRowContext(ctx,
+		database.Q("SELECT fixed_ips FROM ports WHERE network_id = $1 ORDER BY created_at DESC LIMIT 1"),
 		networkID,
 	).Scan(&fixedIPsJSON)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// First allocation: use base+10
 		return base.String(), nil
 	}

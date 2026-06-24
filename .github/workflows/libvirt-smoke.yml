@@ -35,6 +35,9 @@ jobs:
     runs-on: [self-hosted, kvm]
     timeout-minutes: 15
     steps:
+      - name: Clean root-owned test artifacts from prior run
+        run: sudo rm -rf test/tmp/libvirt-smoke /var/lib/o3k/images || true
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5

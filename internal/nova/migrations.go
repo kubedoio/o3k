@@ -13,7 +13,7 @@ import (
 // ListMigrations handles GET /v2.1/:project_id/os-migrations
 func (svc *Service) ListMigrations(c *gin.Context) {
 	// List all migrations (admin endpoint in real OpenStack)
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, server_uuid, source_node, dest_node, old_flavor_id, new_flavor_id,
 		       status, migration_type, created_at, updated_at
 		FROM server_migrations
@@ -74,7 +74,7 @@ func (svc *Service) ListMigrations(c *gin.Context) {
 func (svc *Service) ListServerMigrations(c *gin.Context) {
 	serverID := c.Param("id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, server_uuid, source_node, dest_node, old_flavor_id, new_flavor_id,
 		       status, migration_type, created_at, updated_at
 		FROM server_migrations
@@ -142,7 +142,7 @@ func (svc *Service) GetServerMigration(c *gin.Context) {
 	var sourceNode, destNode, status, migrationType string
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT id, server_uuid, source_node, dest_node, old_flavor_id, new_flavor_id,
 		       status, migration_type, created_at, updated_at
 		FROM server_migrations
@@ -182,7 +182,7 @@ func (svc *Service) DeleteServerMigration(c *gin.Context) {
 	migrationID := c.Param("migration_id")
 
 	// Delete (cancel) migration
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM server_migrations WHERE id = $1 AND server_uuid = $2",
 		migrationID, serverID,
 	)
@@ -193,7 +193,7 @@ func (svc *Service) DeleteServerMigration(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("migration"))
 		return
 	}
@@ -215,7 +215,7 @@ func (svc *Service) ServerMigrationAction(c *gin.Context) {
 	// Handle force_complete action
 	if _, ok := req["force_complete"]; ok {
 		// Update migration status to completed
-		result, err := svc.activeDB().Exec(c.Request.Context(), `
+		result, err := svc.activeDB().ExecContext(c.Request.Context(), `
 			UPDATE server_migrations
 			SET status = $1, updated_at = $2
 			WHERE id = $3 AND server_uuid = $4
@@ -227,7 +227,7 @@ func (svc *Service) ServerMigrationAction(c *gin.Context) {
 			return
 		}
 
-		if result.RowsAffected() == 0 {
+		if n, _ := result.RowsAffected(); n == 0 {
 			common.SendError(c, common.NewNotFoundError("migration"))
 			return
 		}

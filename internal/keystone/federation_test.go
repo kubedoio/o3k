@@ -17,16 +17,13 @@ import (
 	"github.com/cobaltcore-dev/o3k/internal/database"
 )
 
-// stubProvider is a minimal FederationProvider used in unit tests. It returns
+// stubProvider is a minimal federationProvider used in unit tests. It returns
 // a canned identity (or canned error) without going near OIDC discovery or
 // JWKS fetches.
 type stubProvider struct {
-	name     string
 	identity *FederatedIdentity
 	err      error
 }
-
-func (s *stubProvider) Name() string { return s.name }
 
 func (s *stubProvider) Verify(_ context.Context, _ string) (*FederatedIdentity, error) {
 	if s.err != nil {
@@ -40,9 +37,9 @@ func (s *stubProvider) Verify(_ context.Context, _ string) (*FederatedIdentity, 
 // when the operator leaves them blank.
 func TestFederationConfigFromYAMLDefaults(t *testing.T) {
 	in := []FederationProviderConfig{
-		{Name: "p1"},                                 // both blank
-		{Name: "p2", UsernameClaim: "email"},         // username overridden
-		{Name: "p3", GroupsClaim: "roles"},           // groups overridden
+		{Name: "p1"},                                       // both blank
+		{Name: "p2", UsernameClaim: "email"},               // username overridden
+		{Name: "p3", GroupsClaim: "roles"},                 // groups overridden
 		{Name: "p4", UsernameClaim: "x", GroupsClaim: "y"}, // both overridden
 	}
 	out := FederationConfigFromYAML(in)
@@ -64,10 +61,10 @@ func TestFederationConfigFromYAMLDefaults(t *testing.T) {
 // TestFederationRegistryLookup verifies Provider() returns the registered
 // provider on hit and ErrUnknownProvider on miss, and that config() round-trips.
 func TestFederationRegistryLookup(t *testing.T) {
-	stub := &stubProvider{name: "kc"}
+	stub := &stubProvider{}
 	cfg := FederationProviderConfig{Name: "kc", Protocol: "openid", AutoProvision: true, DefaultProject: "default", DefaultRole: "member"}
 	reg := newFederationRegistryWithProviders(
-		map[string]FederationProvider{"kc": stub},
+		map[string]federationProvider{"kc": stub},
 		map[string]FederationProviderConfig{"kc": cfg},
 	)
 
@@ -84,10 +81,6 @@ func TestFederationRegistryLookup(t *testing.T) {
 
 	_, ok = reg.config("missing")
 	assert.False(t, ok)
-
-	names := reg.Names()
-	require.Len(t, names, 1)
-	assert.Equal(t, "kc", names[0])
 }
 
 // TestNewFederationRegistryUnsupportedProtocol verifies the registry rejects
@@ -103,8 +96,8 @@ func TestNewFederationRegistryUnsupportedProtocol(t *testing.T) {
 // TestAuthenticateFederatedNoRegistry asserts the federated entry point
 // returns 400 when federation is not enabled on the server.
 func TestAuthenticateFederatedNoRegistry(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 
 	req := &AuthRequest{}
 	req.Auth.Identity.Methods = []string{"openid"}
@@ -120,10 +113,10 @@ func TestAuthenticateFederatedNoRegistry(t *testing.T) {
 // TestAuthenticateFederatedMissingFederatedBlock asserts a 400 when the
 // caller sends methods=["openid"] but forgets the identity.federated block.
 func TestAuthenticateFederatedMissingFederatedBlock(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{"kc": &stubProvider{name: "kc"}},
+		map[string]federationProvider{"kc": &stubProvider{}},
 		map[string]FederationProviderConfig{"kc": {Name: "kc"}},
 	))
 
@@ -139,10 +132,10 @@ func TestAuthenticateFederatedMissingFederatedBlock(t *testing.T) {
 // TestAuthenticateFederatedMissingProvider asserts the empty-provider-name
 // validation path returns a 400.
 func TestAuthenticateFederatedMissingProvider(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{},
+		map[string]federationProvider{},
 		map[string]FederationProviderConfig{},
 	))
 
@@ -157,10 +150,10 @@ func TestAuthenticateFederatedMissingProvider(t *testing.T) {
 // TestAuthenticateFederatedMissingCredential asserts the empty-credential
 // validation path returns a 400.
 func TestAuthenticateFederatedMissingCredential(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{"kc": &stubProvider{name: "kc"}},
+		map[string]federationProvider{"kc": &stubProvider{}},
 		map[string]FederationProviderConfig{"kc": {Name: "kc"}},
 	))
 
@@ -175,10 +168,10 @@ func TestAuthenticateFederatedMissingCredential(t *testing.T) {
 // TestAuthenticateFederatedUnknownProvider asserts a 400 when the named
 // provider isn't configured (distinct from credential-verification failures).
 func TestAuthenticateFederatedUnknownProvider(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{},
+		map[string]federationProvider{},
 		map[string]FederationProviderConfig{},
 	))
 
@@ -196,12 +189,11 @@ func TestAuthenticateFederatedUnknownProvider(t *testing.T) {
 // rejection surfaces as 401 — the server is fine, the IdP says the token is
 // bad.
 func TestAuthenticateFederatedVerifyFailure(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{"kc": &stubProvider{
-			name: "kc",
-			err:  errors.New("expired id token"),
+		map[string]federationProvider{"kc": &stubProvider{
+			err: errors.New("expired id token"),
 		}},
 		map[string]FederationProviderConfig{"kc": {Name: "kc", Protocol: "openid"}},
 	))
@@ -217,15 +209,14 @@ func TestAuthenticateFederatedVerifyFailure(t *testing.T) {
 }
 
 // TestAuthenticateFederatedHappyPath exercises the full federated flow with
-// a stub provider returning a verified identity. The seeded mock DB resolves
-// any user-by-id query to the admin record, so the test skips JIT-INSERT and
-// instead validates token issuance, methods=["openid"], and project scoping.
+// a stub provider returning a verified identity. The in-memory DB is seeded
+// by migrations with the default domain/project/roles; JIT provisioning
+// creates the federated user and grants the default role on the project.
 func TestAuthenticateFederatedHappyPath(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{"kc": &stubProvider{
-			name: "kc",
+		map[string]federationProvider{"kc": &stubProvider{
 			identity: &FederatedIdentity{
 				Issuer:            "https://kc.example.com/realms/scs",
 				Subject:           "user-sub-123",
@@ -239,13 +230,9 @@ func TestAuthenticateFederatedHappyPath(t *testing.T) {
 			Protocol:       "openid",
 			AutoProvision:  true,
 			DefaultProject: "default",
-			// DefaultRole intentionally empty: the seeded mock DB doesn't
-			// model the `roles` table, so the ensureFederatedDefaultRole
-			// branch can't run cleanly here. The role-name list returned by
-			// the seeded role_assignments query already gives us non-empty
-			// roles for the response, which is what we want to assert.
-			UsernameClaim: "preferred_username",
-			GroupsClaim:   "groups",
+			DefaultRole:    "member",
+			UsernameClaim:  "preferred_username",
+			GroupsClaim:    "groups",
 		}},
 	))
 
@@ -279,11 +266,10 @@ func TestAuthenticateFederatedHappyPath(t *testing.T) {
 // constraint: domain-scoped tokens are not implemented, federated callers
 // must scope to a project (or unscoped).
 func TestAuthenticateFederatedRejectsDomainScope(t *testing.T) {
-	mock := database.NewSeededMockDB()
-	svc := NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	db := database.NewTestDB(t)
+	svc := NewAuthServiceWithDB(db, "test-secret", time.Hour, nil)
 	svc.SetFederationRegistry(newFederationRegistryWithProviders(
-		map[string]FederationProvider{"kc": &stubProvider{
-			name: "kc",
+		map[string]federationProvider{"kc": &stubProvider{
 			identity: &FederatedIdentity{
 				Issuer:  "https://kc.example.com/realms/scs",
 				Subject: "user-sub-123",

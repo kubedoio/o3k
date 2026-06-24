@@ -148,4 +148,3 @@ func TestNovaAvailabilityZonesWithAggregates_Contract(t *testing.T) {
 		}
 	}
 }
-

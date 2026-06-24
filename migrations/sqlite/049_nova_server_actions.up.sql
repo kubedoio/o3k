@@ -4,7 +4,7 @@ PRAGMA foreign_keys = ON;
 -- Adds support for password management and security group associations
 
 -- Add admin password hash storage for changePassword action
-ALTER TABLE instances ADD COLUMN IF NOT EXISTS admin_password_hash TEXT;
+ALTER TABLE instances ADD COLUMN admin_password_hash TEXT;
 
 -- Create server security groups association table
 -- Used by addSecurityGroup/removeSecurityGroup actions

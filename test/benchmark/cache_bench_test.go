@@ -23,11 +23,11 @@ func BenchmarkCacheGet(b *testing.B) {
 
 	// Pre-populate cache with test data
 	testData := map[string]string{
-		"id":     "test-flavor-123",
-		"name":   "m1.small",
-		"vcpus":  "1",
-		"ram":    "2048",
-		"disk":   "20",
+		"id":    "test-flavor-123",
+		"name":  "m1.small",
+		"vcpus": "1",
+		"ram":   "2048",
+		"disk":  "20",
 	}
 	_ = c.Set(ctx, "flavor:test-flavor-123", testData, 1*time.Hour)
 
@@ -54,11 +54,11 @@ func BenchmarkCacheSet(b *testing.B) {
 	}
 
 	testData := map[string]string{
-		"id":     "test-flavor-456",
-		"name":   "m1.medium",
-		"vcpus":  "2",
-		"ram":    "4096",
-		"disk":   "40",
+		"id":    "test-flavor-456",
+		"name":  "m1.medium",
+		"vcpus": "2",
+		"ram":   "4096",
+		"disk":  "40",
 	}
 
 	b.ResetTimer()

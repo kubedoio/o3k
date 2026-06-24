@@ -1,6 +1,7 @@
 package nova
 
 import (
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
 
@@ -14,9 +15,9 @@ import (
 func (svc *Service) ListServerGroups(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(),
-		`SELECT id, name, policies, members, project_id, created_at, updated_at
-		 FROM server_groups WHERE project_id = $1`,
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
+		database.Q(`SELECT id, name, policies, members, project_id, created_at, updated_at
+		 FROM server_groups WHERE project_id::text = $1`),
 		projectID,
 	)
 	if err != nil {
@@ -75,7 +76,7 @@ func (svc *Service) CreateServerGroup(c *gin.Context) {
 	groupID := uuid.New().String()
 	now := time.Now()
 
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		`INSERT INTO server_groups (id, name, policies, members, project_id, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		groupID, req.ServerGroup.Name, req.ServerGroup.Policies, []string{}, projectID, now, now,
@@ -108,9 +109,9 @@ func (svc *Service) GetServerGroup(c *gin.Context) {
 	var members []string
 	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		`SELECT name, policies, members, project_id, created_at, updated_at
-		 FROM server_groups WHERE id = $1 AND project_id = $2`,
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q(`SELECT name, policies, members, project_id, created_at, updated_at
+		 FROM server_groups WHERE id = $1 AND project_id::text = $2`),
 		groupID, projectID,
 	).Scan(&name, &policies, &members, &projectIDFromDB, &createdAt, &updatedAt)
 
@@ -136,8 +137,8 @@ func (svc *Service) DeleteServerGroup(c *gin.Context) {
 	groupID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM server_groups WHERE id = $1 AND project_id = $2",
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM server_groups WHERE id = $1 AND project_id::text = $2"),
 		groupID, projectID,
 	)
 	if err != nil {
@@ -146,7 +147,7 @@ func (svc *Service) DeleteServerGroup(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("server group"))
 		return
 	}

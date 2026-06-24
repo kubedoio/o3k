@@ -19,17 +19,17 @@ import (
 
 // ImageStore manages image storage operations
 type ImageStore struct {
-	mode        string // "stub", "local", "rbd", "s3", or combinations like "local,rbd", "local,s3"
-	cephPool    string
-	cephConf    string
-	s3Bucket    string
-	s3Region    string
-	s3Endpoint  string
-	timeout     time.Duration
-	localPath   string
-	mu          sync.Mutex
-	stubImages  map[string]*stubImage // For stub mode
-	s3Client    *s3.Client
+	mode       string // "stub", "local", "rbd", "s3", or combinations like "local,rbd", "local,s3"
+	cephPool   string
+	cephConf   string
+	s3Bucket   string
+	s3Region   string
+	s3Endpoint string
+	timeout    time.Duration
+	localPath  string
+	mu         sync.Mutex
+	stubImages map[string]*stubImage // For stub mode
+	s3Client   *s3.Client
 
 	// Ceph connection state. Populated by initCephConnection (build tag: ceph).
 	// Untyped here so the package compiles without the ceph build tag.

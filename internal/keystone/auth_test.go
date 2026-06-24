@@ -1,6 +1,7 @@
 package keystone_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,15 +12,42 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/keystone"
 )
 
+// seedTestDB inserts the standard admin user fixture used by the password-auth
+// tests. The embedded SQLite migrations already create the default domain,
+// project, and roles; we only need the user record and its admin assignment.
+func seedTestDB(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	_, err = database.DB.ExecContext(ctx, database.Q(`
+		INSERT INTO users (id, name, password_hash, enabled, domain_id)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash
+	`), "admin-user-id", "admin", string(hash), true, "00000000-0000-0000-0000-000000000100")
+	require.NoError(t, err)
+
+	_, err = database.DB.ExecContext(ctx, database.Q(`
+		INSERT INTO role_assignments (id, user_id, project_id, role_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (id) DO NOTHING
+	`), "00000000-0000-0000-0000-000000000200", "admin-user-id", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003")
+	require.NoError(t, err)
+}
+
 func newAuthSvc(t *testing.T) *keystone.AuthService {
 	t.Helper()
-	mock := database.NewSeededMockDB()
-	return keystone.NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	database.NewTestDB(t)
+	seedTestDB(t)
+	return keystone.NewAuthServiceWithDB(database.DB, "test-secret", time.Hour, nil)
 }
 
 func TestPasswordAuthSuccess(t *testing.T) {
@@ -82,9 +110,10 @@ func TestTokenValidation(t *testing.T) {
 
 func TestTokenValidationExpired(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewSeededMockDB()
+	database.NewTestDB(t)
+	seedTestDB(t)
 	// TTL of zero means the token expires immediately upon issuance.
-	authSvc := keystone.NewAuthServiceWithDB(mock, "test-secret", 0, nil)
+	authSvc := keystone.NewAuthServiceWithDB(database.DB, "test-secret", 0, nil)
 
 	body := `{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"admin","password":"secret","domain":{"name":"Default"}}}}}}`
 	var req keystone.AuthRequest
@@ -126,18 +155,16 @@ func TestTokenRevocation(t *testing.T) {
 
 func TestAppCredentialScopeEnforced(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mock := database.NewSeededMockDB()
-	authSvc := keystone.NewAuthServiceWithDB(mock, "test-secret", time.Hour, nil)
+	database.NewTestDB(t)
+	authSvc := keystone.NewAuthServiceWithDB(database.DB, "test-secret", time.Hour, nil)
 
 	// An app-credential request referencing a different project scope is rejected.
 	body := `{"auth":{"identity":{"methods":["application_credential"],"application_credential":{"id":"cred-id","secret":"cred-secret"}},"scope":{"project":{"id":"other-project-id"}}}}`
 	var req keystone.AuthRequest
 	require.NoError(t, json.Unmarshal([]byte(body), &req))
 
-	// The mock DB returns ErrNoRows for the application_credentials lookup so
-	// the service returns "invalid application credential" before reaching the
-	// scope check. This is the correct behaviour — you can't escalate scope
-	// when you don't even hold a valid credential.
+	// The real DB has no matching application_credentials row, so the service
+	// returns "invalid application credential" before reaching the scope check.
 	_, _, _, err := authSvc.AuthenticateApplicationCredential(t.Context(), &req)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid application credential")

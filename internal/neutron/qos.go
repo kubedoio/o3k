@@ -3,12 +3,14 @@ package neutron
 import (
 	"errors"
 	"fmt"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"strings"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -18,12 +20,12 @@ import (
 func (svc *Service) ListQoSPolicies(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, project_id, name, description, shared, created_at, updated_at
 		FROM qos_policies
-		WHERE project_id = $1 OR shared = true
+		WHERE project_id::text = $1 OR shared = true
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_qos_policies").Msg("failed to query QoS policies")
 		common.SendError(c, common.NewInternalServerError("failed to list QoS policies"))
@@ -96,7 +98,7 @@ func (svc *Service) CreateQoSPolicy(c *gin.Context) {
 		shared = *req.Policy.Shared
 	}
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO qos_policies (id, project_id, name, description, shared, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, policyID, projectID, req.Policy.Name, req.Policy.Description, shared, now, now)
@@ -135,13 +137,13 @@ func (svc *Service) GetQoSPolicy(c *gin.Context) {
 		updatedAt   time.Time
 	)
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT project_id, name, description, shared, created_at, updated_at
 		FROM qos_policies
-		WHERE id = $1 AND (project_id = $2 OR shared = true)
-	`, policyID, projectID).Scan(&projID, &name, &description, &shared, &createdAt, &updatedAt)
+		WHERE id = $1 AND (project_id::text = $2 OR shared = true)
+	`), policyID, projectID).Scan(&projID, &name, &description, &shared, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
@@ -185,8 +187,8 @@ func (svc *Service) UpdateQoSPolicy(c *gin.Context) {
 
 	// Check if policy exists and belongs to project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id::text = $2)"),
 		policyID, projectID,
 	).Scan(&exists)
 
@@ -227,7 +229,7 @@ func (svc *Service) UpdateQoSPolicy(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE qos_policies SET %s, updated_at = $%d WHERE id = $%d",
 		strings.Join(updates, ", "), argPos, argPos+1)
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), query, args...)
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_qos_policy").Msg("failed to update QoS policy")
@@ -244,8 +246,8 @@ func (svc *Service) DeleteQoSPolicy(c *gin.Context) {
 	policyID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM qos_policies WHERE id = $1 AND project_id = $2",
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM qos_policies WHERE id = $1 AND project_id::text = $2"),
 		policyID, projectID,
 	)
 
@@ -255,7 +257,7 @@ func (svc *Service) DeleteQoSPolicy(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
@@ -270,8 +272,8 @@ func (svc *Service) ListBandwidthLimitRules(c *gin.Context) {
 
 	// Check if policy exists and is accessible
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND (project_id = $2 OR shared = true))",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND (project_id::text = $2 OR shared = true))"),
 		policyID, projectID,
 	).Scan(&exists)
 
@@ -280,7 +282,7 @@ func (svc *Service) ListBandwidthLimitRules(c *gin.Context) {
 		return
 	}
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
 		SELECT id, max_kbps, max_burst_kbps, direction, created_at, updated_at
 		FROM qos_bandwidth_limit_rules
 		WHERE qos_policy_id = $1
@@ -349,8 +351,8 @@ func (svc *Service) CreateBandwidthLimitRule(c *gin.Context) {
 
 	// Check if policy exists and belongs to project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id::text = $2)"),
 		policyID, projectID,
 	).Scan(&exists)
 
@@ -367,7 +369,7 @@ func (svc *Service) CreateBandwidthLimitRule(c *gin.Context) {
 		direction = "egress"
 	}
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO qos_bandwidth_limit_rules (id, qos_policy_id, max_kbps, max_burst_kbps, direction, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, ruleID, policyID, req.Rule.MaxKbps, req.Rule.MaxBurstKbps, direction, now, now)
@@ -397,8 +399,8 @@ func (svc *Service) GetBandwidthLimitRule(c *gin.Context) {
 
 	// Check if policy exists and is accessible
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND (project_id = $2 OR shared = true))",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND (project_id::text = $2 OR shared = true))"),
 		policyID, projectID,
 	).Scan(&exists)
 
@@ -415,13 +417,13 @@ func (svc *Service) GetBandwidthLimitRule(c *gin.Context) {
 		updatedAt    time.Time
 	)
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT max_kbps, max_burst_kbps, direction, created_at, updated_at
 		FROM qos_bandwidth_limit_rules
 		WHERE id = $1 AND qos_policy_id = $2
 	`, ruleID, policyID).Scan(&maxKbps, &maxBurstKbps, &direction, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("rule"))
 		return
 	}
@@ -463,8 +465,8 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 
 	// Check if policy exists and belongs to project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id::text = $2)"),
 		policyID, projectID,
 	).Scan(&exists)
 
@@ -474,7 +476,7 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	}
 
 	// Check if rule exists
-	err = svc.activeDB().QueryRow(c.Request.Context(),
+	err = svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT EXISTS(SELECT 1 FROM qos_bandwidth_limit_rules WHERE id = $1 AND qos_policy_id = $2)",
 		ruleID, policyID,
 	).Scan(&exists)
@@ -516,7 +518,7 @@ func (svc *Service) UpdateBandwidthLimitRule(c *gin.Context) {
 	query := fmt.Sprintf("UPDATE qos_bandwidth_limit_rules SET %s, updated_at = $%d WHERE id = $%d",
 		strings.Join(updates, ", "), argPos, argPos+1)
 
-	_, err = svc.activeDB().Exec(c.Request.Context(), query, args...)
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), query, args...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_bandwidth_limit_rule").Msg("failed to update bandwidth limit rule")
@@ -536,8 +538,8 @@ func (svc *Service) DeleteBandwidthLimitRule(c *gin.Context) {
 
 	// Check if policy exists and belongs to project
 	var exists bool
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id = $2)",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT EXISTS(SELECT 1 FROM qos_policies WHERE id = $1 AND project_id::text = $2)"),
 		policyID, projectID,
 	).Scan(&exists)
 
@@ -546,7 +548,7 @@ func (svc *Service) DeleteBandwidthLimitRule(c *gin.Context) {
 		return
 	}
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM qos_bandwidth_limit_rules WHERE id = $1 AND qos_policy_id = $2",
 		ruleID, policyID,
 	)
@@ -557,7 +559,7 @@ func (svc *Service) DeleteBandwidthLimitRule(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("rule"))
 		return
 	}

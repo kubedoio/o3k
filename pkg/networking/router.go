@@ -6,28 +6,16 @@ import (
 	"strings"
 )
 
-// RouterManager handles L3 router namespace operations
-type RouterManager struct {
-	mode string // "stub" or "real"
-}
-
-// NewRouterManager creates a new router manager
-func NewRouterManager(mode string) *RouterManager {
-	return &RouterManager{
-		mode: mode,
-	}
-}
-
 // CreateRouterNamespace creates a dedicated network namespace for a router
-func (rm *RouterManager) CreateRouterNamespace(routerID string) error {
-	if rm.mode == "stub" {
+func CreateRouterNamespace(mode string, routerID string) error {
+	if mode == "stub" {
 		return nil // No-op in stub mode
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// Check if namespace already exists
-	if rm.namespaceExists(nsName) {
+	if namespaceExists(nsName) {
 		return nil
 	}
 
@@ -38,7 +26,7 @@ func (rm *RouterManager) CreateRouterNamespace(routerID string) error {
 	}
 
 	// Enable IP forwarding in the namespace
-	if err := rm.enableIPForwarding(nsName); err != nil {
+	if err := enableIPForwarding(nsName); err != nil {
 		return fmt.Errorf("failed to enable IP forwarding: %w", err)
 	}
 
@@ -46,14 +34,14 @@ func (rm *RouterManager) CreateRouterNamespace(routerID string) error {
 }
 
 // DeleteRouterNamespace deletes a router's network namespace
-func (rm *RouterManager) DeleteRouterNamespace(routerID string) error {
-	if rm.mode == "stub" {
+func DeleteRouterNamespace(mode string, routerID string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
-	if !rm.namespaceExists(nsName) {
+	if !namespaceExists(nsName) {
 		return nil
 	}
 
@@ -66,7 +54,7 @@ func (rm *RouterManager) DeleteRouterNamespace(routerID string) error {
 }
 
 // GetRouterNamespaceName returns the namespace name for a router
-func (rm *RouterManager) GetRouterNamespaceName(routerID string) string {
+func GetRouterNamespaceName(mode string, routerID string) string {
 	id := routerID
 	if len(id) > 11 {
 		id = id[:11]
@@ -75,12 +63,12 @@ func (rm *RouterManager) GetRouterNamespaceName(routerID string) string {
 }
 
 // AttachInterfaceToRouter creates a veth pair and attaches one end to the router namespace
-func (rm *RouterManager) AttachInterfaceToRouter(routerID, interfaceName, ipAddress, cidr string) error {
-	if rm.mode == "stub" {
+func AttachInterfaceToRouter(mode string, routerID, interfaceName, ipAddress, cidr string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 	ifName := interfaceName
 	if len(ifName) > 9 {
 		ifName = ifName[:9]
@@ -120,8 +108,8 @@ func (rm *RouterManager) AttachInterfaceToRouter(routerID, interfaceName, ipAddr
 }
 
 // DetachInterfaceFromRouter removes an interface from the router namespace
-func (rm *RouterManager) DetachInterfaceFromRouter(routerID, interfaceName string) error {
-	if rm.mode == "stub" {
+func DetachInterfaceFromRouter(mode string, routerID, interfaceName string) error {
+	if mode == "stub" {
 		return nil
 	}
 
@@ -138,12 +126,12 @@ func (rm *RouterManager) DetachInterfaceFromRouter(routerID, interfaceName strin
 }
 
 // AddRoute adds a static route in the router namespace
-func (rm *RouterManager) AddRoute(routerID, destination, nexthop string) error {
-	if rm.mode == "stub" {
+func AddRoute(mode string, routerID, destination, nexthop string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "route", "add", destination, "via", nexthop)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -157,12 +145,12 @@ func (rm *RouterManager) AddRoute(routerID, destination, nexthop string) error {
 }
 
 // DeleteRoute removes a static route from the router namespace
-func (rm *RouterManager) DeleteRoute(routerID, destination string) error {
-	if rm.mode == "stub" {
+func DeleteRoute(mode string, routerID, destination string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "route", "del", destination)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -176,12 +164,12 @@ func (rm *RouterManager) DeleteRoute(routerID, destination string) error {
 }
 
 // SetDefaultGateway sets the default gateway in the router namespace
-func (rm *RouterManager) SetDefaultGateway(routerID, gatewayIP string) error {
-	if rm.mode == "stub" {
+func SetDefaultGateway(mode string, routerID, gatewayIP string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// Delete existing default route if any
 	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "route", "del", "default")
@@ -197,12 +185,12 @@ func (rm *RouterManager) SetDefaultGateway(routerID, gatewayIP string) error {
 }
 
 // EnableSNAT enables source NAT (masquerading) for outbound traffic from internal subnets
-func (rm *RouterManager) EnableSNAT(routerID, externalInterface, internalCIDR string) error {
-	if rm.mode == "stub" {
+func EnableSNAT(mode string, routerID, externalInterface, internalCIDR string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// Add SNAT rule using iptables MASQUERADE
 	cmd := exec.Command("ip", "netns", "exec", nsName,
@@ -219,12 +207,12 @@ func (rm *RouterManager) EnableSNAT(routerID, externalInterface, internalCIDR st
 }
 
 // DisableSNAT removes source NAT rules
-func (rm *RouterManager) DisableSNAT(routerID, externalInterface, internalCIDR string) error {
-	if rm.mode == "stub" {
+func DisableSNAT(mode string, routerID, externalInterface, internalCIDR string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	cmd := exec.Command("ip", "netns", "exec", nsName,
 		"iptables", "-t", "nat", "-D", "POSTROUTING",
@@ -243,12 +231,12 @@ func (rm *RouterManager) DisableSNAT(routerID, externalInterface, internalCIDR s
 }
 
 // AddFloatingIP adds a DNAT rule for a floating IP
-func (rm *RouterManager) AddFloatingIP(routerID, floatingIP, fixedIP, externalInterface string) error {
-	if rm.mode == "stub" {
+func AddFloatingIP(mode string, routerID, floatingIP, fixedIP, externalInterface string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// DNAT: Incoming traffic to floating IP -> fixed IP
 	cmd := exec.Command("ip", "netns", "exec", nsName,
@@ -276,12 +264,12 @@ func (rm *RouterManager) AddFloatingIP(routerID, floatingIP, fixedIP, externalIn
 }
 
 // RemoveFloatingIP removes DNAT/SNAT rules for a floating IP
-func (rm *RouterManager) RemoveFloatingIP(routerID, floatingIP, fixedIP, externalInterface string) error {
-	if rm.mode == "stub" {
+func RemoveFloatingIP(mode string, routerID, floatingIP, fixedIP, externalInterface string) error {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// Remove DNAT rule
 	cmd := exec.Command("ip", "netns", "exec", nsName,
@@ -304,14 +292,14 @@ func (rm *RouterManager) RemoveFloatingIP(routerID, floatingIP, fixedIP, externa
 
 // AddPortForwarding adds a DNAT rule for a specific port forwarding
 // External traffic to floatingIP:externalPort is forwarded to fixedIP:internalPort
-func (rm *RouterManager) AddPortForwarding(routerID, floatingIP string, externalPort int,
+func AddPortForwarding(mode string, routerID, floatingIP string, externalPort int,
 	fixedIP string, internalPort int, protocol, externalInterface string) error {
 
-	if rm.mode == "stub" {
+	if mode == "stub" {
 		return nil // No-op in stub mode
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// DNAT: Incoming traffic to floatingIP:externalPort -> fixedIP:internalPort
 	cmd := exec.Command("ip", "netns", "exec", nsName,
@@ -331,14 +319,14 @@ func (rm *RouterManager) AddPortForwarding(routerID, floatingIP string, external
 }
 
 // RemovePortForwarding removes a DNAT rule for a specific port forwarding
-func (rm *RouterManager) RemovePortForwarding(routerID, floatingIP string, externalPort int,
+func RemovePortForwarding(mode string, routerID, floatingIP string, externalPort int,
 	fixedIP string, internalPort int, protocol, externalInterface string) error {
 
-	if rm.mode == "stub" {
+	if mode == "stub" {
 		return nil
 	}
 
-	nsName := rm.GetRouterNamespaceName(routerID)
+	nsName := GetRouterNamespaceName(mode, routerID)
 
 	// Remove DNAT rule
 	cmd := exec.Command("ip", "netns", "exec", nsName,
@@ -357,7 +345,7 @@ func (rm *RouterManager) RemovePortForwarding(routerID, floatingIP string, exter
 
 // Helper functions
 
-func (rm *RouterManager) namespaceExists(nsName string) bool {
+func namespaceExists(nsName string) bool {
 	cmd := exec.Command("ip", "netns", "list")
 	output, err := cmd.Output()
 	if err != nil {
@@ -372,7 +360,7 @@ func (rm *RouterManager) namespaceExists(nsName string) bool {
 	return false
 }
 
-func (rm *RouterManager) enableIPForwarding(nsName string) error {
+func enableIPForwarding(nsName string) error {
 	// Enable IPv4 forwarding
 	cmd := exec.Command("ip", "netns", "exec", nsName,
 		"sysctl", "-w", "net.ipv4.ip_forward=1")

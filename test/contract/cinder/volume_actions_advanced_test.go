@@ -319,4 +319,3 @@ func TestCinderReimageVolume_Contract(t *testing.T) {
 	// Verify volume is now bootable (would need GET /volumes/:id endpoint)
 	// For now, just verify the action was accepted
 }
-

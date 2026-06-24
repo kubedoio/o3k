@@ -11,5 +11,4 @@ CREATE TABLE IF NOT EXISTS volume_type_access (
 CREATE INDEX idx_volume_type_access_type ON volume_type_access(volume_type_id);
 CREATE INDEX idx_volume_type_access_project ON volume_type_access(project_id);
 
--- Add is_public column to volume_types
-ALTER TABLE volume_types ADD COLUMN IF NOT EXISTS is_public INTEGER DEFAULT 1;
+-- is_public column already exists on volume_types from the initial schema.

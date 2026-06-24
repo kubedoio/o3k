@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -45,7 +46,7 @@ type ServerConfig struct {
 
 type DatabaseConfig struct {
 	URL               string        `yaml:"url"`
-	Datastore         string        `yaml:"datastore"`          // "sqlite:///path/to/db" or "postgres://..." — overrides URL if set
+	Datastore         string        `yaml:"datastore"` // "sqlite:///path/to/db" or "postgres://..." — overrides URL if set
 	MaxConnections    int           `yaml:"max_connections"`
 	MinConnections    int           `yaml:"min_connections"`
 	MaxConnLifetime   time.Duration `yaml:"max_conn_lifetime"`
@@ -61,12 +62,11 @@ type ComputeConfig struct {
 }
 
 type KeystoneConfig struct {
-	Port          int                    `yaml:"port"`
-	JWTSecret     string                 `yaml:"jwt_secret"`
-	TokenTTL      time.Duration          `yaml:"token_ttl"`
-	AdminUser     string                 `yaml:"admin_user"`
-	AdminPassword string                 `yaml:"admin_password"`
-	Federation    KeystoneFederationYAML `yaml:"federation"`
+	Port       int                    `yaml:"port"`
+	JWTSecret  string                 `yaml:"jwt_secret"`
+	TokenTTL   time.Duration          `yaml:"token_ttl"`
+	AdminUser  string                 `yaml:"admin_user"`
+	Federation KeystoneFederationYAML `yaml:"federation"`
 }
 
 // KeystoneFederationYAML mirrors keystone.FederationConfig for YAML
@@ -74,7 +74,7 @@ type KeystoneConfig struct {
 // cycle — common is imported by keystone, not the other way around. The
 // keystone package converts this to its own typed shape at startup.
 type KeystoneFederationYAML struct {
-	Enabled   bool                           `yaml:"enabled"`
+	Enabled   bool                             `yaml:"enabled"`
 	Providers []KeystoneFederationProviderYAML `yaml:"providers"`
 }
 
@@ -94,11 +94,11 @@ type KeystoneFederationProviderYAML struct {
 }
 
 type NovaConfig struct {
-	Port          int      `yaml:"port"`
-	LibvirtURI    string   `yaml:"libvirt_uri"`
-	DefaultFlavor string   `yaml:"default_flavor"`
-	LibvirtMode   string   `yaml:"libvirt_mode"` // "stub" or "real"
-	AsyncCompute  bool     `yaml:"async_compute"`
+	Port          int    `yaml:"port"`
+	LibvirtURI    string `yaml:"libvirt_uri"`
+	DefaultFlavor string `yaml:"default_flavor"`
+	LibvirtMode   string `yaml:"libvirt_mode"` // "stub" or "real"
+	AsyncCompute  bool   `yaml:"async_compute"`
 	// CephMonitors lists Ceph monitor endpoints (host:port) used when
 	// emitting libvirt XML for RBD-backed boot disks and volume
 	// attachments. Empty falls back to 127.0.0.1:6789 for backward
@@ -121,14 +121,11 @@ type TunnelConfig struct {
 
 type NeutronConfig struct {
 	Port                     int           `yaml:"port"`
-	DHCPLeaseTime            time.Duration `yaml:"dhcp_lease_time"`
-	IPTablesEnabled          bool          `yaml:"iptables_enabled"`
 	NetworkingMode           string        `yaml:"networking_mode"` // "stub", "iptables", or "ebpf"
 	VXLANEnabled             bool          `yaml:"vxlan_enabled"`
 	VNIRangeStart            int           `yaml:"vni_range_start"`
 	VNIRangeEnd              int           `yaml:"vni_range_end"`
 	CoordinationPollInterval time.Duration `yaml:"coordination_poll_interval"`
-	VXLANMTU                 int           `yaml:"vxlan_mtu"`
 }
 
 type CinderConfig struct {
@@ -154,63 +151,24 @@ type LoggingConfig struct {
 }
 
 type CacheConfig struct {
-	Enabled    bool                     `yaml:"enabled"`
-	RedisURL   string                   `yaml:"redis_url"`
-	KeyPrefix  string                   `yaml:"key_prefix"`
-	DefaultTTL time.Duration            `yaml:"default_ttl"`
-	TTL        map[string]time.Duration `yaml:"ttl"` // Per-resource TTL overrides
+	Enabled    bool          `yaml:"enabled"`
+	RedisURL   string        `yaml:"redis_url"`
+	KeyPrefix  string        `yaml:"key_prefix"`
+	DefaultTTL time.Duration `yaml:"default_ttl"`
 }
 
-// expandEnvWithDefault expands environment variable references in the form
-// ${VAR_NAME:default_value}. If VAR_NAME is set, its value is used; otherwise
-// default_value is used.
+// expandEnvWithDefault expands ${VAR:default} references. If VAR is set its
+// value is used; otherwise default is used.
 func expandEnvWithDefault(s string) string {
-	// Handle ${VAR:default} pattern
-	result := s
-	for {
-		start := -1
-		for i := range len(result) - 1 {
-			if result[i] == '$' && result[i+1] == '{' {
-				start = i
-				break
+	return os.Expand(s, func(name string) string {
+		if i := strings.Index(name, ":"); i >= 0 {
+			if v := os.Getenv(name[:i]); v != "" {
+				return v
 			}
+			return name[i+1:]
 		}
-		if start == -1 {
-			break
-		}
-		end := -1
-		for i := start + 2; i < len(result); i++ {
-			if result[i] == '}' {
-				end = i
-				break
-			}
-		}
-		if end == -1 {
-			break
-		}
-		expr := result[start+2 : end]
-		var name, defaultVal string
-		if colonIdx := -1; true {
-			for i := range len(expr) {
-				if expr[i] == ':' {
-					colonIdx = i
-					break
-				}
-			}
-			if colonIdx >= 0 {
-				name = expr[:colonIdx]
-				defaultVal = expr[colonIdx+1:]
-			} else {
-				name = expr
-			}
-		}
-		val := os.Getenv(name)
-		if val == "" {
-			val = defaultVal
-		}
-		result = result[:start] + val + result[end+1:]
-	}
-	return result
+		return os.Getenv(name)
+	})
 }
 
 // LoadConfig loads configuration from file and applies environment variable overrides.

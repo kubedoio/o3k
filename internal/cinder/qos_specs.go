@@ -2,13 +2,15 @@ package cinder
 
 import (
 	"errors"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"net/http"
 	"time"
+
+	"database/sql"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -16,12 +18,12 @@ import (
 func (svc *Service) ListQosSpecs(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
-	rows, err := svc.activeDB().Query(c.Request.Context(), `
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
 		SELECT id, name, consumer, specs, created_at
 		FROM qos_specs
-		WHERE project_id = $1
+		WHERE project_id::text = $1
 		ORDER BY created_at DESC
-	`, projectID)
+	`), projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_qos_specs").Msg("failed to query QoS specs")
 		common.SendError(c, common.NewInternalServerError("failed to list QoS specs"))
@@ -90,7 +92,7 @@ func (svc *Service) CreateQosSpec(c *gin.Context) {
 	projectID := c.GetString("project_id")
 	now := time.Now()
 
-	_, err := svc.activeDB().Exec(c.Request.Context(), `
+	_, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO qos_specs (id, name, consumer, specs, project_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, qosID, req.QosSpecs.Name, req.QosSpecs.Consumer, req.QosSpecs.Specs, projectID, now, now)
@@ -123,13 +125,13 @@ func (svc *Service) GetQosSpec(c *gin.Context) {
 		createdAt time.Time
 	)
 
-	err := svc.activeDB().QueryRow(c.Request.Context(), `
+	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, consumer, specs, created_at
 		FROM qos_specs
-		WHERE id = $1 AND project_id = $2
-	`, qosID, projectID).Scan(&name, &consumer, &specs, &createdAt)
+		WHERE id = $1 AND project_id::text = $2
+	`), qosID, projectID).Scan(&name, &consumer, &specs, &createdAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("QoS spec"))
 		return
 	}
@@ -165,12 +167,12 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 
 	// Check if QoS spec exists and get current specs
 	var currentSpecs map[string]string
-	err := svc.activeDB().QueryRow(c.Request.Context(),
-		"SELECT specs FROM qos_specs WHERE id = $1 AND project_id = $2",
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
+		database.Q("SELECT specs FROM qos_specs WHERE id = $1 AND project_id::text = $2"),
 		qosID, projectID,
 	).Scan(&currentSpecs)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("QoS spec"))
 		return
 	}
@@ -189,11 +191,11 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 	}
 
 	// Update database
-	_, err = svc.activeDB().Exec(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		UPDATE qos_specs
 		SET specs = $1, updated_at = $2
-		WHERE id = $3 AND project_id = $4
-	`, currentSpecs, time.Now(), qosID, projectID)
+		WHERE id = $3 AND project_id::text = $4
+	`), currentSpecs, time.Now(), qosID, projectID)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_qos_spec").Str("qos_id", qosID).Msg("failed to update QoS spec")
@@ -208,7 +210,7 @@ func (svc *Service) UpdateQosSpec(c *gin.Context) {
 		specs    map[string]string
 	)
 
-	err = svc.activeDB().QueryRow(c.Request.Context(), `
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
 		SELECT name, consumer, specs
 		FROM qos_specs
 		WHERE id = $1
@@ -235,8 +237,8 @@ func (svc *Service) DeleteQosSpec(c *gin.Context) {
 	qosID := c.Param("id")
 	projectID := c.GetString("project_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
-		"DELETE FROM qos_specs WHERE id = $1 AND project_id = $2",
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
+		database.Q("DELETE FROM qos_specs WHERE id = $1 AND project_id::text = $2"),
 		qosID, projectID,
 	)
 
@@ -246,7 +248,7 @@ func (svc *Service) DeleteQosSpec(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("QoS spec"))
 		return
 	}

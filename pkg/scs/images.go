@@ -63,18 +63,6 @@ func (s ImageSpec) sourceOK(source string) bool {
 // ImageSpecList is the loaded SCS-0104 manifest.
 type ImageSpecList []ImageSpec
 
-// Lookup returns the spec whose Name exactly matches the given image name. The
-// exact-name lookup is what the manifest test wants; for resolving an image at
-// validation time, see findSpec which also honours name_scheme.
-func (l ImageSpecList) Lookup(name string) (ImageSpec, bool) {
-	for _, s := range l {
-		if s.Name == name {
-			return s, true
-		}
-	}
-	return ImageSpec{}, false
-}
-
 // findSpec resolves an image name to a spec, honouring both exact `name` and
 // `name_scheme` regex match. Used by the validator.
 func (l ImageSpecList) findSpec(name string) (ImageSpec, bool) {
@@ -84,70 +72,6 @@ func (l ImageSpecList) findSpec(name string) (ImageSpec, bool) {
 		}
 	}
 	return ImageSpec{}, false
-}
-
-// CatalogImage is one row in an operator-supplied Glance catalog snapshot,
-// passed to CheckCatalog for the conformance report.
-type CatalogImage struct {
-	Name   string
-	Source string
-}
-
-// BadSourceFinding flags an image whose name matches an SCS-0104 spec but whose
-// image_source does not start with any of the declared prefixes.
-type BadSourceFinding struct {
-	Name   string
-	Source string
-}
-
-// CatalogReport is the result of CheckCatalog: which mandatory SCS-0104 images
-// the operator is missing, and which present images have non-conformant sources.
-type CatalogReport struct {
-	MissingMandatory []string
-	BadSources       []BadSourceFinding
-}
-
-// CheckCatalog runs the SCS-0104 conformance check over an operator-supplied
-// catalog: mandatory images that aren't present are reported as missing, and
-// images whose name matches an SCS spec but whose source doesn't match any
-// declared prefix are reported as bad-source findings.
-func (l ImageSpecList) CheckCatalog(catalog []CatalogImage) CatalogReport {
-	report := CatalogReport{}
-
-	// Mandatory check: each mandatory spec must have at least one catalog
-	// entry whose name matches.
-	for _, spec := range l {
-		if spec.Status != ImageStatusMandatory {
-			continue
-		}
-		found := false
-		for _, img := range catalog {
-			if spec.matches(img.Name) {
-				found = true
-				break
-			}
-		}
-		if !found && spec.Name != "" {
-			report.MissingMandatory = append(report.MissingMandatory, spec.Name)
-		}
-	}
-
-	// Source check: every catalog image with an SCS-known name must have a
-	// matching source prefix.
-	for _, img := range catalog {
-		spec, ok := l.findSpec(img.Name)
-		if !ok {
-			continue
-		}
-		if !spec.sourceOK(img.Source) {
-			report.BadSources = append(report.BadSources, BadSourceFinding{
-				Name:   img.Name,
-				Source: img.Source,
-			})
-		}
-	}
-
-	return report
 }
 
 var loadedSpecs ImageSpecList

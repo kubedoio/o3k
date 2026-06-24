@@ -175,4 +175,3 @@ func TestNovaServerMetadataDeleteKeyNotFound_Contract(t *testing.T) {
 	// Assertions: Should return 404
 	require.Error(t, err, "Get metadata for non-existent server should fail")
 }
-

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/keystone/policy"
@@ -25,7 +27,7 @@ func init() {
 
 // LoadPoliciesFromDB reads all policies from the database and loads them into the engine.
 func (svc *Service) LoadPoliciesFromDB(ctx context.Context) error {
-	rows, err := svc.activeDB().Query(ctx, "SELECT blob FROM keystone_policies ORDER BY created_at ASC")
+	rows, err := svc.activeDB().QueryContext(ctx, database.Q("SELECT blob FROM keystone_policies ORDER BY created_at ASC"))
 	if err != nil {
 		return fmt.Errorf("query keystone_policies: %w", err)
 	}
@@ -56,7 +58,7 @@ func (svc *Service) LoadPoliciesFromDB(ctx context.Context) error {
 
 // ListPolicies returns all policies (GET /v3/policies).
 func (svc *Service) ListPolicies(c *gin.Context) {
-	rows, err := svc.activeDB().Query(c.Request.Context(),
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(),
 		"SELECT id, type, blob, created_at, updated_at FROM keystone_policies ORDER BY created_at")
 	if err != nil {
 		common.SendError(c, common.NewInternalServerError("failed to list policies"))
@@ -122,7 +124,7 @@ func (svc *Service) CreatePolicy(c *gin.Context) {
 	id := uuid.New().String()
 	now := time.Now()
 
-	_, err := svc.activeDB().Exec(c.Request.Context(),
+	_, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"INSERT INTO keystone_policies (id, type, blob, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
 		id, pType, req.Policy.Blob, now, now)
 	if err != nil {
@@ -152,11 +154,11 @@ func (svc *Service) GetPolicy(c *gin.Context) {
 
 	var id, pType, blob string
 	var createdAt, updatedAt time.Time
-	err := svc.activeDB().QueryRow(c.Request.Context(),
+	err := svc.activeDB().QueryRowContext(c.Request.Context(),
 		"SELECT id, type, blob, created_at, updated_at FROM keystone_policies WHERE id = $1",
 		policyID).Scan(&id, &pType, &blob, &createdAt, &updatedAt)
 
-	if errors.Is(err, database.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
@@ -201,14 +203,14 @@ func (svc *Service) UpdatePolicy(c *gin.Context) {
 	}
 
 	now := time.Now()
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"UPDATE keystone_policies SET blob = COALESCE(NULLIF($1, ''), blob), type = COALESCE(NULLIF($2, ''), type), updated_at = $3 WHERE id = $4",
 		req.Policy.Blob, req.Policy.Type, now, policyID)
 	if err != nil {
 		common.SendError(c, common.NewInternalServerError("failed to update policy"))
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
@@ -224,13 +226,13 @@ func (svc *Service) UpdatePolicy(c *gin.Context) {
 func (svc *Service) DeletePolicy(c *gin.Context) {
 	policyID := c.Param("policy_id")
 
-	result, err := svc.activeDB().Exec(c.Request.Context(),
+	result, err := svc.activeDB().ExecContext(c.Request.Context(),
 		"DELETE FROM keystone_policies WHERE id = $1", policyID)
 	if err != nil {
 		common.SendError(c, common.NewInternalServerError("failed to delete policy"))
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if n, _ := result.RowsAffected(); n == 0 {
 		common.SendError(c, common.NewNotFoundError("policy"))
 		return
 	}
