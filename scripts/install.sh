@@ -318,8 +318,8 @@ WSGIPassAuthorization On
     </Files>
 </Directory>
 
-Alias /static /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/static
-<Directory /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/static>
+Alias /static /var/lib/kolla/venv/lib/python3.12/site-packages/static
+<Directory /var/lib/kolla/venv/lib/python3.12/site-packages/static>
     Options -Indexes
     Require all granted
 </Directory>
