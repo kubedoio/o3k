@@ -162,7 +162,7 @@ chmod +x "${TMP_DIR}/o3k"
 mkdir -p "$INSTALL_DIR"
 mv "${TMP_DIR}/o3k" "${INSTALL_DIR}/o3k"
 rm -rf "$TMP_DIR"
-info "Binary installed: ${INSTALL_DIR}/o3k ($("${INSTALL_DIR}/o3k" version 2>/dev/null || echo $VERSION))"
+info "Binary installed: ${INSTALL_DIR}/o3k ($VERSION)"
 
 # ─── Phase 4: Config generation ───────────────────────────────────────────────
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
