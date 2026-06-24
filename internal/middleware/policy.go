@@ -38,6 +38,13 @@ import (
 // looking up policy rules.
 func PolicyMiddleware(serviceName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// These endpoints are callable with unscoped tokens — skip role check.
+		path := c.Request.URL.Path
+		if path == "/v3/auth/projects" || path == "/v3/auth/domains" {
+			c.Next()
+			return
+		}
+
 		rolesRaw, exists := c.Get("roles")
 		if !exists {
 			// No roles set — request was not authenticated (public endpoint).
