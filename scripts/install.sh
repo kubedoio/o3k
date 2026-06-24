@@ -305,6 +305,29 @@ COMPRESS_OFFLINE = True
 EOF
     chmod 600 "$HORIZON_SETTINGS"
 
+    # Write the Apache vhost config for Horizon (not shipped in the Kolla image)
+    HORIZON_APACHE_CONF="/etc/o3k/horizon-apache.conf"
+    cat > "$HORIZON_APACHE_CONF" <<'EOF'
+WSGIScriptAlias / /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/wsgi.py
+WSGIDaemonProcess horizon user=horizon group=horizon processes=3 threads=10 home=/var/lib/kolla/venv python-home=/var/lib/kolla/venv
+WSGIProcessGroup horizon
+WSGIApplicationGroup %{GLOBAL}
+
+<Directory /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard>
+    <Files wsgi.py>
+        Require all granted
+    </Files>
+</Directory>
+
+Alias /static /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/static
+<Directory /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/static>
+    Options -Indexes
+    Require all granted
+</Directory>
+
+Alias /horizon/static /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/static
+EOF
+
     # Stop existing container if running
     docker rm -f o3k-horizon 2>/dev/null || true
 
@@ -320,9 +343,10 @@ EOF
         --restart unless-stopped \
         --network host \
         -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py" \
+        -v "$HORIZON_APACHE_CONF:/etc/apache2/sites-available/horizon.conf" \
         --entrypoint /bin/bash \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble \
-        -c "mkdir -p /var/log/apache2 /var/run/apache2 && echo 'Listen 80' > /etc/apache2/ports.conf && apache2ctl -DFOREGROUND"
+        -c "mkdir -p /var/log/apache2 /var/run/apache2 && echo 'Listen 80' > /etc/apache2/ports.conf && a2dissite 000-default && a2ensite horizon && apache2ctl -DFOREGROUND"
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
