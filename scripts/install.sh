@@ -310,7 +310,7 @@ EOF
 
     # Pull and start Horizon
     info "Pulling Horizon image (this may take a few minutes)..."
-    docker pull kolla/horizon:2025.1-ubuntu-noble
+    docker pull quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
 
     docker run -d \
         --name o3k-horizon \
@@ -318,7 +318,7 @@ EOF
         --network host \
         -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py:ro" \
         -p 80:80 \
-        kolla/horizon:2025.1-ubuntu-noble
+        quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
