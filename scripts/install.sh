@@ -242,7 +242,7 @@ Requires=libvirtd.service
 Type=simple
 ExecStart=${INSTALL_DIR}/o3k --config ${CONFIG_FILE}
 Environment=O3K_DATA_DIR=${DATA_DIR}
-${O3K_ADMIN_PASSWORD:+Environment=O3K_ADMIN_PASSWORD=${O3K_ADMIN_PASSWORD}}
+Environment=O3K_ADMIN_PASSWORD=${O3K_ADMIN_PASSWORD:-}
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
