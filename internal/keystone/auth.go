@@ -1133,8 +1133,17 @@ func (s *AuthService) BuildServiceCatalog(projectID string, cacheInstance *cache
 		catalog = append(catalog, *entry)
 	}
 
-	// Fall back to hardcoded if query returned nothing
-	if len(catalog) == 0 {
+	// Fall back to hardcoded if query returned nothing or no endpoints registered.
+	// Services are seeded without endpoints on fresh installs — the hardcoded
+	// catalog uses O3K_ENDPOINT_HOST (default: localhost) to build valid URLs.
+	hasEndpoints := false
+	for _, entry := range catalog {
+		if len(entry.Endpoints) > 0 {
+			hasEndpoints = true
+			break
+		}
+	}
+	if len(catalog) == 0 || !hasEndpoints {
 		return buildHardcodedCatalog(projectID)
 	}
 
