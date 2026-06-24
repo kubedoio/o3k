@@ -10,6 +10,7 @@
 #   O3K_DATA_DIR       Data/state directory (default: /var/lib/o3k)
 #   O3K_SKIP_SERVICE   Set to "true" to skip systemd setup
 #   O3K_FORCE_CONFIG   Set to "true" to overwrite existing config
+#   O3K_HORIZON        Set to "true" to install Horizon dashboard (requires Docker, ~500MB)
 
 set -e
 
@@ -251,6 +252,92 @@ systemctl daemon-reload
 systemctl enable --now o3k
 info "Service enabled and started."
 
+# ─── Phase 5b: Horizon dashboard (opt-in) ─────────────────────────────────────
+if [ "${O3K_HORIZON:-false}" = "true" ]; then
+    info "Installing Horizon dashboard (O3K_HORIZON=true)..."
+
+    # Install Docker if not present
+    if ! command -v docker >/dev/null 2>&1; then
+        info "Docker not found — installing..."
+        if command -v apt-get >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y -q docker
+        else
+            fatal "Cannot install Docker: no apt-get or dnf found. Install Docker manually and re-run with O3K_HORIZON=true."
+        fi
+        systemctl enable --now docker
+    fi
+
+    # Verify Docker is working
+    docker info >/dev/null 2>&1 || fatal "Docker is installed but not running. Start it with: systemctl start docker"
+
+    # Write Horizon local_settings.py
+    HORIZON_SETTINGS="/etc/o3k/horizon-local_settings.py"
+    HORIZON_SECRET=$(openssl rand -hex 32)
+    MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+
+    cat > "$HORIZON_SETTINGS" <<EOF
+import os
+OPENSTACK_HOST = "${MYIP}"
+OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
+OPENSTACK_ENDPOINT_TYPE = "publicURL"
+SECRET_KEY = "${HORIZON_SECRET}"
+ALLOWED_HOSTS = ["*"]
+OPENSTACK_API_VERSIONS = {
+    "identity": 3,
+    "image": 2,
+    "volume": 3,
+}
+OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    }
+}
+COMPRESS_OFFLINE = True
+EOF
+    chmod 600 "$HORIZON_SETTINGS"
+
+    # Stop existing container if running
+    docker rm -f o3k-horizon 2>/dev/null || true
+
+    # Pull and start Horizon
+    info "Pulling openstack/horizon image (this may take a few minutes)..."
+    docker pull openstack/horizon:latest
+
+    docker run -d \
+        --name o3k-horizon \
+        --restart unless-stopped \
+        --network host \
+        -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py:ro" \
+        -p 80:80 \
+        openstack/horizon:latest
+
+    # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
+    cat > /etc/systemd/system/o3k-horizon.service <<EOF
+[Unit]
+Description=O3K Horizon Dashboard
+After=docker.service o3k.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker start o3k-horizon
+ExecStop=/usr/bin/docker stop o3k-horizon
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable o3k-horizon
+    info "Horizon service enabled."
+fi
+
 # ─── Phase 6: Wait for ready + print credentials ──────────────────────────────
 info "Waiting for O3K to start (up to 30s)..."
 i=0
@@ -265,6 +352,10 @@ while [ "$i" -lt 30 ]; do
         printf "  Keystone:  http://localhost:35357/v3\n"
         printf "  Nova:      http://localhost:8774/v2.1\n"
         printf "  Glance:    http://localhost:9292/v2\n"
+        if [ "${O3K_HORIZON:-false}" = "true" ]; then
+            MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+            printf "  Horizon:   http://%s (admin dashboard)\n" "$MYIP"
+        fi
         if [ -n "$PASS" ]; then
             printf "  User:      admin\n"
             printf "  Password:  %s\n" "$PASS"
