@@ -143,9 +143,13 @@ TMP_DIR=$(mktemp -d) || fatal "Failed to create temporary directory"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 # Download binary + checksums
-curl -sfL "${BASE_URL}/o3k-linux-${ARCH}" -o "${TMP_DIR}/o3k" || \
+info "Downloading o3k-linux-${ARCH}..."
+curl -fL --connect-timeout 30 --max-time 300 --progress-bar \
+    "${BASE_URL}/o3k-linux-${ARCH}" -o "${TMP_DIR}/o3k" || \
     fatal "Failed to download binary from ${BASE_URL}/o3k-linux-${ARCH}"
-curl -sfL "${BASE_URL}/checksums.txt" -o "${TMP_DIR}/checksums.txt" || \
+info "Downloading checksums..."
+curl -sfL --connect-timeout 30 --max-time 30 \
+    "${BASE_URL}/checksums.txt" -o "${TMP_DIR}/checksums.txt" || \
     fatal "Failed to download checksums.txt"
 
 # Verify SHA256
