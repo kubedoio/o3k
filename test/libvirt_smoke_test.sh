@@ -33,6 +33,8 @@ require() {
     command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+STUB_IMAGE_PATH=""
+
 cleanup() {
     log "cleanup"
     if [ -f "$TEST_DIR/o3k.pid" ]; then
@@ -46,6 +48,7 @@ cleanup() {
             virsh -c qemu:///system undefine "$d" 2>/dev/null || true
         done
     fi
+    [ -n "$STUB_IMAGE_PATH" ] && sudo rm -f "$STUB_IMAGE_PATH" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -53,6 +56,7 @@ trap cleanup EXIT
 require curl
 require jq
 require virsh
+require qemu-img
 [ -w /dev/kvm ] || fail "/dev/kvm not writable by $(whoami) — KVM acceleration unavailable"
 
 mkdir -p "$TEST_DIR"
@@ -138,6 +142,15 @@ if [ -z "$IMAGE_ID" ]; then
         jq -r '.id')
 fi
 [ -n "$IMAGE_ID" ] || fail "no image id available"
+
+# Nova real mode expects the image file at /var/lib/o3k/images/<id>.qcow2.
+# Stub Glance never writes actual bytes, so we create a minimal bootable-format
+# qcow2 here. The VM won't reach a usable OS but libvirt can define + start
+# the domain, which is all this smoke test verifies.
+IMAGE_DIR="/var/lib/o3k/images"
+sudo mkdir -p "$IMAGE_DIR"
+STUB_IMAGE_PATH="$IMAGE_DIR/${IMAGE_ID}.qcow2"
+sudo qemu-img create -f qcow2 "$STUB_IMAGE_PATH" 50M >/dev/null
 
 # --- create server ---
 SERVER_NAME="o3k-smoke-$(date +%s)"
