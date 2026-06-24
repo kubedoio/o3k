@@ -339,9 +339,10 @@ EOF
         --network host \
         -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py" \
         -v "$HORIZON_APACHE_CONF:/etc/apache2/sites-available/horizon.conf" \
+        -v "$HORIZON_APACHE_CONF:/etc/apache2/sites-enabled/horizon.conf" \
         --entrypoint /bin/bash \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble \
-        -c "mkdir -p /var/log/apache2 /var/run/apache2 /var/lib/kolla/venv/lib/python3.12/site-packages/static && chmod -R 777 /var/lib/kolla/venv/lib/python3.12/site-packages/static && chmod 644 /etc/openstack-dashboard/local_settings.py && DJANGO_SETTINGS_MODULE=openstack_dashboard.settings /var/lib/kolla/venv/bin/python /var/lib/kolla/venv/bin/manage.py collectstatic --noinput -v0 && echo 'Listen ${HORIZON_PORT}' > /etc/apache2/ports.conf && rm -f /etc/apache2/sites-enabled/000-default.conf && ln -sf /etc/apache2/sites-available/horizon.conf /etc/apache2/sites-enabled/horizon.conf && apache2ctl -DFOREGROUND"
+        -c "mkdir -p /var/log/apache2 /var/run/apache2 /var/lib/kolla/venv/lib/python3.12/site-packages/static && chmod -R 777 /var/lib/kolla/venv/lib/python3.12/site-packages/static && chmod 644 /etc/openstack-dashboard/local_settings.py && DJANGO_SETTINGS_MODULE=openstack_dashboard.settings /var/lib/kolla/venv/bin/python /var/lib/kolla/venv/bin/manage.py collectstatic --noinput -v0 && echo 'Listen ${HORIZON_PORT}' > /etc/apache2/ports.conf && apache2ctl -DFOREGROUND"
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
