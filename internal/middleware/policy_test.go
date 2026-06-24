@@ -344,3 +344,33 @@ func TestEnforceProjectScope_ProjectMismatch(t *testing.T) {
 		t.Errorf("cross-project: got %d, want 404", w.Code)
 	}
 }
+
+// TestPolicyMiddleware_UnscopedTokenOnAuthProjects verifies that /v3/auth/projects
+// and /v3/auth/domains pass through PolicyMiddleware even when the token carries
+// no roles (unscoped token). Per the OpenStack Identity v3 spec these endpoints
+// are explicitly designed for unscoped use.
+func TestPolicyMiddleware_UnscopedTokenOnAuthProjects(t *testing.T) {
+	for _, path := range []string{"/v3/auth/projects", "/v3/auth/domains"} {
+		t.Run(path, func(t *testing.T) {
+			r := gin.New()
+			// Simulate AuthMiddleware setting empty roles (unscoped token)
+			r.Use(func(c *gin.Context) {
+				c.Set("roles", []string{})
+				c.Set("is_admin", false)
+				c.Next()
+			})
+			r.Use(PolicyMiddleware("identity"))
+			r.GET(path, func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("unscoped token on %s: got %d, want 200", path, w.Code)
+			}
+		})
+	}
+}
