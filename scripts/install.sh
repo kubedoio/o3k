@@ -328,14 +328,19 @@ EOF
     info "Pulling Horizon image (this may take a few minutes)..."
     docker pull quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
 
+    # Run Horizon bypassing kolla_set_configs entirely.
+    # We mount local_settings.py directly and start Apache ourselves.
+    # Apache log dirs may not exist in the image — create them first via entrypoint override.
     docker run -d \
         --name o3k-horizon \
         --restart unless-stopped \
         --network host \
         -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS \
-        -v "$HORIZON_SETTINGS:/var/lib/kolla/config_files/local_settings.py:ro" \
+        -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py" \
         -v "$HORIZON_KOLLA_CFG:/var/lib/kolla/config_files/config.json:ro" \
-        quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
+        --entrypoint /bin/bash \
+        quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble \
+        -c "mkdir -p /var/log/apache2 /var/run/apache2 && apache2ctl -DFOREGROUND"
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
