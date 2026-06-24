@@ -11,8 +11,9 @@
 #   O3K_ADMIN_PASSWORD   Set admin password (default: auto-generated)
 #   O3K_SKIP_SERVICE     Set to "true" to skip systemd setup
 #   O3K_FORCE_CONFIG     Set to "true" to overwrite existing config
-#   O3K_NO_HORIZON       Set to "true" to skip Horizon dashboard install
-#   O3K_HORIZON_PORT     Port for Horizon dashboard (default: 8080)
+#   O3K_NO_HORIZON         Set to "true" to skip Horizon dashboard install
+#   O3K_HORIZON_PORT       Port for Horizon dashboard (default: 8080)
+#   O3K_PUBLIC_HOSTNAME    Public hostname/IP for Keystone URL in Horizon (default: host primary IP)
 
 set -e
 
@@ -284,10 +285,13 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
     HORIZON_SETTINGS="/etc/o3k/horizon-local_settings.py"
     HORIZON_SECRET=$(openssl rand -hex 32)
     MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    # Allow overriding the public hostname so browser-side API calls reach Keystone
+    # (needed when behind a reverse proxy or when the internal IP isn't routable from browsers)
+    KEYSTONE_HOST="${O3K_PUBLIC_HOSTNAME:-${MYIP}}"
 
     printf '%s\n' \
         'import os' \
-        "OPENSTACK_KEYSTONE_URL = \"http://${MYIP}:35357/v3\"" \
+        "OPENSTACK_KEYSTONE_URL = \"http://${KEYSTONE_HOST}:35357/v3\"" \
         'OPENSTACK_ENDPOINT_TYPE = "publicURL"' \
         "SECRET_KEY = \"${HORIZON_SECRET}\"" \
         'ALLOWED_HOSTS = ["*"]' \
