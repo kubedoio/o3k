@@ -5,7 +5,7 @@ set -e
 # Usage: curl -sfL https://get.o3k.io | sh -
 # Or: curl -sfL https://get.o3k.io | O3K_MODE=agent O3K_SERVER=10.0.0.1:6443 O3K_TOKEN=xxx sh -
 
-GITHUB_REPO="cobaltcore-dev/o3k"
+GITHUB_REPO="kubedoio/o3k"
 INSTALL_DIR="${O3K_INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${O3K_DATA_DIR:-/var/lib/o3k}"
 
