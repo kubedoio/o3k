@@ -305,6 +305,22 @@ COMPRESS_OFFLINE = True
 EOF
     chmod 600 "$HORIZON_SETTINGS"
 
+    # Kolla images require a config.json that maps files into the container
+    HORIZON_KOLLA_CFG="/etc/o3k/horizon-kolla-config.json"
+    cat > "$HORIZON_KOLLA_CFG" <<'EOF'
+{
+    "command": "/usr/sbin/apache2ctl -DFOREGROUND",
+    "config_files": [
+        {
+            "source": "/etc/openstack-dashboard/local_settings.py",
+            "dest": "/etc/openstack-dashboard/local_settings.py",
+            "owner": "horizon",
+            "perm": "0644"
+        }
+    ]
+}
+EOF
+
     # Stop existing container if running
     docker rm -f o3k-horizon 2>/dev/null || true
 
@@ -317,7 +333,7 @@ EOF
         --restart unless-stopped \
         --network host \
         -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py:ro" \
-        -p 80:80 \
+        -v "$HORIZON_KOLLA_CFG:/var/lib/kolla/config_files/config.json:ro" \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
