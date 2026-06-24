@@ -176,9 +176,10 @@ done
 
 # --- assert libvirt domain exists ---
 log "verifying libvirt domain exists"
-if ! virsh -c qemu:///system list --all --name | grep -qx "instance-$SERVER_ID"; then
+DOMAIN_NAME="instance-${SERVER_ID:0:8}"
+if ! virsh -c qemu:///system list --all --name | grep -qx "$DOMAIN_NAME"; then
     virsh -c qemu:///system list --all >&2 || true
-    fail "libvirt domain instance-$SERVER_ID not found"
+    fail "libvirt domain $DOMAIN_NAME not found"
 fi
 
 # --- delete + assert removal ---
@@ -194,8 +195,8 @@ for i in $(seq 1 30); do
     [ "$i" -eq 30 ] && fail "server still present in API after delete"
 done
 
-if virsh -c qemu:///system list --all --name | grep -qx "instance-$SERVER_ID"; then
-    fail "libvirt domain instance-$SERVER_ID still present after server delete"
+if virsh -c qemu:///system list --all --name | grep -qx "$DOMAIN_NAME"; then
+    fail "libvirt domain $DOMAIN_NAME still present after server delete"
 fi
 
 log "libvirt smoke test PASSED"
