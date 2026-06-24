@@ -332,6 +332,7 @@ EOF
         --name o3k-horizon \
         --restart unless-stopped \
         --network host \
+        -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS \
         -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py:ro" \
         -v "$HORIZON_KOLLA_CFG:/var/lib/kolla/config_files/config.json:ro" \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
