@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-06-24
+
+### Added
+- One-liner install: `curl -sfL https://get.o3k.io | sh -`
+- Install script preflight: root check, KVM device, port conflicts, disk space
+- Auto-installs libvirt, qemu-kvm, qemu-utils via apt-get or dnf
+- Generates `/etc/o3k/config.yaml` with `libvirt_mode: real`, local storage defaults, random JWT secret
+- Hardened systemd unit (`PrivateTmp`, `NoNewPrivileges`, `Requires=libvirtd.service`)
+- SHA256-verified binary downloads from GitHub releases
+- Cosign/Sigstore supply chain signatures on all release artifacts
+- SPDX SBOM attached to each release
+- `get.o3k.io` redirect to latest release install script (Cloudflare Redirect Rules)
+
+### Fixed
+- Libvirt smoke test: domain name assertion now uses first-8-char UUID format matching Nova's `instance-<short>` naming
+- Smoke test workspace cleanup for root-owned files between CI runs
+- Smoke test creates minimal qcow2 so libvirt has a real file to reference
+
+### Changed
+- Database abstraction collapsed to standard `*sql.DB` (removed custom DBIF/PgxAdapter/SQLiteAdapter interfaces)
+- Install script repo reference corrected to `kubedoio/o3k`
+
+---
+
 ## [Unreleased]
 
 ### Phase 3 — SCS Alignment
