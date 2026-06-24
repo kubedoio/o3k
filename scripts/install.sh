@@ -11,6 +11,7 @@
 #   O3K_SKIP_SERVICE   Set to "true" to skip systemd setup
 #   O3K_FORCE_CONFIG   Set to "true" to overwrite existing config
 #   O3K_HORIZON        Set to "true" to install Horizon dashboard (requires Docker, ~500MB)
+#   O3K_HORIZON_PORT   Port for Horizon dashboard (default: 8080)
 
 set -e
 
@@ -258,7 +259,8 @@ info "Service enabled and started."
 
 # ─── Phase 5b: Horizon dashboard (opt-in) ─────────────────────────────────────
 if [ "${O3K_HORIZON:-false}" = "true" ]; then
-    info "Installing Horizon dashboard (O3K_HORIZON=true)..."
+    HORIZON_PORT="${O3K_HORIZON_PORT:-8080}"
+    info "Installing Horizon dashboard on port $HORIZON_PORT (O3K_HORIZON=true)..."
 
     # Install Docker if not present
     if ! command -v docker >/dev/null 2>&1; then
@@ -345,7 +347,7 @@ EOF
         -v "$HORIZON_APACHE_CONF:/etc/apache2/sites-available/horizon.conf" \
         --entrypoint /bin/bash \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble \
-        -c "mkdir -p /var/log/apache2 /var/run/apache2 && echo 'Listen 80' > /etc/apache2/ports.conf && a2dissite 000-default && a2ensite horizon && apache2ctl configtest && apache2ctl -DFOREGROUND"
+        -c "mkdir -p /var/log/apache2 /var/run/apache2 && echo 'Listen ${HORIZON_PORT}' > /etc/apache2/ports.conf && a2dissite 000-default && a2ensite horizon && apache2ctl configtest && apache2ctl -DFOREGROUND"
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
@@ -385,7 +387,7 @@ while [ "$i" -lt 30 ]; do
         printf "  Glance:    http://localhost:9292/v2\n"
         if [ "${O3K_HORIZON:-false}" = "true" ]; then
             MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-            printf "  Horizon:   http://%s (admin dashboard)\n" "$MYIP"
+            printf "  Horizon:   http://%s:%s (admin dashboard)\n" "$MYIP" "${O3K_HORIZON_PORT:-8080}"
         fi
         if [ -n "$PASS" ]; then
             printf "  User:      admin\n"
