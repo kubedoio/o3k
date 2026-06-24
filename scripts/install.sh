@@ -290,6 +290,8 @@ OPENSTACK_KEYSTONE_URL = "http://%s:35357/v3" % OPENSTACK_HOST
 OPENSTACK_ENDPOINT_TYPE = "publicURL"
 SECRET_KEY = "${HORIZON_SECRET}"
 ALLOWED_HOSTS = ["*"]
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 OPENSTACK_API_VERSIONS = {
     "identity": 3,
     "image": 2,
@@ -303,7 +305,19 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
     }
 }
-COMPRESS_OFFLINE = True
+COMPRESS_OFFLINE = False
+DEBUG = False
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
+    },
+}
 EOF
     chmod 600 "$HORIZON_SETTINGS"
 
