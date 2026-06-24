@@ -278,28 +278,27 @@ if [ "${O3K_HORIZON:-false}" = "true" ]; then
     # Verify Docker is working
     docker info >/dev/null 2>&1 || fatal "Docker is installed but not running. Start it with: systemctl start docker"
 
-    # Write Horizon local_settings.py
+    # Write Horizon local_settings.py using printf to avoid heredoc indentation issues
     HORIZON_SETTINGS="/etc/o3k/horizon-local_settings.py"
     HORIZON_SECRET=$(openssl rand -hex 32)
     MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 
-    cat > "$HORIZON_SETTINGS" <<SETTINGS
-import os
-OPENSTACK_HOST = "${MYIP}"
-OPENSTACK_KEYSTONE_URL = "http://${MYIP}:35357/v3"
-OPENSTACK_ENDPOINT_TYPE = "publicURL"
-SECRET_KEY = "${HORIZON_SECRET}"
-ALLOWED_HOSTS = ["*"]
-USE_X_FORWARDED_HOST = True
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-OPENSTACK_API_VERSIONS = {"identity": 3, "image": 2, "volume": 3}
-OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
-OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
-SESSION_ENGINE = "django.contrib.sessions.backends.cache"
-CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
-COMPRESS_OFFLINE = False
-DEBUG = False
-SETTINGS
+    printf '%s\n' \
+        'import os' \
+        "OPENSTACK_KEYSTONE_URL = \"http://${MYIP}:35357/v3\"" \
+        'OPENSTACK_ENDPOINT_TYPE = "publicURL"' \
+        "SECRET_KEY = \"${HORIZON_SECRET}\"" \
+        'ALLOWED_HOSTS = ["*"]' \
+        'USE_X_FORWARDED_HOST = True' \
+        'SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")' \
+        'OPENSTACK_API_VERSIONS = {"identity": 3, "image": 2, "volume": 3}' \
+        'OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True' \
+        'OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"' \
+        'SESSION_ENGINE = "django.contrib.sessions.backends.cache"' \
+        'CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}' \
+        'COMPRESS_OFFLINE = False' \
+        'DEBUG = False' \
+        > "$HORIZON_SETTINGS"
     chmod 644 "$HORIZON_SETTINGS"
 
     # Write the Apache vhost config for Horizon (not shipped in the Kolla image)
