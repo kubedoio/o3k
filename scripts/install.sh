@@ -312,7 +312,7 @@ EOF
     "command": "/usr/sbin/apache2ctl -DFOREGROUND",
     "config_files": [
         {
-            "source": "/etc/openstack-dashboard/local_settings.py",
+            "source": "/var/lib/kolla/config_files/local_settings.py",
             "dest": "/etc/openstack-dashboard/local_settings.py",
             "owner": "horizon",
             "perm": "0644"
@@ -333,7 +333,7 @@ EOF
         --restart unless-stopped \
         --network host \
         -e KOLLA_CONFIG_STRATEGY=COPY_ALWAYS \
-        -v "$HORIZON_SETTINGS:/etc/openstack-dashboard/local_settings.py:ro" \
+        -v "$HORIZON_SETTINGS:/var/lib/kolla/config_files/local_settings.py:ro" \
         -v "$HORIZON_KOLLA_CFG:/var/lib/kolla/config_files/config.json:ro" \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble
 
