@@ -54,12 +54,13 @@ fi
 # Required ports free
 check_port() {
     _port=$1
+    # Match port on any bind address (0.0.0.0, 127.0.0.1, ::, etc.)
     if command -v ss >/dev/null 2>&1; then
-        if ss -ltn 2>/dev/null | grep -q ":$_port "; then
+        if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${_port}$"; then
             fatal "Port $_port is already in use. Free it before installing o3k."
         fi
     elif command -v netstat >/dev/null 2>&1; then
-        if netstat -ltn 2>/dev/null | grep -q ":$_port "; then
+        if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -q ":${_port}$"; then
             fatal "Port $_port is already in use. Free it before installing o3k."
         fi
     fi
@@ -202,6 +203,9 @@ placement:
 
 metadata:
   port: 8775
+
+server:
+  bind_host: "0.0.0.0"
 EOF
     chmod 600 "$CONFIG_FILE"
     info "Config written (JWT secret embedded, file mode 600)."
@@ -233,6 +237,8 @@ ExecStart=${INSTALL_DIR}/o3k --config ${CONFIG_FILE}
 Environment=O3K_DATA_DIR=${DATA_DIR}
 Restart=on-failure
 RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
 LimitNOFILE=65535
 PrivateTmp=true
 NoNewPrivileges=true
