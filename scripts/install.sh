@@ -5,13 +5,14 @@
 #   curl -sfL https://get.o3k.io/v0.2.0 | sh -
 #
 # Environment variable overrides:
-#   O3K_VERSION        Pin to specific version (default: latest)
-#   O3K_INSTALL_DIR    Binary install path (default: /usr/local/bin)
-#   O3K_DATA_DIR       Data/state directory (default: /var/lib/o3k)
-#   O3K_SKIP_SERVICE   Set to "true" to skip systemd setup
-#   O3K_FORCE_CONFIG   Set to "true" to overwrite existing config
-#   O3K_HORIZON        Set to "true" to install Horizon dashboard (requires Docker, ~500MB)
-#   O3K_HORIZON_PORT   Port for Horizon dashboard (default: 8080)
+#   O3K_VERSION          Pin to specific version (default: latest)
+#   O3K_INSTALL_DIR      Binary install path (default: /usr/local/bin)
+#   O3K_DATA_DIR         Data/state directory (default: /var/lib/o3k)
+#   O3K_ADMIN_PASSWORD   Set admin password (default: auto-generated)
+#   O3K_SKIP_SERVICE     Set to "true" to skip systemd setup
+#   O3K_FORCE_CONFIG     Set to "true" to overwrite existing config
+#   O3K_NO_HORIZON       Set to "true" to skip Horizon dashboard install
+#   O3K_HORIZON_PORT     Port for Horizon dashboard (default: 8080)
 
 set -e
 
@@ -241,6 +242,7 @@ Requires=libvirtd.service
 Type=simple
 ExecStart=${INSTALL_DIR}/o3k --config ${CONFIG_FILE}
 Environment=O3K_DATA_DIR=${DATA_DIR}
+${O3K_ADMIN_PASSWORD:+Environment=O3K_ADMIN_PASSWORD=${O3K_ADMIN_PASSWORD}}
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
@@ -258,9 +260,9 @@ systemctl enable --now o3k
 info "Service enabled and started."
 
 # ─── Phase 5b: Horizon dashboard (opt-in) ─────────────────────────────────────
-if [ "${O3K_HORIZON:-false}" = "true" ]; then
+if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
     HORIZON_PORT="${O3K_HORIZON_PORT:-8080}"
-    info "Installing Horizon dashboard on port $HORIZON_PORT (O3K_HORIZON=true)..."
+    info "Installing Horizon dashboard on port $HORIZON_PORT (set O3K_NO_HORIZON=true to skip)..."
 
     # Install Docker if not present
     if ! command -v docker >/dev/null 2>&1; then
@@ -380,7 +382,7 @@ while [ "$i" -lt 30 ]; do
         printf "  Keystone:  http://localhost:35357/v3\n"
         printf "  Nova:      http://localhost:8774/v2.1\n"
         printf "  Glance:    http://localhost:9292/v2\n"
-        if [ "${O3K_HORIZON:-false}" = "true" ]; then
+        if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
             MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
             printf "  Horizon:   http://%s:%s (admin dashboard)\n" "$MYIP" "${O3K_HORIZON_PORT:-8080}"
         fi
