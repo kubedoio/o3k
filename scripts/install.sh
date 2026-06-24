@@ -53,11 +53,15 @@ fi
 
 # Required ports free
 check_port() {
-    port=$1
+    _port=$1
     if command -v ss >/dev/null 2>&1; then
-        ss -ltn 2>/dev/null | grep -q ":$port " && fatal "Port $port is already in use. Free it before installing o3k."
+        if ss -ltn 2>/dev/null | grep -q ":$_port "; then
+            fatal "Port $_port is already in use. Free it before installing o3k."
+        fi
     elif command -v netstat >/dev/null 2>&1; then
-        netstat -ltn 2>/dev/null | grep -q ":$port " && fatal "Port $port is already in use. Free it before installing o3k."
+        if netstat -ltn 2>/dev/null | grep -q ":$_port "; then
+            fatal "Port $_port is already in use. Free it before installing o3k."
+        fi
     fi
 }
 for port in 35357 8774 8775 8776 8778 9292 9696; do
@@ -65,7 +69,8 @@ for port in 35357 8774 8775 8776 8778 9292 9696; do
 done
 
 # Disk space (2 GB minimum in /var/lib)
-AVAIL_KB=$(df /var/lib 2>/dev/null | awk 'NR==2{print $4}' || echo 9999999)
+AVAIL_KB=$(df /var/lib 2>/dev/null | awk 'NR==2{print $4}')
+AVAIL_KB="${AVAIL_KB:-9999999}"
 [ "$AVAIL_KB" -ge 2097152 ] || fatal "Insufficient disk space in /var/lib. Need at least 2 GB free."
 
 info "Preflight passed."
@@ -132,7 +137,8 @@ fi
 info "Installing O3K $VERSION (linux/$ARCH)..."
 
 BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
-TMP_DIR=$(mktemp -d)
+TMP_DIR=$(mktemp -d) || fatal "Failed to create temporary directory"
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 # Download binary + checksums
 curl -sfL "${BASE_URL}/o3k-linux-${ARCH}" -o "${TMP_DIR}/o3k" || \
