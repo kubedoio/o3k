@@ -307,6 +307,9 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
         'SESSION_COOKIE_SAMESITE = None' \
         'CSRF_COOKIE_SAMESITE = None' \
         'SESSION_SAVE_EVERY_REQUEST = True' \
+        'SESSION_ENGINE = "django.contrib.sessions.backends.db"' \
+        'DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": "/tmp/horizon_sessions.db"}}' \
+        'LOGIN_REDIRECT_URL = "/project/"' \
         > "$HORIZON_SETTINGS"
     chmod 644 "$HORIZON_SETTINGS"
 
@@ -314,7 +317,7 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
     HORIZON_APACHE_CONF="/etc/o3k/horizon-apache.conf"
     cat > "$HORIZON_APACHE_CONF" <<'EOF'
 WSGIScriptAlias / /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/wsgi.py
-WSGIDaemonProcess horizon processes=3 threads=10 home=/var/lib/kolla/venv python-home=/var/lib/kolla/venv
+WSGIDaemonProcess horizon processes=1 threads=10 home=/var/lib/kolla/venv python-home=/var/lib/kolla/venv
 WSGIProcessGroup horizon
 WSGIApplicationGroup %{GLOBAL}
 WSGIPassAuthorization On
@@ -351,7 +354,7 @@ EOF
         -v "$HORIZON_APACHE_CONF:/etc/apache2/sites-enabled/horizon.conf" \
         --entrypoint /bin/bash \
         quay.io/openstack.kolla/horizon:2025.1-ubuntu-noble \
-        -c "umask 000 && mkdir -p /var/log/apache2 /var/run/apache2 /var/lib/kolla/venv/lib/python3.12/site-packages/static/dashboard/css /var/lib/kolla/venv/lib/python3.12/site-packages/static/dashboard/js && chmod 644 /etc/openstack-dashboard/local_settings.py && DJANGO_SETTINGS_MODULE=openstack_dashboard.settings /var/lib/kolla/venv/bin/python /var/lib/kolla/venv/bin/manage.py collectstatic --noinput -v0 && echo 'Listen ${HORIZON_PORT}' > /etc/apache2/ports.conf && apache2ctl -DFOREGROUND"
+        -c "umask 000 && mkdir -p /var/log/apache2 /var/run/apache2 /var/lib/kolla/venv/lib/python3.12/site-packages/static/dashboard/css /var/lib/kolla/venv/lib/python3.12/site-packages/static/dashboard/js /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/local/local_settings.d && printf 'CACHES={\"default\":{\"BACKEND\":\"django.core.cache.backends.locmem.LocMemCache\",\"LOCATION\":\"horizon\"}}\n' > /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/local/local_settings.d/_99_o3k_cache.py && chmod 644 /etc/openstack-dashboard/local_settings.py && DJANGO_SETTINGS_MODULE=openstack_dashboard.settings /var/lib/kolla/venv/bin/python /var/lib/kolla/venv/bin/manage.py collectstatic --noinput -v0 && DJANGO_SETTINGS_MODULE=openstack_dashboard.settings /var/lib/kolla/venv/bin/python /var/lib/kolla/venv/bin/manage.py migrate --run-syncdb 2>/dev/null; touch /tmp/horizon_sessions.db && chmod 666 /tmp/horizon_sessions.db && echo 'Listen ${HORIZON_PORT}' > /etc/apache2/ports.conf && apache2ctl -DFOREGROUND"
 
     # Write systemd unit for horizon so it starts on boot independently of Docker restart policy
     cat > /etc/systemd/system/o3k-horizon.service <<EOF
