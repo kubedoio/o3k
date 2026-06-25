@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.10] - 2026-06-25
+
+### Fixed
+- **Network topology page errors** (`internal/neutron/network.go`): Horizon calls
+  `/v2.0/networks.json` (with `.json` suffix) which returned 404. Added `.json` suffix
+  aliases for networks, subnets, ports, routers, and floatingips routes.
+- **Networks show empty subnets** (`internal/neutron/network.go`): `ListNetworks` and
+  `GetNetwork` always returned `"subnets": []` regardless of existing subnets. Fixed
+  with a `GROUP_CONCAT` subquery to include all subnet IDs per network.
+
+---
+
 ## [0.2.9] - 2026-06-25
 
 ### Fixed
