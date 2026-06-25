@@ -548,12 +548,28 @@ func runServer(args []string) {
 	if networkingMode == "" {
 		networkingMode = "stub"
 	}
-	neutronService := neutron.NewService(networkingMode, cacheInstance)
+
+	var neutronService *neutron.Service
+	if networkingMode == "flat" {
+		neutronService = neutron.NewServiceFlat(
+			networkingMode,
+			cfg.Neutron.FlatBridge,
+			cfg.Neutron.FlatSubnet,
+			cfg.Neutron.FlatGateway,
+			cfg.Neutron.FlatDNS,
+			cacheInstance,
+		)
+	} else {
+		neutronService = neutron.NewService(networkingMode, cacheInstance)
+	}
 	log.Printf("Neutron initialized in %s mode", networkingMode)
 
 	// Wire up Nova-Neutron integration (so Nova can allocate ports)
 	novaService.SetNeutronService(neutronService)
 	novaService.SetNetworkingMode(networkingMode)
+	if networkingMode == "flat" {
+		novaService.SetFlatBridge(cfg.Neutron.FlatBridge)
+	}
 
 	// Wire async dispatcher when AsyncCompute is enabled and Hub is running
 	if cfg.Nova.AsyncCompute && hub != nil {
