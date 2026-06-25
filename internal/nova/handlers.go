@@ -45,6 +45,7 @@ type Service struct {
 	// (host:port) used when emitting libvirt XML for RBD-backed disks.
 	// Empty falls back to 127.0.0.1:6789 inside the XML template.
 	cephMonitors []string
+	flatBridge   string // shared bridge name in flat networking mode
 }
 
 const (
