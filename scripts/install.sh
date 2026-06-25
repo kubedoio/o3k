@@ -188,17 +188,18 @@ else
     info "Generating config at $CONFIG_FILE..."
     JWT_SECRET=$(openssl rand -base64 48)
 
-    # Determine networking mode and flat bridge config
-    _NETWORKING_MODE="stub"
-    _FLAT_CONFIG=""
-    if [ "${O3K_FLAT_NETWORK:-false}" = "true" ]; then
-        _FLAT_BRIDGE="${O3K_FLAT_BRIDGE:-br-o3k}"
-        _NETWORKING_MODE="flat"
-        _FLAT_CONFIG=$(printf '  flat_bridge: "%s"\n  flat_subnet: "%s"\n  flat_gateway: "%s"\n  flat_dns: "%s"\n' \
-            "$_FLAT_BRIDGE" \
-            "${O3K_FLAT_SUBNET:-192.168.100.0/24}" \
-            "${O3K_FLAT_GATEWAY:-192.168.100.1}" \
-            "${O3K_FLAT_DNS:-8.8.8.8}")
+    # Determine networking mode and flat bridge config.
+    # Flat mode is the default for single-host installs; set O3K_FLAT_NETWORK=false to use stub.
+    _NETWORKING_MODE="flat"
+    _FLAT_BRIDGE="${O3K_FLAT_BRIDGE:-br-o3k}"
+    _FLAT_CONFIG=$(printf '  flat_bridge: "%s"\n  flat_subnet: "%s"\n  flat_gateway: "%s"\n  flat_dns: "%s"\n' \
+        "$_FLAT_BRIDGE" \
+        "${O3K_FLAT_SUBNET:-192.168.100.0/24}" \
+        "${O3K_FLAT_GATEWAY:-192.168.100.1}" \
+        "${O3K_FLAT_DNS:-8.8.8.8}")
+    if [ "${O3K_FLAT_NETWORK:-true}" = "false" ]; then
+        _NETWORKING_MODE="stub"
+        _FLAT_CONFIG=""
     fi
 
     cat > "$CONFIG_FILE" <<EOF
@@ -439,9 +440,9 @@ EOF
     info "Horizon service enabled."
 fi
 
-# ─── Phase 5d: Flat network setup (opt-in) ────────────────────────────────────
-if [ "${O3K_FLAT_NETWORK:-false}" = "true" ]; then
-    info "Setting up flat network bridge (O3K_FLAT_NETWORK=true)..."
+# ─── Phase 5d: Flat network setup (default-on, skip with O3K_FLAT_NETWORK=false) ─
+if [ "${O3K_FLAT_NETWORK:-true}" != "false" ]; then
+    info "Setting up flat network bridge (set O3K_FLAT_NETWORK=false to skip)..."
     if [ -f "/usr/local/bin/o3k-setup-flat-network" ]; then
         _SETUP_SCRIPT="/usr/local/bin/o3k-setup-flat-network"
     else
