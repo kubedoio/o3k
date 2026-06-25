@@ -48,6 +48,7 @@ fi
 # ─── 4. Persist bridge ────────────────────────────────────────────────────────
 if command -v netplan &>/dev/null; then
     info "Writing netplan config for $BRIDGE..."
+    # Variables intentionally expanded: BRIDGE, BRIDGE_IP, BRIDGE_PREFIX
     cat > /etc/netplan/99-o3k-bridge.yaml <<NETPLAN
 network:
   version: 2

@@ -194,7 +194,7 @@ else
     if [ "${O3K_FLAT_NETWORK:-false}" = "true" ]; then
         _FLAT_BRIDGE="${O3K_FLAT_BRIDGE:-br-o3k}"
         _NETWORKING_MODE="flat"
-        _FLAT_CONFIG=$(printf '  flat_bridge: "%s"\n  flat_subnet: "%s"\n  flat_gateway: "%s"\n  flat_dns: "%s"' \
+        _FLAT_CONFIG=$(printf '  flat_bridge: "%s"\n  flat_subnet: "%s"\n  flat_gateway: "%s"\n  flat_dns: "%s"\n' \
             "$_FLAT_BRIDGE" \
             "${O3K_FLAT_SUBNET:-192.168.100.0/24}" \
             "${O3K_FLAT_GATEWAY:-192.168.100.1}" \
@@ -442,10 +442,10 @@ fi
 # ─── Phase 5d: Flat network setup (opt-in) ────────────────────────────────────
 if [ "${O3K_FLAT_NETWORK:-false}" = "true" ]; then
     info "Setting up flat network bridge (O3K_FLAT_NETWORK=true)..."
-    _SETUP_SCRIPT="$(dirname "$0")/setup-flat-network.sh"
-    if [ ! -f "$_SETUP_SCRIPT" ]; then
-        # Try installed location
+    if [ -f "/usr/local/bin/o3k-setup-flat-network" ]; then
         _SETUP_SCRIPT="/usr/local/bin/o3k-setup-flat-network"
+    else
+        _SETUP_SCRIPT="$(dirname "$0")/setup-flat-network.sh"
     fi
     if [ -f "$_SETUP_SCRIPT" ]; then
         if [ "$(id -u)" -eq 0 ]; then
@@ -462,10 +462,11 @@ if [ "${O3K_FLAT_NETWORK:-false}" = "true" ]; then
             sudo -E bash "$_SETUP_SCRIPT"
         else
             warn "Flat network setup requires root. Run as root or with sudo:"
-            warn "  sudo O3K_FLAT_BRIDGE=${O3K_FLAT_BRIDGE:-br-o3k} bash $0"
+            warn "  sudo O3K_FLAT_BRIDGE=${O3K_FLAT_BRIDGE:-br-o3k} bash \"$_SETUP_SCRIPT\""
         fi
     else
-        warn "setup-flat-network.sh not found. Run it manually to configure the bridge."
+        warn "setup-flat-network.sh not found."
+        warn "Download and run: curl -sfL https://get.o3k.io/setup-flat-network.sh | sudo bash"
     fi
 fi
 
