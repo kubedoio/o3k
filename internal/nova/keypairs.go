@@ -35,7 +35,7 @@ func (svc *Service) ListKeypairs(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(`
-		SELECT id, name, user_id, public_key, fingerprint, created_at
+		SELECT name, user_id, public_key, fingerprint, created_at
 		FROM keypairs
 		WHERE user_id::text = $1
 		ORDER BY created_at DESC
@@ -50,21 +50,19 @@ func (svc *Service) ListKeypairs(c *gin.Context) {
 
 	var keypairs []gin.H
 	for rows.Next() {
-		var id, name, uid, publicKey, fingerprint string
-		var createdAt time.Time
+		var name, uid, publicKey, fingerprint, createdAtRaw string
 
-		if err := rows.Scan(&id, &name, &uid, &publicKey, &fingerprint, &createdAt); err != nil {
+		if err := rows.Scan(&name, &uid, &publicKey, &fingerprint, &createdAtRaw); err != nil {
 			continue
 		}
 
-		// OpenStack format wraps each keypair in a "keypair" object
 		keypairs = append(keypairs, gin.H{
 			"keypair": gin.H{
 				"name":        name,
 				"public_key":  publicKey,
 				"fingerprint": fingerprint,
 				"type":        "ssh",
-				"created_at":  createdAt.Format(time.RFC3339),
+				"created_at":  parseDBTime(createdAtRaw).Format(time.RFC3339),
 				"user_id":     uid,
 				"is_deleted":  false,
 			},
@@ -88,14 +86,13 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 	keypairName := c.Param("id") // In Nova API, it's the name, not UUID
 	userID := c.GetString("user_id")
 
-	var name, publicKey, fingerprint string
-	var createdAt time.Time
+	var name, publicKey, fingerprint, createdAtRaw string
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT name, public_key, fingerprint, created_at
 		FROM keypairs
 		WHERE user_id::text = $1 AND name = $2
-	`), userID, keypairName).Scan(&name, &publicKey, &fingerprint, &createdAt)
+	`), userID, keypairName).Scan(&name, &publicKey, &fingerprint, &createdAtRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("keypair"))
@@ -113,7 +110,7 @@ func (svc *Service) GetKeypair(c *gin.Context) {
 			"public_key":  publicKey,
 			"fingerprint": fingerprint,
 			"type":        "ssh",
-			"created_at":  createdAt.Format(time.RFC3339),
+			"created_at":  parseDBTime(createdAtRaw).Format(time.RFC3339),
 			"user_id":     userID,
 			"is_deleted":  false,
 		},

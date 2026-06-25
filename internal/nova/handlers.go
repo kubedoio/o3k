@@ -2412,6 +2412,13 @@ func (svc *Service) GetLimits(c *gin.Context) {
 				"totalFloatingIpsUsed":    0,
 				"totalSecurityGroupsUsed": 0,
 				"totalServerGroupsUsed":   0,
+
+				// Reserved counts (required by Horizon overview page)
+				"totalCoresReserved":          0,
+				"totalRAMReserved":            0,
+				"totalInstancesReserved":      0,
+				"totalFloatingIpsReserved":    0,
+				"totalSecurityGroupsReserved": 0,
 			},
 		},
 	})
