@@ -317,7 +317,7 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
     HORIZON_APACHE_CONF="/etc/o3k/horizon-apache.conf"
     cat > "$HORIZON_APACHE_CONF" <<'EOF'
 WSGIScriptAlias / /var/lib/kolla/venv/lib/python3.12/site-packages/openstack_dashboard/wsgi.py
-WSGIDaemonProcess horizon processes=1 threads=10 home=/var/lib/kolla/venv python-home=/var/lib/kolla/venv
+WSGIDaemonProcess horizon processes=3 threads=10 home=/var/lib/kolla/venv python-home=/var/lib/kolla/venv
 WSGIProcessGroup horizon
 WSGIApplicationGroup %{GLOBAL}
 WSGIPassAuthorization On
