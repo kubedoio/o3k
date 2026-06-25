@@ -936,6 +936,7 @@ func createKeystoneServer(cfg *common.Config, svc *keystone.Service, authService
 
 func createNovaServer(cfg *common.Config, svc *nova.Service, authService *keystone.AuthService) *http.Server {
 	r := gin.New()
+	r.RedirectTrailingSlash = false
 	middleware.RegisterHealthRoutes(r)
 	middleware.RegisterMetricsRoute(r)
 	r.Use(middleware.RequestIDMiddleware())
