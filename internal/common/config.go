@@ -121,7 +121,11 @@ type TunnelConfig struct {
 
 type NeutronConfig struct {
 	Port                     int           `yaml:"port"`
-	NetworkingMode           string        `yaml:"networking_mode"` // "stub", "iptables", or "ebpf"
+	NetworkingMode           string        `yaml:"networking_mode"` // "stub", "iptables", "ebpf", or "flat"
+	FlatBridge               string        `yaml:"flat_bridge"`     // bridge name for flat mode, default "br-o3k"
+	FlatSubnet               string        `yaml:"flat_subnet"`     // e.g. "192.168.100.0/24"
+	FlatGateway              string        `yaml:"flat_gateway"`    // e.g. "192.168.100.1"
+	FlatDNS                  string        `yaml:"flat_dns"`        // e.g. "8.8.8.8"
 	VXLANEnabled             bool          `yaml:"vxlan_enabled"`
 	VNIRangeStart            int           `yaml:"vni_range_start"`
 	VNIRangeEnd              int           `yaml:"vni_range_end"`
@@ -224,6 +228,9 @@ func LoadConfig(path string) (*Config, error) {
 		fmt.Fprintln(os.Stderr, "WARNING: Using default JWT secret (O3K_ENV="+env+"). Do NOT use this in production.")
 	}
 
+	// Apply flat mode defaults
+	ApplyFlatModeDefaults(&cfg)
+
 	return &cfg, nil
 }
 
@@ -274,7 +281,7 @@ func ValidateConfig(cfg *Config) error {
 
 	// Networking mode enum validation.
 	allowedNetworkingModes := map[string]bool{
-		"stub": true, "iptables": true, "ebpf": true, "real": true,
+		"stub": true, "iptables": true, "ebpf": true, "real": true, "flat": true,
 	}
 	if mode := cfg.Neutron.NetworkingMode; mode != "" && !allowedNetworkingModes[mode] {
 		return fmt.Errorf("neutron.networking_mode: unknown value %q", mode)
@@ -295,7 +302,7 @@ func ValidateConfig(cfg *Config) error {
 			return fmt.Errorf("nova.libvirt_mode=\"stub\" is refused when O3K_ENV=production (set libvirt_mode to \"real\")")
 		}
 		if cfg.Neutron.NetworkingMode == "stub" {
-			return fmt.Errorf("neutron.networking_mode=\"stub\" is refused when O3K_ENV=production (set networking_mode to \"iptables\" or \"ebpf\")")
+			return fmt.Errorf("neutron.networking_mode=\"stub\" is refused when O3K_ENV=production (set networking_mode to \"iptables\", \"ebpf\", or \"flat\")")
 		}
 		if cfg.Cinder.StorageMode == "stub" {
 			return fmt.Errorf("cinder.storage_mode=\"stub\" is refused when O3K_ENV=production (set storage_mode to \"local\", \"rbd\", \"s3\", or a hybrid)")
@@ -306,6 +313,25 @@ func ValidateConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// ApplyFlatModeDefaults applies default values for flat networking mode fields
+// when networking_mode is "flat" and fields are not explicitly set.
+func ApplyFlatModeDefaults(cfg *Config) {
+	if cfg.Neutron.NetworkingMode == "flat" {
+		if cfg.Neutron.FlatBridge == "" {
+			cfg.Neutron.FlatBridge = "br-o3k"
+		}
+		if cfg.Neutron.FlatSubnet == "" {
+			cfg.Neutron.FlatSubnet = "192.168.100.0/24"
+		}
+		if cfg.Neutron.FlatGateway == "" {
+			cfg.Neutron.FlatGateway = "192.168.100.1"
+		}
+		if cfg.Neutron.FlatDNS == "" {
+			cfg.Neutron.FlatDNS = "8.8.8.8"
+		}
+	}
 }
 
 // BindAddress returns "host:port", using cfg.Server.BindHost as the host

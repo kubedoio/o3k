@@ -42,3 +42,10 @@ func TestGenerateMAC(t *testing.T) {
 		}
 	})
 }
+
+func TestNewServiceFlatConstructor(t *testing.T) {
+	svc := NewServiceFlat("flat", "br-o3k", "192.168.100.0/24", "192.168.100.1", "8.8.8.8", nil)
+	if svc == nil {
+		t.Fatal("NewServiceFlat returned nil")
+	}
+}
