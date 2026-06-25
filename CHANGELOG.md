@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.11] - 2026-06-25
+
+### Added
+- **Flat networking mode** (`networking_mode: flat`): optional single-host mode that gives
+  VMs internet access via a shared bridge (`br-o3k`) and iptables NAT. Enable with
+  `O3K_FLAT_NETWORK=true` during install, or run `scripts/setup-flat-network.sh` on an
+  existing install and set `networking_mode: flat` in `/etc/o3k/config.yaml`. Existing
+  installs using `stub` or `iptables` mode are unaffected.
+- New `scripts/setup-flat-network.sh`: idempotent standalone script that creates `br-o3k`,
+  enables IP forwarding, adds iptables MASQUERADE, and persists via netplan or systemd-networkd.
+- New config fields: `neutron.flat_bridge`, `neutron.flat_subnet`, `neutron.flat_gateway`,
+  `neutron.flat_dns` (all with sensible defaults when flat mode is enabled).
+
+---
+
 ## [0.2.10] - 2026-06-25
 
 ### Fixed
