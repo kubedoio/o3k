@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.9] - 2026-06-25
+
+### Fixed
+- **Glance image list empty** (`internal/glance/images.go`): SQLite stores `time.Time`
+  as Go's `.String()` format including monotonic clock suffix (`m=+97.3...`).
+  `parseImageTime()` didn't handle this suffix, causing all rows in `ListImages`,
+  `ListImageMembers`, `GetImageMember`, and `UpdateImageMember` to be silently skipped.
+  Fixed by stripping the suffix before parsing.
+- **Service list empty / placement catalog missing** (`internal/keystone/services.go`):
+  Same timestamp scan bug caused `ListServices` to return no rows, breaking
+  `openstack service list` and preventing `register_endpoint` in bootstrap from
+  finding the pre-seeded placement service. Also fixed `UpdateService` which used
+  PostgreSQL `RETURNING` syntax unsupported by SQLite.
+
+---
+
 ## [0.2.7] - 2026-06-25
 
 ### Added
