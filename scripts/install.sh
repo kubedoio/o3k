@@ -259,6 +259,40 @@ systemctl daemon-reload
 systemctl enable --now o3k
 info "Service enabled and started."
 
+# ─── Phase 5a: Generate openrc file ───────────────────────────────────────────
+OPENRC_FILE="/etc/o3k/o3k-admin-openrc"
+# Wait briefly for initial-password to be written by o3k on first boot
+sleep 2
+ADMIN_PASS="${O3K_ADMIN_PASSWORD:-}"
+if [ -z "$ADMIN_PASS" ] && [ -f "${DATA_DIR}/initial-password" ]; then
+    ADMIN_PASS=$(cat "${DATA_DIR}/initial-password")
+fi
+printf '%s\n' \
+    '# O3K admin credentials — source this file to use the OpenStack CLI' \
+    '# Usage: source /etc/o3k/o3k-admin-openrc' \
+    "export OS_AUTH_URL=http://localhost:35357/v3" \
+    "export OS_USERNAME=admin" \
+    "export OS_PASSWORD=${ADMIN_PASS}" \
+    "export OS_PROJECT_NAME=default" \
+    "export OS_USER_DOMAIN_NAME=Default" \
+    "export OS_PROJECT_DOMAIN_NAME=Default" \
+    "export OS_IDENTITY_API_VERSION=3" \
+    > "$OPENRC_FILE"
+chmod 600 "$OPENRC_FILE"
+info "Admin credentials written to $OPENRC_FILE"
+
+# Install OpenStack CLI if not present
+if ! command -v openstack >/dev/null 2>&1; then
+    info "Installing python-openstackclient..."
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-openstackclient 2>/dev/null || \
+            pip3 install -q python-openstackclient 2>/dev/null || true
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q python3-openstackclient 2>/dev/null || \
+            pip3 install -q python-openstackclient 2>/dev/null || true
+    fi
+fi
+
 # ─── Phase 5b: Horizon dashboard (opt-in) ─────────────────────────────────────
 if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
     HORIZON_PORT="${O3K_HORIZON_PORT:-8080}"
@@ -401,15 +435,17 @@ while [ "$i" -lt 30 ]; do
             printf "  Password:  %s\n" "$PASS"
         fi
         printf "────────────────────────────────────────────────\n"
-        printf "  Quick start (requires python-openstackclient):\n"
+        printf "  OpenStack CLI:\n"
         printf "\n"
-        printf "    export OS_AUTH_URL=http://localhost:35357/v3\n"
-        printf "    export OS_USERNAME=admin\n"
-        [ -n "$PASS" ] && printf "    export OS_PASSWORD=%s\n" "$PASS"
-        printf "    export OS_PROJECT_NAME=default\n"
-        printf "    export OS_USER_DOMAIN_NAME=Default\n"
-        printf "    export OS_PROJECT_DOMAIN_NAME=Default\n"
+        printf "    source %s\n" "$OPENRC_FILE"
         printf "    openstack token issue\n"
+        printf "    openstack server list\n"
+        printf "    openstack hypervisor list\n"
+        printf "\n"
+        if ! command -v openstack >/dev/null 2>&1; then
+            printf "  Install CLI:  apt-get install python3-openstackclient\n"
+            printf "            or: pip3 install python-openstackclient\n"
+        fi
         printf "════════════════════════════════════════════════\n"
         exit 0
     fi
