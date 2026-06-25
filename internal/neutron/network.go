@@ -114,6 +114,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Networks
 		v2.GET("/networks", svc.ListNetworks)
+		v2.GET("/networks.json", svc.ListNetworks)
 		v2.POST("/networks", svc.CreateNetwork)
 		v2.GET("/networks/:id", svc.GetNetwork)
 		v2.DELETE("/networks/:id", svc.DeleteNetwork)
@@ -122,6 +123,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Subnets
 		v2.GET("/subnets", svc.ListSubnets)
+		v2.GET("/subnets.json", svc.ListSubnets)
 		v2.POST("/subnets", svc.CreateSubnet)
 		v2.GET("/subnets/:id", svc.GetSubnet)
 		v2.DELETE("/subnets/:id", svc.DeleteSubnet)
@@ -130,6 +132,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Ports
 		v2.GET("/ports", svc.ListPorts)
+		v2.GET("/ports.json", svc.ListPorts)
 		v2.POST("/ports", svc.CreatePort)
 		v2.GET("/ports/:id", svc.GetPort)
 		v2.DELETE("/ports/:id", svc.DeletePort)
@@ -151,6 +154,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Routers
 		v2.GET("/routers", svc.ListRouters)
+		v2.GET("/routers.json", svc.ListRouters)
 		v2.POST("/routers", svc.CreateRouter)
 		v2.GET("/routers/:id", svc.GetRouter)
 		v2.DELETE("/routers/:id", svc.DeleteRouter)
@@ -162,6 +166,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Floating IPs
 		v2.GET("/floatingips", svc.ListFloatingIPs)
+		v2.GET("/floatingips.json", svc.ListFloatingIPs)
 		v2.POST("/floatingips", svc.CreateFloatingIP)
 		v2.GET("/floatingips/:id", svc.GetFloatingIP)
 		v2.PUT("/floatingips/:id", svc.UpdateFloatingIP)
@@ -620,7 +625,8 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 	queryArgs = append(queryArgs, limit+1)
 
 	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(fmt.Sprintf(`
-		SELECT n.id, n.name, n.project_id, n.admin_state_up, n.status, n.shared, n.mtu, n.network_type, n.is_external, n.created_at, n.updated_at
+		SELECT n.id, n.name, n.project_id, n.admin_state_up, n.status, n.shared, n.mtu, n.network_type, n.is_external, n.created_at, n.updated_at,
+		       COALESCE((SELECT GROUP_CONCAT(s.id, ',') FROM subnets s WHERE s.network_id = n.id), '') AS subnet_ids
 		FROM networks n
 		WHERE %s
 		ORDER BY n.created_at ASC, n.id ASC
@@ -639,11 +645,16 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 		var id, name, ownerProjectID, status, networkType string
 		var adminStateUp, shared, isExternal bool
 		var mtu int
-		var createdAtRaw, updatedAtRaw string
+		var createdAtRaw, updatedAtRaw, subnetIDsRaw string
 
-		if err := rows.Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAtRaw, &updatedAtRaw); err != nil {
+		if err := rows.Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAtRaw, &updatedAtRaw, &subnetIDsRaw); err != nil {
 			log.Warn().Err(err).Msg("failed to scan network row")
 			continue
+		}
+
+		subnetIDs := []string{}
+		if subnetIDsRaw != "" {
+			subnetIDs = strings.Split(subnetIDsRaw, ",")
 		}
 
 		networks = append(networks, gin.H{
@@ -660,7 +671,7 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 			"provider:segmentation_id":  nil,
 			"router:external":           isExternal,
 			"port_security_enabled":     true,
-			"subnets":                   []string{},
+			"subnets":                   subnetIDs,
 			"availability_zone_hints":   []string{},
 			"availability_zones":        []string{"nova"},
 			"ipv4_address_scope":        nil,
@@ -715,14 +726,15 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	var id, name, ownerProjectID, status, networkType string
 	var adminStateUp, shared, isExternal bool
 	var mtu int
-	var createdAtRaw, updatedAtRaw string
+	var createdAtRaw, updatedAtRaw, subnetIDsRaw string
 
 	err := svc.activeDB().QueryRowContext(ctx, database.Q(`
-		SELECT id, name, project_id, admin_state_up, status, shared, mtu, network_type, is_external, created_at, updated_at
-		FROM networks
-		WHERE (id::text = $1 OR name = $1) AND (project_id::text = $2 OR shared = true)
+		SELECT n.id, n.name, n.project_id, n.admin_state_up, n.status, n.shared, n.mtu, n.network_type, n.is_external, n.created_at, n.updated_at,
+		       COALESCE((SELECT GROUP_CONCAT(s.id, ',') FROM subnets s WHERE s.network_id = n.id), '') AS subnet_ids
+		FROM networks n
+		WHERE (n.id::text = $1 OR n.name = $1) AND (n.project_id::text = $2 OR n.shared = true)
 		LIMIT 1
-	`), networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAtRaw, &updatedAtRaw)
+	`), networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAtRaw, &updatedAtRaw, &subnetIDsRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
@@ -732,6 +744,11 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 		log.Error().Err(err).Str("operation", "get_network").Str("network_id", networkID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to get network"))
 		return
+	}
+
+	subnetIDs := []string{}
+	if subnetIDsRaw != "" {
+		subnetIDs = strings.Split(subnetIDsRaw, ",")
 	}
 
 	network := gin.H{
@@ -748,7 +765,7 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 		"provider:segmentation_id":  nil,
 		"router:external":           isExternal,
 		"port_security_enabled":     true,
-		"subnets":                   []string{},
+		"subnets":                   subnetIDs,
 		"availability_zone_hints":   []string{},
 		"availability_zones":        []string{"nova"},
 		"ipv4_address_scope":        nil,
