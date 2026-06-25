@@ -344,7 +344,7 @@ func (svc *Service) CreateImage(c *gin.Context) {
 	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, min_disk_gb, min_ram_mb, protected, rbd_pool, rbd_image, properties, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	`, imageID, req.Name, sql.NullString{String: projectID, Valid: visibility == "private"}, "queued", visibility, diskFormat, containerFormat, req.MinDisk, req.MinRAM, req.Protected, svc.cephPool, "image-"+imageID, string(propsJSON), now, now)
+	`, imageID, req.Name, projectID, "queued", visibility, diskFormat, containerFormat, req.MinDisk, req.MinRAM, req.Protected, svc.cephPool, "image-"+imageID, string(propsJSON), now, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_image").Msg("failed to insert image into database")
@@ -924,12 +924,11 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 // UploadImageData uploads image data
 func (svc *Service) UploadImageData(c *gin.Context) {
 	imageID := c.Param("id")
-	projectID := c.GetString("project_id")
 
 	// Atomically transition status from queued to saving to prevent concurrent uploads
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		database.Q("UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND project_id::text = $4 AND status = 'queued'"),
-		"saving", time.Now(), imageID, projectID)
+		database.Q("UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND status = 'queued'"),
+		"saving", time.Now(), imageID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "upload_image").Str("image_id", imageID).Msg("failed to update image status")
 		common.SendError(c, common.NewInternalServerError("failed to update image status"))
@@ -939,7 +938,7 @@ func (svc *Service) UploadImageData(c *gin.Context) {
 		// Either image doesn't exist or it's not in queued state
 		var status string
 		checkErr := svc.activeDB().QueryRowContext(c.Request.Context(),
-			database.Q("SELECT status FROM images WHERE id = $1 AND project_id::text = $2"), imageID, projectID,
+			database.Q("SELECT status FROM images WHERE id = $1"), imageID,
 		).Scan(&status)
 		if errors.Is(checkErr, sql.ErrNoRows) {
 			common.SendError(c, common.NewNotFoundError("image"))

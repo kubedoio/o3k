@@ -2,6 +2,7 @@ package neutron
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -618,13 +619,13 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(fmt.Sprintf(`
 		SELECT n.id, n.name, n.project_id, n.admin_state_up, n.status, n.shared, n.mtu, n.network_type, n.is_external, n.created_at, n.updated_at
 		FROM networks n
 		WHERE %s
 		ORDER BY n.created_at ASC, n.id ASC
 		LIMIT $%d
-	`, strings.Join(conditions, " AND "), argIdx), queryArgs...)
+	`, strings.Join(conditions, " AND "), argIdx)), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_networks").Msg("database error")
@@ -638,9 +639,10 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 		var id, name, ownerProjectID, status, networkType string
 		var adminStateUp, shared, isExternal bool
 		var mtu int
-		var createdAt, updatedAt time.Time
+		var createdAtRaw, updatedAtRaw string
 
-		if err := rows.Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAtRaw, &updatedAtRaw); err != nil {
+			log.Warn().Err(err).Msg("failed to scan network row")
 			continue
 		}
 
@@ -665,8 +667,8 @@ func (svc *Service) ListNetworks(c *gin.Context) {
 			"ipv6_address_scope":        nil,
 			"is_default":                false,
 			"description":               "",
-			"created_at":                createdAt.Format(time.RFC3339),
-			"updated_at":                updatedAt.Format(time.RFC3339),
+			"created_at":                parseDBTime(createdAtRaw).Format(time.RFC3339),
+			"updated_at":                parseDBTime(updatedAtRaw).Format(time.RFC3339),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -713,14 +715,14 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 	var id, name, ownerProjectID, status, networkType string
 	var adminStateUp, shared, isExternal bool
 	var mtu int
-	var createdAt, updatedAt time.Time
+	var createdAtRaw, updatedAtRaw string
 
 	err := svc.activeDB().QueryRowContext(ctx, database.Q(`
 		SELECT id, name, project_id, admin_state_up, status, shared, mtu, network_type, is_external, created_at, updated_at
 		FROM networks
 		WHERE (id::text = $1 OR name = $1) AND (project_id::text = $2 OR shared = true)
 		LIMIT 1
-	`), networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAt, &updatedAt)
+	`), networkID, projectID).Scan(&id, &name, &ownerProjectID, &adminStateUp, &status, &shared, &mtu, &networkType, &isExternal, &createdAtRaw, &updatedAtRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("network"))
@@ -753,8 +755,8 @@ func (svc *Service) GetNetwork(c *gin.Context) {
 		"ipv6_address_scope":        nil,
 		"is_default":                false,
 		"description":               "",
-		"created_at":                createdAt.Format(time.RFC3339),
-		"updated_at":                updatedAt.Format(time.RFC3339),
+		"created_at":                parseDBTime(createdAtRaw).Format(time.RFC3339),
+		"updated_at":                parseDBTime(updatedAtRaw).Format(time.RFC3339),
 	}
 
 	// Store in cache (30min TTL per config)
@@ -1011,10 +1013,14 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
+	dnsJSON, _ := json.Marshal(req.Subnet.DNSNameservers)
+	if dnsJSON == nil {
+		dnsJSON = []byte("[]")
+	}
 	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, ip_version, enable_dhcp, dns_nameservers, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, subnetID, req.Subnet.Name, req.Subnet.NetworkID, projectID, req.Subnet.CIDR, gatewayIP, ipVersion, enableDHCP, req.Subnet.DNSNameservers, now, now)
+	`, subnetID, req.Subnet.Name, req.Subnet.NetworkID, projectID, req.Subnet.CIDR, gatewayIP, ipVersion, enableDHCP, string(dnsJSON), now, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_subnet").Msg("database error")
@@ -1128,14 +1134,14 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 
 	queryArgs = append(queryArgs, limit+1)
 
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), fmt.Sprintf(`
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(fmt.Sprintf(`
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
 		WHERE %s
 		ORDER BY s.created_at ASC, s.id ASC
 		LIMIT $%d
-	`, strings.Join(conditions, " AND "), argIdx), queryArgs...)
+	`, strings.Join(conditions, " AND "), argIdx)), queryArgs...)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_subnets").Msg("database error")
@@ -1149,11 +1155,18 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 		var id, name, networkID, cidr, gatewayIP string
 		var ipVersion int
 		var enableDHCP bool
-		var dnsNameservers []string
-		var createdAt, updatedAt time.Time
+		var dnsNameservers []byte
+		var createdAtRaw, updatedAtRaw string
 
-		if err := rows.Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameservers, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameservers, &createdAtRaw, &updatedAtRaw); err != nil {
+			log.Warn().Err(err).Msg("failed to scan subnet row")
 			continue
+		}
+
+		var dnsList []string
+		_ = json.Unmarshal(dnsNameservers, &dnsList)
+		if dnsList == nil {
+			dnsList = []string{}
 		}
 
 		subnets = append(subnets, gin.H{
@@ -1165,13 +1178,13 @@ func (svc *Service) ListSubnets(c *gin.Context) {
 			"gateway_ip":      gatewayIP,
 			"ip_version":      ipVersion,
 			"enable_dhcp":     enableDHCP,
-			"dns_nameservers": dnsNameservers,
+			"dns_nameservers": dnsList,
 			"service_types":   []string{},
 			"subnetpool_id":   nil,
 			"revision_number": 1,
 			"tags":            []string{},
-			"created_at":      createdAt.Format(time.RFC3339),
-			"updated_at":      updatedAt.Format(time.RFC3339),
+			"created_at":      parseDBTime(createdAtRaw).Format(time.RFC3339),
+			"updated_at":      parseDBTime(updatedAtRaw).Format(time.RFC3339),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1206,15 +1219,15 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 	var id, name, networkID, cidr, gatewayIP string
 	var ipVersion int
 	var enableDHCP bool
-	var dnsNameservers []string
-	var createdAt, updatedAt time.Time
+	var dnsNameserversRaw []byte
+	var createdAtRaw, updatedAtRaw string
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT s.id, s.name, s.network_id, s.cidr, s.gateway_ip, s.ip_version, s.enable_dhcp, s.dns_nameservers, s.created_at, s.updated_at
 		FROM subnets s
 		JOIN networks n ON s.network_id = n.id
 		WHERE s.id = $1 AND (s.project_id::text = $2 OR n.shared = true)
-	`), subnetID, projectID).Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameservers, &createdAt, &updatedAt)
+	`), subnetID, projectID).Scan(&id, &name, &networkID, &cidr, &gatewayIP, &ipVersion, &enableDHCP, &dnsNameserversRaw, &createdAtRaw, &updatedAtRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("subnet"))
@@ -1224,6 +1237,12 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 		log.Error().Err(err).Str("operation", "get_subnet").Str("subnet_id", subnetID).Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to get subnet"))
 		return
+	}
+
+	var dnsList []string
+	_ = json.Unmarshal(dnsNameserversRaw, &dnsList)
+	if dnsList == nil {
+		dnsList = []string{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1236,13 +1255,13 @@ func (svc *Service) GetSubnet(c *gin.Context) {
 			"gateway_ip":      gatewayIP,
 			"ip_version":      ipVersion,
 			"enable_dhcp":     enableDHCP,
-			"dns_nameservers": dnsNameservers,
+			"dns_nameservers": dnsList,
 			"service_types":   []string{},
 			"subnetpool_id":   nil,
 			"revision_number": 1,
 			"tags":            []string{},
-			"created_at":      createdAt.Format(time.RFC3339),
-			"updated_at":      updatedAt.Format(time.RFC3339),
+			"created_at":      parseDBTime(createdAtRaw).Format(time.RFC3339),
+			"updated_at":      parseDBTime(updatedAtRaw).Format(time.RFC3339),
 		},
 	})
 }
@@ -1481,4 +1500,21 @@ func generateMAC() string {
 	}
 	buf[0] = (buf[0] | 2) & 0xfe // Set local bit, clear multicast bit
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
+}
+
+// parseDBTime parses a timestamp string that may come from SQLite (which stores
+// time.Time as its String() representation including the monotonic suffix).
+func parseDBTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if idx := strings.Index(s, " m="); idx >= 0 {
+		s = s[:idx]
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999 -0700 MST", "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

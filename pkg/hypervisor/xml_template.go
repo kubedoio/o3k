@@ -165,15 +165,37 @@ func GenerateVMXML(spec VMSpec) string {
 `, xmlEscape(vol.RBDPool), xmlEscape(vol.RBDImage), renderRBDHosts(spec.CephMonitors), xmlEscape(device)))
 	}
 
-	// Network interfaces
-	for _, net := range spec.Networks {
-		sb.WriteString(fmt.Sprintf(`
+	// Network interfaces — use bridge if one was provisioned, otherwise fall
+	// back to the libvirt 'default' NAT network so the VM can start in stub
+	// networking mode where no host bridges have been created.
+	if len(spec.Networks) > 0 {
+		for _, net := range spec.Networks {
+			if net.BridgeName != "" {
+				sb.WriteString(fmt.Sprintf(`
     <interface type='bridge'>
       <mac address='%s'/>
       <source bridge='%s'/>
       <model type='virtio'/>
     </interface>
 `, xmlEscape(net.MACAddress), xmlEscape(net.BridgeName)))
+			} else {
+				sb.WriteString(fmt.Sprintf(`
+    <interface type='network'>
+      <mac address='%s'/>
+      <source network='default'/>
+      <model type='virtio'/>
+    </interface>
+`, xmlEscape(net.MACAddress)))
+			}
+		}
+	} else {
+		// No networks allocated — attach to libvirt default for basic connectivity
+		sb.WriteString(`
+    <interface type='network'>
+      <source network='default'/>
+      <model type='virtio'/>
+    </interface>
+`)
 	}
 
 	// Serial console

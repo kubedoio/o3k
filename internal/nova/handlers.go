@@ -31,6 +31,7 @@ type Service struct {
 	db             *sql.DB
 	libvirtURI     string
 	libvirtMode    string
+	networkingMode string // mirrors Neutron's mode; "stub" means no host bridges
 	NoVNCProxyHost string // Configured noVNC proxy hostname; falls back to request Host if empty
 	vmManager      *hypervisor.VMManager
 	cache          *cache.Cache
@@ -91,6 +92,12 @@ func (svc *Service) Shutdown() {
 // SetNeutronService sets the Neutron service reference (called after both services are created)
 func (svc *Service) SetNeutronService(neutron *neutron.Service) {
 	svc.neutronSvc = neutron
+}
+
+// SetNetworkingMode records the active networking mode so VM XML can omit
+// host bridges when they were not created (stub mode).
+func (svc *Service) SetNetworkingMode(mode string) {
+	svc.networkingMode = mode
 }
 
 // SetDispatcher wires the tunnel Hub for async task dispatch.
@@ -579,10 +586,17 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 					// Type assert to neutron.PortInfo
 					if portInfo, ok := portInfoRaw.(*neutron.PortInfo); ok {
+						// Only set BridgeName when networking is real (bridge exists on host).
+						// In stub mode the bridge is never created, so leave it empty and the
+						// XML template falls back to the libvirt 'default' NAT network.
+						bridgeName := ""
+						if svc.networkingMode != "stub" {
+							bridgeName = fmt.Sprintf("br-%s", portInfo.NetworkID[:8])
+						}
 						networks = append(networks, hypervisor.NetworkConfig{
 							PortID:     portInfo.ID,
 							MACAddress: portInfo.MAC,
-							BridgeName: fmt.Sprintf("br-%s", portInfo.NetworkID[:8]),
+							BridgeName: bridgeName,
 							IPAddress:  portInfo.IPAddress,
 							NetworkID:  portInfo.NetworkID,
 						})
@@ -656,12 +670,11 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 			if err != nil {
 				log.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create VM via libvirt")
-				// Update instance status to ERROR
 				dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
 				defer dbCancel()
 				if _, derr := svc.activeDB().ExecContext(dbCtx,
-					database.Q("UPDATE instances SET status = $1, updated_at = $2 WHERE id = $3"),
-					"ERROR", time.Now(), instanceID); derr != nil {
+					database.Q("UPDATE instances SET status = $1, fault_message = $2, updated_at = $3 WHERE id = $4"),
+					"ERROR", err.Error(), time.Now(), instanceID); derr != nil {
 					log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to mark instance ERROR after libvirt failure")
 				}
 				return
