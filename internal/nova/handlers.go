@@ -44,6 +44,7 @@ type Service struct {
 	// (host:port) used when emitting libvirt XML for RBD-backed disks.
 	// Empty falls back to 127.0.0.1:6789 inside the XML template.
 	cephMonitors []string
+	flatBridge   string // shared bridge name in flat networking mode
 }
 
 const (
@@ -98,6 +99,16 @@ func (svc *Service) SetNeutronService(neutron *neutron.Service) {
 // host bridges when they were not created (stub mode).
 func (svc *Service) SetNetworkingMode(mode string) {
 	svc.networkingMode = mode
+}
+
+// SetFlatBridge records the shared bridge name used in flat networking mode.
+func (svc *Service) SetFlatBridge(name string) {
+	svc.flatBridge = name
+}
+
+// GetFlatBridge returns the configured flat bridge name.
+func (svc *Service) GetFlatBridge() string {
+	return svc.flatBridge
 }
 
 // SetDispatcher wires the tunnel Hub for async task dispatch.
