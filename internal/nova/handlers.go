@@ -180,6 +180,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v21.GET("/os-hypervisors", svc.ListHypervisors)
 		v21.GET("/os-hypervisors/detail", svc.ListHypervisorsDetail)
 		v21.GET("/os-hypervisors/statistics", svc.GetHypervisorStatistics)
+		v21.GET("/os-hypervisors/:id", svc.GetHypervisor)
 
 		// Availability zones
 		v21.GET("/os-availability-zone", svc.ListAvailabilityZones)
@@ -280,6 +281,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v21p.GET("/os-hypervisors", svc.ListHypervisors)
 		v21p.GET("/os-hypervisors/detail", svc.ListHypervisorsDetail)
 		v21p.GET("/os-hypervisors/statistics", svc.GetHypervisorStatistics)
+		v21p.GET("/os-hypervisors/:id", svc.GetHypervisor)
 		v21p.GET("/os-availability-zone", svc.ListAvailabilityZones)
 		v21p.GET("/os-availability-zone/detail", svc.ListAvailabilityZonesDetail)
 		v21p.GET("/limits", svc.GetLimits)
@@ -2180,78 +2182,39 @@ func (svc *Service) ListImagesDetail(c *gin.Context) {
 
 // ListHypervisors lists hypervisors (mock for Horizon)
 func (svc *Service) ListHypervisors(c *gin.Context) {
-	c.JSON(200, gin.H{"hypervisors": []gin.H{
-		{
-			"id":                  1,
-			"hypervisor_hostname": "o3k-node-1",
-			"state":               "up",
-			"status":              "enabled",
-			"hypervisor_type":     "QEMU",
-			"hypervisor_version":  2012000,
-			"vcpus":               16,
-			"memory_mb":           32768,
-			"local_gb":            1000,
-			"vcpus_used":          0,
-			"memory_mb_used":      0,
-			"local_gb_used":       0,
-			"free_disk_gb":        900,
-			"free_ram_mb":         28672,
-			"running_vms":         0,
-		},
-	}})
+	s := readHostStats(c.Request.Context(), svc.activeDB())
+	c.JSON(200, gin.H{"hypervisors": []gin.H{buildHypervisorJSON(s, false)}})
 }
 
 // ListHypervisorsDetail lists hypervisors with details (mock for Horizon)
 func (svc *Service) ListHypervisorsDetail(c *gin.Context) {
-	cpuInfoJSON := `{"arch":"x86_64","model":"Skylake-Server-IBRS","vendor":"Intel","features":[],"topology":{"cores":8,"threads":2,"sockets":1}}`
+	s := readHostStats(c.Request.Context(), svc.activeDB())
+	c.JSON(200, gin.H{"hypervisors": []gin.H{buildHypervisorJSON(s, true)}})
+}
 
-	c.JSON(200, gin.H{"hypervisors": []gin.H{
-		{
-			"id":                  1,
-			"hypervisor_hostname": "o3k-node-1",
-			"state":               "up",
-			"status":              "enabled",
-			"vcpus":               16,
-			"memory_mb":           32768,
-			"local_gb":            1000,
-			"vcpus_used":          0,
-			"memory_mb_used":      0,
-			"local_gb_used":       0,
-			"free_disk_gb":        900,
-			"free_ram_mb":         28672,
-			"hypervisor_type":     "QEMU",
-			"hypervisor_version":  2012000,
-			"running_vms":         0,
-			"cpu_info":            cpuInfoJSON,
-		},
-	}})
+// GetHypervisor returns a single hypervisor by ID (Horizon detail page)
+func (svc *Service) GetHypervisor(c *gin.Context) {
+	s := readHostStats(c.Request.Context(), svc.activeDB())
+	c.JSON(200, gin.H{"hypervisor": buildHypervisorJSON(s, true)})
 }
 
 // GetHypervisorStatistics returns aggregated hypervisor statistics (for Horizon)
 func (svc *Service) GetHypervisorStatistics(c *gin.Context) {
-	// Count running instances
-	var runningVMs int
-	if err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COUNT(*) FROM instances WHERE power_state = 1",
-	).Scan(&runningVMs); err != nil {
-		log.Debug().Err(err).Str("operation", "hypervisor_stats_running").Msg("failed to count running VMs")
-	}
-
-	// Return aggregated stats
+	s := readHostStats(c.Request.Context(), svc.activeDB())
 	c.JSON(200, gin.H{
 		"hypervisor_statistics": gin.H{
 			"count":                1,
 			"current_workload":     0,
-			"disk_available_least": 800,
-			"free_disk_gb":         900,
-			"free_ram_mb":          28672,
-			"local_gb":             1000,
-			"local_gb_used":        100,
-			"memory_mb":            32768,
-			"memory_mb_used":       4096,
-			"running_vms":          runningVMs,
-			"vcpus":                16,
-			"vcpus_used":           runningVMs * 2, // Assume 2 vCPUs per VM
+			"disk_available_least": s.freeGB,
+			"free_disk_gb":         s.freeGB,
+			"free_ram_mb":          s.freeMB,
+			"local_gb":             s.localGB,
+			"local_gb_used":        s.localGB - s.freeGB,
+			"memory_mb":            s.memoryMB,
+			"memory_mb_used":       s.memoryMB - s.freeMB,
+			"running_vms":          s.runningVMs,
+			"vcpus":                s.vcpus,
+			"vcpus_used":           0,
 		},
 	})
 }
