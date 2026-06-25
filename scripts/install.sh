@@ -292,6 +292,7 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
         "SECRET_KEY = \"${HORIZON_SECRET}\"" \
         'ALLOWED_HOSTS = ["*"]' \
         'USE_X_FORWARDED_HOST = True' \
+        'USE_X_FORWARDED_PORT = True' \
         'SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")' \
         'OPENSTACK_API_VERSIONS = {"identity": 3, "image": 2, "volume": 3}' \
         'OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True' \
@@ -301,6 +302,11 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
         'CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}' \
         'COMPRESS_OFFLINE = False' \
         'DEBUG = False' \
+        'SESSION_COOKIE_SECURE = False' \
+        'CSRF_COOKIE_SECURE = False' \
+        'SESSION_COOKIE_SAMESITE = None' \
+        'CSRF_COOKIE_SAMESITE = None' \
+        'SESSION_SAVE_EVERY_REQUEST = True' \
         > "$HORIZON_SETTINGS"
     chmod 644 "$HORIZON_SETTINGS"
 
