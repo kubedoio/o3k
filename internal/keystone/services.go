@@ -33,9 +33,9 @@ func (svc *Service) ListServices(c *gin.Context) {
 		var id, svcType, name string
 		var description *string
 		var enabled bool
-		var createdAt, updatedAt time.Time
+		var createdAtRaw, updatedAtRaw string
 
-		if err := rows.Scan(&id, &svcType, &name, &description, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &svcType, &name, &description, &enabled, &createdAtRaw, &updatedAtRaw); err != nil {
 			continue
 		}
 
@@ -227,26 +227,31 @@ func (svc *Service) UpdateService(c *gin.Context) {
 		UPDATE services
 		SET %s
 		WHERE id = $%d
-		RETURNING id, type, name, description, enabled, created_at, updated_at
 	`, strings.Join(updates, ", "), paramIndex)
 
 	// Execute update
+	result, err := svc.activeDB().ExecContext(c.Request.Context(), query, params...)
+	if err != nil {
+		log.Error().Err(err).Str("operation", "update_service").Str("service_id", serviceID).Msg("Failed to update service")
+		common.SendError(c, common.NewInternalServerError("failed to update service"))
+		return
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		common.SendError(c, common.NewNotFoundError("service"))
+		return
+	}
+
+	// Re-query updated service
 	var id, svcType, name string
 	var description *string
 	var enabled bool
-	var createdAt, updatedAt time.Time
 
-	err := svc.activeDB().QueryRowContext(c.Request.Context(), query, params...).Scan(
-		&id, &svcType, &name, &description, &enabled, &createdAt, &updatedAt,
-	)
-
+	err = svc.activeDB().QueryRowContext(c.Request.Context(), `
+		SELECT id, type, name, description, enabled FROM services WHERE id = $1
+	`, serviceID).Scan(&id, &svcType, &name, &description, &enabled)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			common.SendError(c, common.NewNotFoundError("service"))
-			return
-		}
-		log.Error().Err(err).Str("operation", "update_service").Str("service_id", serviceID).Msg("Failed to update service")
-		common.SendError(c, common.NewInternalServerError("failed to update service"))
+		log.Error().Err(err).Str("operation", "update_service_fetch").Str("service_id", serviceID).Msg("Failed to fetch updated service")
+		common.SendError(c, common.NewInternalServerError("failed to fetch updated service"))
 		return
 	}
 

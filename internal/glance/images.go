@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
@@ -248,6 +249,10 @@ func parseImageTime(raw string) time.Time {
 	if raw == "" {
 		return time.Time{}
 	}
+	// Strip Go's monotonic clock suffix: "... m=+97.367633695"
+	if i := strings.Index(raw, " m=+"); i != -1 {
+		raw = raw[:i]
+	}
 	for _, layout := range []string{
 		time.RFC3339Nano,
 		time.RFC3339,
@@ -457,14 +462,14 @@ func (svc *Service) ListImages(c *gin.Context) {
 
 	// Marker-based pagination
 	if marker := c.Query("marker"); marker != "" {
-		var markerCreatedAt time.Time
+		var markerCreatedAtRaw string
 		err := svc.activeDB().QueryRowContext(c.Request.Context(),
 			database.Q("SELECT created_at FROM images WHERE id = $1 AND (visibility = 'public' OR project_id::text = $2)"),
 			marker, projectID,
-		).Scan(&markerCreatedAt)
+		).Scan(&markerCreatedAtRaw)
 		if err == nil {
 			conditions = append(conditions, fmt.Sprintf("created_at < $%d", argIdx))
-			queryArgs = append(queryArgs, markerCreatedAt)
+			queryArgs = append(queryArgs, markerCreatedAtRaw)
 			argIdx++
 		}
 	}
@@ -529,11 +534,11 @@ func (svc *Service) ListImages(c *gin.Context) {
 		var sizeBytes sql.NullInt64
 		var minDisk, minRAM int
 		var protected bool
-		var createdAt, updatedAt time.Time
+		var createdAtRaw, updatedAtRaw string
 		var imageOwner string
 		var checksum, osHashAlgo, osHashValue sql.NullString
 
-		if err := rows.Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &protected, &createdAt, &updatedAt, &imageOwner, &checksum, &osHashAlgo, &osHashValue); err != nil {
+		if err := rows.Scan(&id, &name, &status, &visibility, &sizeBytes, &diskFormat, &containerFormat, &minDisk, &minRAM, &protected, &createdAtRaw, &updatedAtRaw, &imageOwner, &checksum, &osHashAlgo, &osHashValue); err != nil {
 			continue
 		}
 
@@ -552,8 +557,8 @@ func (svc *Service) ListImages(c *gin.Context) {
 			"os_hash_algo":     nullStringOrEmpty(osHashAlgo),
 			"os_hash_value":    nullStringOrEmpty(osHashValue),
 			"tags":             []string{},
-			"created_at":       createdAt.Format(time.RFC3339),
-			"updated_at":       updatedAt.Format(time.RFC3339),
+			"created_at":       parseImageTime(createdAtRaw).Format(time.RFC3339),
+			"updated_at":       parseImageTime(updatedAtRaw).Format(time.RFC3339),
 			"self":             fmt.Sprintf("/v2/images/%s", id),
 			"file":             fmt.Sprintf("/v2/images/%s/file", id),
 			"schema":           "/v2/schemas/image",
@@ -1158,9 +1163,9 @@ func (svc *Service) ListImageMembers(c *gin.Context) {
 	var members []gin.H
 	for rows.Next() {
 		var memberID, status string
-		var createdAt, updatedAt time.Time
+		var createdAtRaw, updatedAtRaw string
 
-		if err := rows.Scan(&memberID, &status, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&memberID, &status, &createdAtRaw, &updatedAtRaw); err != nil {
 			log.Warn().Err(err).Msg("failed to scan image member row")
 			continue
 		}
@@ -1169,8 +1174,8 @@ func (svc *Service) ListImageMembers(c *gin.Context) {
 			"member_id":  memberID,
 			"image_id":   imageID,
 			"status":     status,
-			"created_at": createdAt.Format(time.RFC3339),
-			"updated_at": updatedAt.Format(time.RFC3339),
+			"created_at": parseImageTime(createdAtRaw).Format(time.RFC3339),
+			"updated_at": parseImageTime(updatedAtRaw).Format(time.RFC3339),
 			"schema":     "/v2/schemas/member",
 		})
 	}
@@ -1220,12 +1225,12 @@ func (svc *Service) GetImageMember(c *gin.Context) {
 	}
 
 	var status string
-	var createdAt, updatedAt time.Time
+	var createdAtRaw, updatedAtRaw string
 	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT status, created_at, updated_at
 		FROM image_members
 		WHERE image_id = $1 AND member_id::text = $2
-	`), imageID, memberID).Scan(&status, &createdAt, &updatedAt)
+	`), imageID, memberID).Scan(&status, &createdAtRaw, &updatedAtRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		common.SendError(c, common.NewNotFoundError("member"))
@@ -1241,8 +1246,8 @@ func (svc *Service) GetImageMember(c *gin.Context) {
 		"member_id":  memberID,
 		"image_id":   imageID,
 		"status":     status,
-		"created_at": createdAt.Format(time.RFC3339),
-		"updated_at": updatedAt.Format(time.RFC3339),
+		"created_at": parseImageTime(createdAtRaw).Format(time.RFC3339),
+		"updated_at": parseImageTime(updatedAtRaw).Format(time.RFC3339),
 		"schema":     "/v2/schemas/member",
 	})
 }
@@ -1316,12 +1321,12 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 
 	// Return updated member
 	var status string
-	var createdAt, updatedAt time.Time
+	var createdAtRaw, updatedAtRaw string
 	err = svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT status, created_at, updated_at
 		FROM image_members
 		WHERE image_id = $1 AND member_id::text = $2
-	`), imageID, memberID).Scan(&status, &createdAt, &updatedAt)
+	`), imageID, memberID).Scan(&status, &createdAtRaw, &updatedAtRaw)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "update_image_member_fetch").Str("image_id", imageID).Msg("failed to fetch updated image member")
@@ -1333,8 +1338,8 @@ func (svc *Service) UpdateImageMember(c *gin.Context) {
 		"member_id":  memberID,
 		"image_id":   imageID,
 		"status":     status,
-		"created_at": createdAt.Format(time.RFC3339),
-		"updated_at": updatedAt.Format(time.RFC3339),
+		"created_at": parseImageTime(createdAtRaw).Format(time.RFC3339),
+		"updated_at": parseImageTime(updatedAtRaw).Format(time.RFC3339),
 		"schema":     "/v2/schemas/member",
 	})
 }
