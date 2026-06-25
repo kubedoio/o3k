@@ -297,6 +297,16 @@ func TestNeutronFlatModeDefaults(t *testing.T) {
 	}
 }
 
+func TestNeutronFlatModeDefaultsNotAppliedForOtherModes(t *testing.T) {
+	cfg := &Config{
+		Neutron: NeutronConfig{NetworkingMode: "iptables"},
+	}
+	ApplyFlatModeDefaults(cfg)
+	if cfg.Neutron.FlatBridge != "" {
+		t.Errorf("expected FlatBridge to remain empty for iptables mode, got %s", cfg.Neutron.FlatBridge)
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
 }

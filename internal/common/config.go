@@ -302,7 +302,7 @@ func ValidateConfig(cfg *Config) error {
 			return fmt.Errorf("nova.libvirt_mode=\"stub\" is refused when O3K_ENV=production (set libvirt_mode to \"real\")")
 		}
 		if cfg.Neutron.NetworkingMode == "stub" {
-			return fmt.Errorf("neutron.networking_mode=\"stub\" is refused when O3K_ENV=production (set networking_mode to \"iptables\" or \"ebpf\")")
+			return fmt.Errorf("neutron.networking_mode=\"stub\" is refused when O3K_ENV=production (set networking_mode to \"iptables\", \"ebpf\", or \"flat\")")
 		}
 		if cfg.Cinder.StorageMode == "stub" {
 			return fmt.Errorf("cinder.storage_mode=\"stub\" is refused when O3K_ENV=production (set storage_mode to \"local\", \"rbd\", \"s3\", or a hybrid)")
