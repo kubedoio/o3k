@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.7] - 2026-06-25
+
+### Added
+- **Kolla-style bootstrap** (`scripts/bootstrap.sh`): after install, automatically
+  creates `default-net` (192.168.100.0/24), uploads CirrOS 0.6.2 to Glance, and
+  boots a `test-vm` — identical to a fresh Kolla deployment. Set `O3K_NO_BOOTSTRAP=true`
+  to skip. Idempotent: re-running skips existing resources.
+
+### Fixed
+- **SQLite deadlock** (`internal/database/db.go`): `MaxOpenConns(1)` + `_txlock=immediate`
+  forced every query (reads and writes) to acquire the exclusive write lock. Under any
+  concurrent load (Horizon, CLI, API) requests queued behind each other until the 30s
+  timeout fired with no response. Fixed: WAL concurrent reads, `MaxOpenConns(16)`,
+  5s busy timeout.
+- **Glance public image upload 404** (`internal/glance/images.go`): `project_id` was
+  stored as NULL for public images (`NullString{Valid: visibility=="private"}`), so the
+  upload `WHERE id=$1 AND status='queued'` matched nothing. Store `project_id`
+  unconditionally; upload filter now matches by ID only.
+- **Neutron network/subnet list returns empty** (`internal/neutron/network.go`):
+  `ListNetworks` and `ListSubnets` built queries with `fmt.Sprintf` without wrapping in
+  `database.Q()`, so `$1`/`$2` placeholders were never rewritten to `?` for SQLite.
+  Result: zero rows returned for all network and subnet list calls.
+- **Neutron timestamp scan panic** (`internal/neutron/network.go`): `created_at` and
+  `updated_at` were scanned into `time.Time` but SQLite stores Go's `time.String()`
+  format (including monotonic suffix). Scan as string, parse with `parseDBTime()`.
+- **Neutron subnet 500 on dns_nameservers** (`internal/neutron/network.go`): `[]string`
+  was passed raw to a SQLite TEXT column; JSON-encode before INSERT.
+- **Nova VM stuck in ERROR with no fault message** (`internal/nova/handlers.go`):
+  In stub networking mode, `BridgeName` was set to `br-<networkID[:8]>` even though no
+  host bridge is created, causing libvirt `DomainCreate` to fail with "Cannot get
+  interface MTU". In stub mode, leave `BridgeName` empty; XML template falls back to
+  libvirt's `default` NAT network. Also store the libvirt error in `fault_message` so
+  failures are visible via the API.
+
+---
+
 ## [0.2.0] - 2026-06-24
 
 ### Added
