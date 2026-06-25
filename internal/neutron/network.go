@@ -34,6 +34,8 @@ type Service struct {
 	sgManager        *networking.SecurityGroupManager
 	vxlanCoordinator *VXLANCoordinator
 	cache            *cache.Cache
+	flatBridge       string
+	flatManager      *networking.FlatNetworkManager
 }
 
 // NewService creates a new Neutron service
@@ -58,6 +60,29 @@ func NewServiceWithDB(db *sql.DB, mode string, cacheInstance *cache.Cache) *Serv
 	svc := NewService(mode, cacheInstance)
 	svc.db = db
 	return svc
+}
+
+// NewServiceFlat creates a Neutron service in flat networking mode.
+// flatBridge is the pre-existing bridge name (e.g. "br-o3k").
+// flatSubnet, flatGateway, flatDNS are accepted for API symmetry with the
+// config layer but are not stored on the struct — they are used by the
+// installer/main.go wiring.
+func NewServiceFlat(mode, flatBridge, flatSubnet, flatGateway, flatDNS string, cacheInstance *cache.Cache) *Service {
+	sgManager, err := networking.NewSecurityGroupManager(mode, "")
+	if err != nil {
+		log.Error().Err(err).Str("mode", mode).Msg("failed to initialize security group manager")
+	}
+	return &Service{
+		mode:        mode,
+		flatBridge:  flatBridge,
+		flatManager: networking.NewFlatNetworkManager(mode, flatBridge),
+		nsManager:   networking.NewNetworkNamespaceManager(mode),
+		brManager:   networking.NewBridgeManager(mode),
+		tapManager:  networking.NewTAPDeviceManager(mode),
+		dhcpManager: networking.NewDHCPManager(mode),
+		sgManager:   sgManager,
+		cache:       cacheInstance,
+	}
 }
 
 // activeDB returns the injected DB or falls back to the global database.DB
@@ -527,9 +552,11 @@ func (svc *Service) CreateNetwork(c *gin.Context) {
 	// If bridge creation fails the network row already exists — log a warning so an
 	// operator can reconcile, but don't return an error: the network is recoverable
 	// (bridge will be created lazily on next port attach).
-	if err := svc.brManager.CreateBridge(bridgeName, false, ""); err != nil {
-		log.Warn().Err(err).Str("operation", "create_bridge").Str("bridge", bridgeName).
-			Msg("bridge creation failed after DB insert; network exists but bridge is absent — reconcile manually")
+	if svc.flatBridge == "" {
+		if err := svc.brManager.CreateBridge(bridgeName, false, ""); err != nil {
+			log.Warn().Err(err).Str("operation", "create_bridge").Str("bridge", bridgeName).
+				Msg("bridge creation failed after DB insert; network exists but bridge is absent — reconcile manually")
+		}
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -1030,21 +1057,40 @@ func (svc *Service) CreateSubnet(c *gin.Context) {
 
 	// Start DHCP server if enabled
 	if enableDHCP {
-		bridgeName := "br-" + req.Subnet.NetworkID[:8]
-		nsName := svc.nsManager.GetNamespaceName(projectID)
+		if svc.flatBridge != "" {
+			flatCfg := networking.FlatDHCPConfig{
+				SubnetID:   subnetID,
+				BridgeName: svc.flatBridge,
+				CIDR:       req.Subnet.CIDR,
+				GatewayIP:  gatewayIP,
+				RangeStart: incrementIP(ipNet.IP, 10).String(),
+				RangeEnd:   incrementIP(ipNet.IP, 250).String(),
+				LeaseTime:  "24h",
+				DNS: func() string {
+					if len(req.Subnet.DNSNameservers) > 0 {
+						return req.Subnet.DNSNameservers[0]
+					}
+					return "8.8.8.8"
+				}(),
+			}
+			go func() { _ = svc.flatManager.StartDHCP(flatCfg) }()
+		} else {
+			bridgeName := "br-" + req.Subnet.NetworkID[:8]
+			nsName := svc.nsManager.GetNamespaceName(projectID)
 
-		dhcpConfig := networking.DHCPConfig{
-			NetworkID:      req.Subnet.NetworkID,
-			BridgeName:     bridgeName,
-			SubnetCIDR:     req.Subnet.CIDR,
-			GatewayIP:      gatewayIP,
-			DNSServers:     req.Subnet.DNSNameservers,
-			DHCPRangeStart: incrementIP(ipNet.IP, 10).String(),
-			DHCPRangeEnd:   incrementIP(ipNet.IP, 250).String(),
-			LeaseTime:      "24h",
+			dhcpConfig := networking.DHCPConfig{
+				NetworkID:      req.Subnet.NetworkID,
+				BridgeName:     bridgeName,
+				SubnetCIDR:     req.Subnet.CIDR,
+				GatewayIP:      gatewayIP,
+				DNSServers:     req.Subnet.DNSNameservers,
+				DHCPRangeStart: incrementIP(ipNet.IP, 10).String(),
+				DHCPRangeEnd:   incrementIP(ipNet.IP, 250).String(),
+				LeaseTime:      "24h",
+			}
+
+			go func() { _ = svc.dhcpManager.StartDHCP(dhcpConfig, nsName) }()
 		}
-
-		go func() { _ = svc.dhcpManager.StartDHCP(dhcpConfig, nsName) }()
 	}
 
 	// Calculate allocation pools (entire subnet minus gateway).
