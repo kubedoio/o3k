@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Flat networking mode** (`networking_mode: flat`): optional single-host mode that gives
+  VMs internet access via a shared bridge (`br-o3k`) and iptables NAT. Enable with
+  `O3K_FLAT_NETWORK=true` during install, or run `scripts/setup-flat-network.sh` on an
+  existing install and set `networking_mode: flat` in `/etc/o3k/config.yaml`. Existing
+  installs using `stub` or `iptables` mode are unaffected.
+
 ### Phase 3 — SCS Alignment
 
 #### Added
