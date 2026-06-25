@@ -3,10 +3,11 @@ package networking
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const defaultFlatDataDir = "/var/lib/o3k"
@@ -114,8 +115,9 @@ func (m *FlatNetworkManager) StopDHCP(subnetID string) error {
 	if err != nil {
 		return nil // already stopped
 	}
-	pid := strings.TrimSpace(string(data))
-	_ = exec.Command("kill", pid).Run()
+	if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
 	_ = os.Remove(pidFile)
 
 	m.mu.Lock()
@@ -158,8 +160,9 @@ func (m *FlatNetworkManager) AddDHCPReservation(subnetID, mac, ip, hostname stri
 
 	pidFile := m.pidFilePath(subnetID)
 	if data, err := os.ReadFile(pidFile); err == nil {
-		pid := strings.TrimSpace(string(data))
-		_ = exec.Command("kill", "-HUP", pid).Run()
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGHUP)
+		}
 	}
 
 	return nil
@@ -175,7 +178,10 @@ func (m *FlatNetworkManager) pidFilePath(subnetID string) string {
 
 func (m *FlatNetworkManager) ensureHostsFile(subnetID string) error {
 	p := m.hostsFilePath(subnetID)
-	if _, err := os.Stat(p); os.IsNotExist(err) {
+	if _, err := os.Stat(p); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to stat hosts file %s: %w", p, err)
+		}
 		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 			return err
 		}
