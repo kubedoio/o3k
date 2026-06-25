@@ -242,6 +242,13 @@ Requires Linux with appropriate dependencies.
 - Uses `github.com/vishvananda/netlink` for namespace/bridge creation
 - iptables via `github.com/coreos/go-iptables` for security groups
 
+**Neutron flat mode** (`networking_mode: flat`):
+- Opt-in single-host mode. Enable with `O3K_FLAT_NETWORK=true` during install, or run `scripts/setup-flat-network.sh` on an existing install.
+- Pre-existing bridge `br-o3k` (192.168.100.1/24) is shared across all tenant networks.
+- VMs get IPs via dnsmasq DHCP; outbound traffic uses iptables MASQUERADE.
+- Does not create per-network bridges or network namespaces.
+- Config fields: `neutron.flat_bridge`, `neutron.flat_subnet`, `neutron.flat_gateway`, `neutron.flat_dns`
+
 **Cinder/Glance real mode** (`storage_mode: local`, `rbd`, `s3`, or hybrid):
 - `local`: Host filesystem storage
 - `rbd`: Ceph RBD via `github.com/ceph/go-ceph`
