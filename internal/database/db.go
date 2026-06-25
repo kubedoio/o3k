@@ -70,7 +70,7 @@ func Connect(ctx context.Context, connString string, poolConfig *PoolConfig) err
 func ConnectSQLite(ctx context.Context, dbPath string) error {
 	// WAL mode allows concurrent readers. Drop _txlock=immediate so reads don't
 	// compete for the write lock. Multiple connections share the WAL safely.
-	dsn := dbPath + "?_journal=WAL&_busy_timeout=5000&cache=shared"
+	dsn := dbPath + "?_journal=WAL&_busy_timeout=30000&cache=shared"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("connect sqlite: %w", err)
