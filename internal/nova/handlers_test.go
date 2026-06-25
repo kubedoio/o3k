@@ -39,3 +39,10 @@ func TestSetDispatcher(t *testing.T) {
 	svc.SetDispatcher(hub)
 	// No panic — dispatcher is wired
 }
+
+func TestSetFlatBridge(t *testing.T) {
+	db := database.NewTestDB(t)
+	svc := nova.NewServiceWithDB(db, "stub")
+	svc.SetFlatBridge("br-o3k")
+	assert.Equal(t, "br-o3k", svc.GetFlatBridge())
+}

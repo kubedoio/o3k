@@ -32,6 +32,7 @@ type Service struct {
 	libvirtURI     string
 	libvirtMode    string
 	networkingMode string // mirrors Neutron's mode; "stub" means no host bridges
+	flatBridge     string // shared bridge name in flat networking mode
 	NoVNCProxyHost string // Configured noVNC proxy hostname; falls back to request Host if empty
 	vmManager      *hypervisor.VMManager
 	cache          *cache.Cache
@@ -98,6 +99,16 @@ func (svc *Service) SetNeutronService(neutron *neutron.Service) {
 // host bridges when they were not created (stub mode).
 func (svc *Service) SetNetworkingMode(mode string) {
 	svc.networkingMode = mode
+}
+
+// SetFlatBridge records the shared bridge name used in flat networking mode.
+func (svc *Service) SetFlatBridge(name string) {
+	svc.flatBridge = name
+}
+
+// GetFlatBridge returns the configured flat bridge name.
+func (svc *Service) GetFlatBridge() string {
+	return svc.flatBridge
 }
 
 // SetDispatcher wires the tunnel Hub for async task dispatch.
@@ -590,7 +601,12 @@ func (svc *Service) CreateServer(c *gin.Context) {
 						// In stub mode the bridge is never created, so leave it empty and the
 						// XML template falls back to the libvirt 'default' NAT network.
 						bridgeName := ""
-						if svc.networkingMode != "stub" {
+						switch svc.networkingMode {
+						case "flat":
+							bridgeName = svc.flatBridge
+						case "stub":
+							bridgeName = ""
+						default: // "iptables", "ebpf"
 							bridgeName = fmt.Sprintf("br-%s", portInfo.NetworkID[:8])
 						}
 						networks = append(networks, hypervisor.NetworkConfig{
