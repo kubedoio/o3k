@@ -553,6 +553,7 @@ func runServer(args []string) {
 
 	// Wire up Nova-Neutron integration (so Nova can allocate ports)
 	novaService.SetNeutronService(neutronService)
+	novaService.SetNetworkingMode(networkingMode)
 
 	// Wire async dispatcher when AsyncCompute is enabled and Hub is running
 	if cfg.Nova.AsyncCompute && hub != nil {

@@ -143,6 +143,9 @@ else
         # Keep local copy for Nova (real mode needs it on disk)
         mkdir -p "${DATA_DIR}/images"
         cp "$CIRROS_LOCAL" "${DATA_DIR}/images/${IMG_ID}.qcow2" 2>/dev/null || true
+        # Allow libvirt-qemu (non-root) to read the image and traverse parent dirs
+        chmod o+x "${DATA_DIR}" "${DATA_DIR}/images" 2>/dev/null || true
+        chmod 644 "${DATA_DIR}/images/${IMG_ID}.qcow2" 2>/dev/null || true
     else
         warn "  CirrOS download failed — skipping image creation."
         warn "  Manually: openstack image create cirros --file /path/to/cirros.img --disk-format qcow2 --container-format bare --public"
