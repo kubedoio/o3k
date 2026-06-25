@@ -13,6 +13,7 @@
 #   O3K_FORCE_CONFIG     Set to "true" to overwrite existing config
 #   O3K_NO_HORIZON         Set to "true" to skip Horizon dashboard install
 #   O3K_HORIZON_PORT       Port for Horizon dashboard (default: 8080)
+#   O3K_NO_BOOTSTRAP       Set to "true" to skip network/image/VM bootstrap
 
 set -e
 
@@ -163,6 +164,17 @@ ACTUAL=$(sha256sum "${TMP_DIR}/o3k" | awk '{print $1}')
 chmod +x "${TMP_DIR}/o3k"
 mkdir -p "$INSTALL_DIR"
 mv "${TMP_DIR}/o3k" "${INSTALL_DIR}/o3k"
+
+# Download bootstrap script alongside the binary
+info "Downloading bootstrap script..."
+curl -sfL --connect-timeout 30 --max-time 30 \
+    "https://raw.githubusercontent.com/${GITHUB_REPO}/${VERSION}/scripts/bootstrap.sh" \
+    -o "${INSTALL_DIR}/o3k-bootstrap" 2>/dev/null || \
+    curl -sfL --connect-timeout 30 --max-time 30 \
+    "https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/bootstrap.sh" \
+    -o "${INSTALL_DIR}/o3k-bootstrap" 2>/dev/null || true
+[ -f "${INSTALL_DIR}/o3k-bootstrap" ] && chmod +x "${INSTALL_DIR}/o3k-bootstrap"
+
 rm -rf "$TMP_DIR"
 info "Binary installed: ${INSTALL_DIR}/o3k ($VERSION)"
 
@@ -412,47 +424,72 @@ EOF
     info "Horizon service enabled."
 fi
 
-# ─── Phase 6: Wait for ready + print credentials ──────────────────────────────
+# ─── Phase 6: Wait for ready ──────────────────────────────────────────────────
 info "Waiting for O3K to start (up to 30s)..."
 i=0
+O3K_READY=0
 while [ "$i" -lt 30 ]; do
     if curl -sf http://localhost:35357/v3 >/dev/null 2>&1; then
-        PASS=""
-        [ -f "${DATA_DIR}/initial-password" ] && PASS=$(cat "${DATA_DIR}/initial-password")
-        printf "\n"
-        printf "════════════════════════════════════════════════\n"
-        printf "  O3K %s installed and running\n" "$VERSION"
-        printf "════════════════════════════════════════════════\n"
-        printf "  Keystone:  http://localhost:35357/v3\n"
-        printf "  Nova:      http://localhost:8774/v2.1\n"
-        printf "  Glance:    http://localhost:9292/v2\n"
-        if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
-            MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-            printf "  Horizon:   http://%s:%s (admin dashboard)\n" "$MYIP" "${O3K_HORIZON_PORT:-8080}"
-        fi
-        if [ -n "$PASS" ]; then
-            printf "  User:      admin\n"
-            printf "  Password:  %s\n" "$PASS"
-        fi
-        printf "────────────────────────────────────────────────\n"
-        printf "  OpenStack CLI:\n"
-        printf "\n"
-        printf "    source %s\n" "$OPENRC_FILE"
-        printf "    openstack token issue\n"
-        printf "    openstack server list\n"
-        printf "    openstack hypervisor list\n"
-        printf "\n"
-        if ! command -v openstack >/dev/null 2>&1; then
-            printf "  Install CLI:  apt-get install python3-openstackclient\n"
-            printf "            or: pip3 install python-openstackclient\n"
-        fi
-        printf "════════════════════════════════════════════════\n"
-        exit 0
+        O3K_READY=1
+        break
     fi
     sleep 1
     i=$((i + 1))
 done
 
-warn "O3K service started but API not responding after 30s."
-warn "Check logs: journalctl -u o3k -f"
-warn "Manual check: curl http://localhost:35357/v3"
+if [ "$O3K_READY" -eq 0 ]; then
+    warn "O3K service started but API not responding after 30s."
+    warn "Check logs: journalctl -u o3k -f"
+    warn "Manual check: curl http://localhost:35357/v3"
+    exit 1
+fi
+
+# ─── Phase 7: Bootstrap — network, image, test VM ─────────────────────────────
+if [ "${O3K_NO_BOOTSTRAP:-false}" != "true" ]; then
+    info "Running bootstrap (network + CirrOS image + test VM)..."
+    info "Set O3K_NO_BOOTSTRAP=true to skip."
+    O3K_ADMIN_PASSWORD="${O3K_ADMIN_PASSWORD:-}" \
+    O3K_DATA_DIR="$DATA_DIR" \
+    sh "${INSTALL_DIR}/o3k-bootstrap" 2>&1 || \
+        warn "Bootstrap encountered errors — run manually: o3k-bootstrap"
+fi
+
+# ─── Phase 8: Print credentials and summary ──────────────────────────────────
+PASS=""
+[ -f "${DATA_DIR}/initial-password" ] && PASS=$(cat "${DATA_DIR}/initial-password")
+MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+
+printf "\n"
+printf "════════════════════════════════════════════════\n"
+printf "  O3K %s installed and running\n" "$VERSION"
+printf "════════════════════════════════════════════════\n"
+printf "  Keystone:  http://localhost:35357/v3\n"
+printf "  Nova:      http://localhost:8774/v2.1\n"
+printf "  Glance:    http://localhost:9292/v2\n"
+if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
+    printf "  Horizon:   http://%s:%s (admin dashboard)\n" "$MYIP" "${O3K_HORIZON_PORT:-8080}"
+fi
+if [ -n "$PASS" ]; then
+    printf "  User:      admin\n"
+    printf "  Password:  %s\n" "$PASS"
+fi
+printf "────────────────────────────────────────────────\n"
+if [ "${O3K_NO_BOOTSTRAP:-false}" != "true" ]; then
+    printf "  Resources:\n"
+    printf "    openstack network list\n"
+    printf "    openstack image list\n"
+    printf "    openstack server list\n"
+    printf "\n"
+fi
+printf "  OpenStack CLI:\n"
+printf "\n"
+printf "    source %s\n" "$OPENRC_FILE"
+printf "    openstack token issue\n"
+printf "    openstack server list\n"
+printf "    openstack hypervisor list\n"
+printf "\n"
+if ! command -v openstack >/dev/null 2>&1; then
+    printf "  Install CLI:  apt-get install python3-openstackclient\n"
+    printf "            or: pip3 install python-openstackclient\n"
+fi
+printf "════════════════════════════════════════════════\n"
