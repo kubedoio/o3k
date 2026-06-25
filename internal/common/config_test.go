@@ -260,6 +260,43 @@ func TestValidateConfigProductionStubGuard(t *testing.T) {
 	})
 }
 
+func TestNeutronFlatModeValidation(t *testing.T) {
+	cfg := &Config{
+		Neutron: NeutronConfig{
+			NetworkingMode: "flat",
+			FlatBridge:     "br-o3k",
+			FlatSubnet:     "192.168.100.0/24",
+			FlatGateway:    "192.168.100.1",
+			FlatDNS:        "8.8.8.8",
+		},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("flat mode config should be valid, got: %v", err)
+	}
+}
+
+func TestNeutronFlatModeDefaults(t *testing.T) {
+	cfg := &Config{
+		Neutron: NeutronConfig{
+			NetworkingMode: "flat",
+		},
+	}
+	ApplyFlatModeDefaults(cfg)
+
+	if cfg.Neutron.FlatBridge != "br-o3k" {
+		t.Errorf("expected FlatBridge to be br-o3k, got %s", cfg.Neutron.FlatBridge)
+	}
+	if cfg.Neutron.FlatSubnet != "192.168.100.0/24" {
+		t.Errorf("expected FlatSubnet to be 192.168.100.0/24, got %s", cfg.Neutron.FlatSubnet)
+	}
+	if cfg.Neutron.FlatGateway != "192.168.100.1" {
+		t.Errorf("expected FlatGateway to be 192.168.100.1, got %s", cfg.Neutron.FlatGateway)
+	}
+	if cfg.Neutron.FlatDNS != "8.8.8.8" {
+		t.Errorf("expected FlatDNS to be 8.8.8.8, got %s", cfg.Neutron.FlatDNS)
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
 }
