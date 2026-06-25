@@ -68,14 +68,17 @@ func Connect(ctx context.Context, connString string, poolConfig *PoolConfig) err
 
 // ConnectSQLite opens a SQLite database at dbPath and sets DB.
 func ConnectSQLite(ctx context.Context, dbPath string) error {
-	dsn := dbPath + "?_journal=WAL&_busy_timeout=30000&_txlock=immediate"
+	// WAL mode allows concurrent readers. Drop _txlock=immediate so reads don't
+	// compete for the write lock. Multiple connections share the WAL safely.
+	dsn := dbPath + "?_journal=WAL&_busy_timeout=5000&cache=shared"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("connect sqlite: %w", err)
 	}
-	// SQLite supports only one concurrent writer.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	// Allow multiple concurrent readers; SQLite WAL handles the concurrency.
+	// Keep writers serialized via busy_timeout rather than a single connection.
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(4)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return fmt.Errorf("ping sqlite database: %w", err)
