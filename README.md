@@ -56,7 +56,42 @@ The project is especially relevant for:
 
 ## Quick Start
 
-### Zero Config
+### One-liner Install (Linux, recommended)
+
+```bash
+curl -sfL https://get.o3k.io | sudo sh -
+```
+
+This installs the `o3k` binary, configures a systemd service, and sets up a flat network bridge (`br-o3k`, `192.168.100.0/24`) with NAT so VMs have internet access out of the box. It also bootstraps a default network, uploads CirrOS, and boots a `test-vm`.
+
+After install, authenticate with the admin credentials printed during setup (also saved to `/etc/o3k/o3k-admin-openrc`):
+
+```bash
+source /etc/o3k/o3k-admin-openrc
+openstack token issue
+openstack server list
+```
+
+#### Install options
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `O3K_FLAT_NETWORK=false` | `true` | Skip bridge/NAT setup, use stub networking |
+| `O3K_FLAT_BRIDGE=br-custom` | `br-o3k` | Use a different bridge name |
+| `O3K_FLAT_SUBNET=10.0.0.0/24` | `192.168.100.0/24` | Use a different VM subnet |
+| `O3K_NO_BOOTSTRAP=true` | — | Skip network/image/VM bootstrap |
+| `O3K_NO_HORIZON=true` | — | Skip Horizon dashboard install |
+| `O3K_ADMIN_PASSWORD=secret` | auto-generated | Pin the admin password |
+
+```bash
+# Skip flat networking (stub mode only):
+curl -sfL https://get.o3k.io | sudo O3K_FLAT_NETWORK=false sh -
+
+# Custom subnet:
+curl -sfL https://get.o3k.io | sudo O3K_FLAT_SUBNET=10.0.0.0/24 O3K_FLAT_GATEWAY=10.0.0.1 sh -
+```
+
+### Zero Config (binary only)
 
 ```bash
 # Download and run — no config required
@@ -64,7 +99,7 @@ The project is especially relevant for:
 
 # On first start, O3K:
 # - creates a SQLite database at ~/.local/share/o3k/db/state.db
-# - runs all 74 migrations (embedded in the binary)
+# - runs all migrations (embedded in the binary)
 # - starts every service in stub mode
 # - generates a JWT secret and an admin password, and prints the
 #   admin password ONCE to stderr (capture it now or set
