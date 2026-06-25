@@ -180,6 +180,7 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v21.GET("/os-hypervisors", svc.ListHypervisors)
 		v21.GET("/os-hypervisors/detail", svc.ListHypervisorsDetail)
 		v21.GET("/os-hypervisors/statistics", svc.GetHypervisorStatistics)
+		v21.GET("/os-hypervisors/:id", svc.GetHypervisor)
 
 		// Availability zones
 		v21.GET("/os-availability-zone", svc.ListAvailabilityZones)
@@ -233,6 +234,85 @@ func (svc *Service) RegisterRoutes(r *gin.RouterGroup) {
 		v21.PUT("/os-aggregates/:id", svc.UpdateAggregate)
 		v21.DELETE("/os-aggregates/:id", svc.DeleteAggregate)
 		v21.POST("/os-aggregates/:id/action", svc.AggregateAction)
+	}
+
+	// Mirror all routes under /v2.1/:project_id — novaclient uses the project-scoped
+	// endpoint URL from the service catalog (e.g. http://host:8774/v2.1/{project_id})
+	// and prepends it to every path, producing /v2.1/{project_id}/servers etc.
+	v21p := r.Group("/v2.1/:project_id")
+	{
+		v21p.GET("/servers", svc.ListServers)
+		v21p.GET("/servers/detail", svc.ListServersDetail)
+		v21p.POST("/servers", svc.CreateServer)
+		v21p.GET("/servers/:id", svc.GetServer)
+		v21p.PATCH("/servers/:id", svc.UpdateServer)
+		v21p.PUT("/servers/:id", svc.UpdateServer)
+		v21p.DELETE("/servers/:id", svc.DeleteServer)
+		v21p.POST("/servers/:id/action", svc.ServerAction)
+		v21p.GET("/servers/:id/diagnostics", svc.GetServerDiagnostics)
+		v21p.GET("/servers/:id/os-instance-actions", svc.ListInstanceActions)
+		v21p.GET("/servers/:id/os-instance-actions/:request_id", svc.GetInstanceAction)
+		v21p.GET("/servers/:id/metadata", svc.GetServerMetadata)
+		v21p.POST("/servers/:id/metadata", svc.UpdateServerMetadata)
+		v21p.PUT("/servers/:id/metadata", svc.ResetServerMetadata)
+		v21p.GET("/servers/:id/tags", svc.ListServerTags)
+		v21p.PUT("/servers/:id/tags", svc.ReplaceServerTags)
+		v21p.DELETE("/servers/:id/tags", svc.DeleteAllServerTags)
+		v21p.PUT("/servers/:id/tags/:tag", svc.AddServerTag)
+		v21p.DELETE("/servers/:id/tags/:tag", svc.DeleteServerTag)
+		v21p.GET("/flavors", svc.ListFlavors)
+		v21p.GET("/flavors/detail", svc.ListFlavorsDetail)
+		v21p.POST("/flavors", svc.CreateFlavor)
+		v21p.GET("/flavors/:id", svc.GetFlavor)
+		v21p.DELETE("/flavors/:id", svc.DeleteFlavor)
+		v21p.GET("/flavors/:id/os-extra_specs", svc.GetFlavorExtraSpecs)
+		v21p.POST("/flavors/:id/os-extra_specs", svc.CreateFlavorExtraSpecs)
+		v21p.GET("/flavors/:id/os-extra_specs/:key", svc.GetFlavorExtraSpecKey)
+		v21p.PUT("/flavors/:id/os-extra_specs/:key", svc.UpdateFlavorExtraSpecKey)
+		v21p.DELETE("/flavors/:id/os-extra_specs/:key", svc.DeleteFlavorExtraSpecKey)
+		v21p.POST("/flavors/:id/action", svc.FlavorAction)
+		v21p.GET("/flavors/:id/os-flavor-access", svc.GetFlavorAccess)
+		v21p.GET("/images", svc.ListImages)
+		v21p.GET("/images/detail", svc.ListImagesDetail)
+		v21p.GET("/os-keypairs", svc.ListKeypairs)
+		v21p.POST("/os-keypairs", svc.CreateKeypair)
+		v21p.GET("/os-keypairs/:id", svc.GetKeypair)
+		v21p.DELETE("/os-keypairs/:id", svc.DeleteKeypair)
+		v21p.GET("/os-hypervisors", svc.ListHypervisors)
+		v21p.GET("/os-hypervisors/detail", svc.ListHypervisorsDetail)
+		v21p.GET("/os-hypervisors/statistics", svc.GetHypervisorStatistics)
+		v21p.GET("/os-hypervisors/:id", svc.GetHypervisor)
+		v21p.GET("/os-availability-zone", svc.ListAvailabilityZones)
+		v21p.GET("/os-availability-zone/detail", svc.ListAvailabilityZonesDetail)
+		v21p.GET("/limits", svc.GetLimits)
+		v21p.GET("/os-services", svc.ListServices)
+		v21p.GET("/os-simple-tenant-usage", svc.ListTenantUsage)
+		v21p.GET("/os-simple-tenant-usage/:id", svc.GetTenantUsage)
+		v21p.GET("/os-server-groups", svc.ListServerGroups)
+		v21p.POST("/os-server-groups", svc.CreateServerGroup)
+		v21p.GET("/os-server-groups/:id", svc.GetServerGroup)
+		v21p.DELETE("/os-server-groups/:id", svc.DeleteServerGroup)
+		v21p.GET("/os-migrations", svc.ListMigrations)
+		v21p.GET("/servers/:id/migrations", svc.ListServerMigrations)
+		v21p.GET("/servers/:id/migrations/:migration_id", svc.GetServerMigration)
+		v21p.DELETE("/servers/:id/migrations/:migration_id", svc.DeleteServerMigration)
+		v21p.POST("/servers/:id/migrations/:migration_id/action", svc.ServerMigrationAction)
+		v21p.GET("/servers/:id/os-volume_attachments", svc.ListVolumeAttachments)
+		v21p.POST("/servers/:id/os-volume_attachments", svc.AttachVolume)
+		v21p.DELETE("/servers/:id/os-volume_attachments/:volume_id", svc.DetachVolume)
+		v21p.GET("/servers/:id/os-interface", svc.ListInterfaceAttachments)
+		v21p.POST("/servers/:id/os-interface", svc.AttachInterface)
+		v21p.DELETE("/servers/:id/os-interface/:port_id", svc.DetachInterface)
+		v21p.GET("/os-quota-sets/:id", svc.GetQuotaSet)
+		v21p.PUT("/os-quota-sets/:id", svc.UpdateQuotaSet)
+		v21p.GET("/os-quota-sets/:id/defaults", svc.GetQuotaSetDefaults)
+		v21p.POST("/servers/:id/remote-consoles", svc.GetRemoteConsole)
+		v21p.GET("/os-aggregates", svc.ListAggregates)
+		v21p.POST("/os-aggregates", svc.CreateAggregate)
+		v21p.GET("/os-aggregates/:id", svc.GetAggregate)
+		v21p.PUT("/os-aggregates/:id", svc.UpdateAggregate)
+		v21p.DELETE("/os-aggregates/:id", svc.DeleteAggregate)
+		v21p.POST("/os-aggregates/:id/action", svc.AggregateAction)
 	}
 }
 
@@ -2102,78 +2182,39 @@ func (svc *Service) ListImagesDetail(c *gin.Context) {
 
 // ListHypervisors lists hypervisors (mock for Horizon)
 func (svc *Service) ListHypervisors(c *gin.Context) {
-	c.JSON(200, gin.H{"hypervisors": []gin.H{
-		{
-			"id":                  1,
-			"hypervisor_hostname": "o3k-node-1",
-			"state":               "up",
-			"status":              "enabled",
-			"hypervisor_type":     "QEMU",
-			"hypervisor_version":  2012000,
-			"vcpus":               16,
-			"memory_mb":           32768,
-			"local_gb":            1000,
-			"vcpus_used":          0,
-			"memory_mb_used":      0,
-			"local_gb_used":       0,
-			"free_disk_gb":        900,
-			"free_ram_mb":         28672,
-			"running_vms":         0,
-		},
-	}})
+	s := readHostStats(c.Request.Context(), svc.activeDB())
+	c.JSON(200, gin.H{"hypervisors": []gin.H{buildHypervisorJSON(s, false)}})
 }
 
 // ListHypervisorsDetail lists hypervisors with details (mock for Horizon)
 func (svc *Service) ListHypervisorsDetail(c *gin.Context) {
-	cpuInfoJSON := `{"arch":"x86_64","model":"Skylake-Server-IBRS","vendor":"Intel","features":[],"topology":{"cores":8,"threads":2,"sockets":1}}`
+	s := readHostStats(c.Request.Context(), svc.activeDB())
+	c.JSON(200, gin.H{"hypervisors": []gin.H{buildHypervisorJSON(s, true)}})
+}
 
-	c.JSON(200, gin.H{"hypervisors": []gin.H{
-		{
-			"id":                  1,
-			"hypervisor_hostname": "o3k-node-1",
-			"state":               "up",
-			"status":              "enabled",
-			"vcpus":               16,
-			"memory_mb":           32768,
-			"local_gb":            1000,
-			"vcpus_used":          0,
-			"memory_mb_used":      0,
-			"local_gb_used":       0,
-			"free_disk_gb":        900,
-			"free_ram_mb":         28672,
-			"hypervisor_type":     "QEMU",
-			"hypervisor_version":  2012000,
-			"running_vms":         0,
-			"cpu_info":            cpuInfoJSON,
-		},
-	}})
+// GetHypervisor returns a single hypervisor by ID (Horizon detail page)
+func (svc *Service) GetHypervisor(c *gin.Context) {
+	s := readHostStats(c.Request.Context(), svc.activeDB())
+	c.JSON(200, gin.H{"hypervisor": buildHypervisorJSON(s, true)})
 }
 
 // GetHypervisorStatistics returns aggregated hypervisor statistics (for Horizon)
 func (svc *Service) GetHypervisorStatistics(c *gin.Context) {
-	// Count running instances
-	var runningVMs int
-	if err := svc.activeDB().QueryRowContext(c.Request.Context(),
-		"SELECT COUNT(*) FROM instances WHERE power_state = 1",
-	).Scan(&runningVMs); err != nil {
-		log.Debug().Err(err).Str("operation", "hypervisor_stats_running").Msg("failed to count running VMs")
-	}
-
-	// Return aggregated stats
+	s := readHostStats(c.Request.Context(), svc.activeDB())
 	c.JSON(200, gin.H{
 		"hypervisor_statistics": gin.H{
 			"count":                1,
 			"current_workload":     0,
-			"disk_available_least": 800,
-			"free_disk_gb":         900,
-			"free_ram_mb":          28672,
-			"local_gb":             1000,
-			"local_gb_used":        100,
-			"memory_mb":            32768,
-			"memory_mb_used":       4096,
-			"running_vms":          runningVMs,
-			"vcpus":                16,
-			"vcpus_used":           runningVMs * 2, // Assume 2 vCPUs per VM
+			"disk_available_least": s.freeGB,
+			"free_disk_gb":         s.freeGB,
+			"free_ram_mb":          s.freeMB,
+			"local_gb":             s.localGB,
+			"local_gb_used":        s.localGB - s.freeGB,
+			"memory_mb":            s.memoryMB,
+			"memory_mb_used":       s.memoryMB - s.freeMB,
+			"running_vms":          s.runningVMs,
+			"vcpus":                s.vcpus,
+			"vcpus_used":           0,
 		},
 	})
 }

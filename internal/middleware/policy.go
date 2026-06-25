@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"strings"
+
 	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/cobaltcore-dev/o3k/internal/keystone"
 	"github.com/gin-gonic/gin"
@@ -38,6 +40,19 @@ import (
 // looking up policy rules.
 func PolicyMiddleware(serviceName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// These endpoints are callable with unscoped tokens — skip role check.
+		path := c.Request.URL.Path
+		if path == "/v3/auth/projects" || path == "/v3/auth/domains" {
+			c.Next()
+			return
+		}
+		// /v3/users/:id/projects is also callable with an unscoped token
+		// (used by Horizon to list projects for the authenticated user).
+		if strings.HasSuffix(path, "/projects") && strings.Contains(path, "/users/") {
+			c.Next()
+			return
+		}
+
 		rolesRaw, exists := c.Get("roles")
 		if !exists {
 			// No roles set — request was not authenticated (public endpoint).
