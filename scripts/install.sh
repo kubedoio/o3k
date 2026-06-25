@@ -296,6 +296,7 @@ if [ "${O3K_NO_HORIZON:-false}" != "true" ]; then
         'OPENSTACK_API_VERSIONS = {"identity": 3, "image": 2, "volume": 3}' \
         'OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True' \
         'OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"' \
+        'OPENSTACK_KEYSTONE_DEFAULT_ROLE = "member"' \
         'SESSION_ENGINE = "django.contrib.sessions.backends.cache"' \
         'CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}' \
         'COMPRESS_OFFLINE = False' \
