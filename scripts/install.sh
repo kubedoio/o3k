@@ -17,7 +17,7 @@
 
 set -e
 
-GITHUB_REPO="kubedoio/o3k"
+GITHUB_REPO="senolcolak/o3kio"
 INSTALL_DIR="${O3K_INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${O3K_DATA_DIR:-/var/lib/o3k}"
 CONFIG_DIR="/etc/o3k"
@@ -86,12 +86,45 @@ info "Checking dependencies..."
 install_packages_apt() {
     info "Installing packages via apt-get..."
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        libvirt-daemon-system \
-        qemu-kvm \
-        qemu-utils \
-        curl \
-        openssl
+
+    ISSUE_TEXT=""
+    if [ -r /etc/issue ]; then
+        ISSUE_TEXT=$(cat /etc/issue)
+    fi
+
+    case "$ISSUE_TEXT" in
+        *"Ubuntu 26.04"*)
+            info "Detected Ubuntu 26.04; installing qemu-system-x86 KVM packages..."
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                qemu-system-x86 \
+                libvirt-daemon-system \
+                libvirt-clients \
+                bridge-utils \
+                virtinst \
+                virt-manager \
+                cpu-checker \
+                qemu-utils \
+                curl \
+                openssl
+            ;;
+        *"Ubuntu 24.04"*)
+            info "Detected Ubuntu 24.04; installing qemu-kvm KVM packages..."
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                libvirt-daemon-system \
+                qemu-kvm \
+                qemu-utils \
+                curl \
+                openssl
+            ;;
+        *)
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                libvirt-daemon-system \
+                qemu-kvm \
+                qemu-utils \
+                curl \
+                openssl
+            ;;
+    esac
 }
 
 install_packages_dnf() {

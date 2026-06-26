@@ -19,7 +19,7 @@
 #   DNS: 8.8.8.8
 #
 # Requirements:
-#   - Ubuntu 24.04/22.04 or Debian 12
+#   - Ubuntu 26.04/24.04/22.04 or Debian 12
 #   - 4+ CPU cores, 16+ GB RAM, 100+ GB disk
 #   - KVM virtualization support (Intel VT-x or AMD-V)
 #   - Root/sudo access
@@ -82,14 +82,24 @@ check_root() {
 
 # Detect OS
 detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        OS_VERSION=$VERSION_ID
+    if [ -r /etc/issue ]; then
+        ISSUE_TEXT=$(head -n 1 /etc/issue)
     else
-        log_error "Cannot detect OS. /etc/os-release not found."
+        log_error "Cannot detect OS. /etc/issue not found."
         exit 1
     fi
+
+    case "$ISSUE_TEXT" in
+        *"Ubuntu 26.04"*) OS="ubuntu"; OS_VERSION="26.04" ;;
+        *"Ubuntu 24.04"*) OS="ubuntu"; OS_VERSION="24.04" ;;
+        *"Ubuntu 22.04"*) OS="ubuntu"; OS_VERSION="22.04" ;;
+        *"Debian GNU/Linux 12"*|*"Debian 12"*) OS="debian"; OS_VERSION="12" ;;
+        *)
+            log_error "Unsupported OS issue string: $ISSUE_TEXT"
+            log_error "Supported: Ubuntu 26.04/24.04/22.04, Debian 12"
+            exit 1
+            ;;
+    esac
 
     log_info "Detected OS: $OS $OS_VERSION"
 
@@ -128,22 +138,44 @@ install_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        qemu-kvm \
-        libvirt-daemon-system \
-        libvirt-clients \
-        bridge-utils \
-        netplan.io \
-        postgresql \
-        postgresql-contrib \
-        jq \
-        python3-openstackclient \
-        > /dev/null 2>&1
+    if [ "$OS" = "ubuntu" ] && [ "$OS_VERSION" = "26.04" ]; then
+        apt-get install -y -qq \
+            apt-transport-https \
+            ca-certificates \
+            curl \
+            gnupg \
+            lsb-release \
+            qemu-system-x86 \
+            libvirt-daemon-system \
+            libvirt-clients \
+            bridge-utils \
+            virtinst \
+            virt-manager \
+            cpu-checker \
+            netplan.io \
+            postgresql \
+            postgresql-contrib \
+            jq \
+            python3-openstackclient \
+            > /dev/null 2>&1
+    else
+        apt-get install -y -qq \
+            apt-transport-https \
+            ca-certificates \
+            curl \
+            gnupg \
+            lsb-release \
+            qemu-kvm \
+            libvirt-daemon-system \
+            libvirt-clients \
+            bridge-utils \
+            netplan.io \
+            postgresql \
+            postgresql-contrib \
+            jq \
+            python3-openstackclient \
+            > /dev/null 2>&1
+    fi
 
     log_success "System packages installed"
 }

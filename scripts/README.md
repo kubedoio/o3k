@@ -25,7 +25,7 @@ Automated deployment scripts for O3K installation.
 - ✅ Generates environment file for easy CLI access
 
 **Requirements**:
-- Fresh Ubuntu 24.04/22.04 or Debian 12 installation
+- Fresh Ubuntu 26.04/24.04/22.04 or Debian 12 installation
 - Root/sudo access
 - Minimum: 4 CPU cores, 16GB RAM, 100GB disk
 - CPU with VT-x/AMD-V virtualization support

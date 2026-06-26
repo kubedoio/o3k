@@ -55,22 +55,32 @@ check_root() {
 
 # Detect OS
 detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        OS_VERSION=$VERSION_ID
+    if [ -r /etc/issue ]; then
+        ISSUE_TEXT=$(head -n 1 /etc/issue)
     else
-        log_error "Cannot detect OS. /etc/os-release not found."
+        log_error "Cannot detect OS. /etc/issue not found."
         exit 1
     fi
+
+    case "$ISSUE_TEXT" in
+        *"Ubuntu 26.04"*) OS="ubuntu"; OS_VERSION="26.04" ;;
+        *"Ubuntu 24.04"*) OS="ubuntu"; OS_VERSION="24.04" ;;
+        *"Ubuntu 22.04"*) OS="ubuntu"; OS_VERSION="22.04" ;;
+        *"Debian GNU/Linux 12"*|*"Debian 12"*) OS="debian"; OS_VERSION="12" ;;
+        *)
+            log_error "Unsupported OS issue string: $ISSUE_TEXT"
+            log_error "Supported: Ubuntu 26.04/24.04/22.04, Debian 12"
+            exit 1
+            ;;
+    esac
 
     log_info "Detected OS: $OS $OS_VERSION"
 
     # Check if supported
     case "$OS" in
         ubuntu)
-            if [ "$OS_VERSION" != "24.04" ] && [ "$OS_VERSION" != "22.04" ]; then
-                log_warning "OS version $OS_VERSION not officially tested. Recommended: Ubuntu 24.04 LTS"
+            if [ "$OS_VERSION" != "26.04" ] && [ "$OS_VERSION" != "24.04" ] && [ "$OS_VERSION" != "22.04" ]; then
+                log_warning "OS version $OS_VERSION not officially tested. Recommended: Ubuntu 24.04/26.04 LTS"
             fi
             ;;
         debian)
@@ -79,7 +89,7 @@ detect_os() {
             fi
             ;;
         *)
-            log_error "Unsupported OS: $OS. Supported: Ubuntu 24.04/22.04, Debian 12"
+            log_error "Unsupported OS: $OS. Supported: Ubuntu 26.04/24.04/22.04, Debian 12"
             exit 1
             ;;
     esac
@@ -240,14 +250,26 @@ configure_hostname() {
 install_kvm() {
     log_info "Installing KVM and libvirt..."
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        qemu-kvm \
-        libvirt-daemon-system \
-        libvirt-clients \
-        bridge-utils \
-        virt-manager \
-        cpu-checker \
-        > /dev/null
+    if [ "$OS" = "ubuntu" ] && [ "$OS_VERSION" = "26.04" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            qemu-system-x86 \
+            libvirt-daemon-system \
+            libvirt-clients \
+            bridge-utils \
+            virtinst \
+            virt-manager \
+            cpu-checker \
+            > /dev/null
+    else
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            qemu-kvm \
+            libvirt-daemon-system \
+            libvirt-clients \
+            bridge-utils \
+            virt-manager \
+            cpu-checker \
+            > /dev/null
+    fi
 
     # Verify KVM
     if kvm-ok | grep -q "KVM acceleration can be used"; then
