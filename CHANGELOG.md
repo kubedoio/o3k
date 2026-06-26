@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.13] - 2026-06-26
+
+### Fixed
+- **dnsmasq injection** (`pkg/networking/flat.go`): `AddDHCPReservation` now validates
+  MAC address (via `net.ParseMAC`), IP address, and hostname before writing to the
+  dnsmasq hosts file. Malformed input is rejected with an error.
+- **Image upload ownership** (`internal/glance/images.go`): `UploadImageData` now
+  filters by `project_id` so tenants cannot upload data to images they do not own.
+- **Cinder CreateVolume status code** (`internal/cinder/volumes.go`): returned 202 Accepted
+  instead of the correct 200 OK. Fixed.
+- **Security group egress rules** (`internal/neutron/ports.go`): errors from the default
+  egress rule INSERTs in `CreateSecurityGroup` were silently discarded. Now propagated.
+- **Port leak on VM failure** (`internal/nova/handlers.go`): Neutron ports allocated during
+  `CreateServer` are now cleaned up when libvirt fails or a subsequent port allocation fails.
+- **ReactivateImage state guard** (`internal/glance/images.go`): `ReactivateImage` now
+  returns 409 if the image is not in `deactivated` state instead of silently succeeding.
+- **GetLimits quota counts** (`internal/nova/handlers.go`): `SOFT_DELETED` and `ERROR`
+  instances were counted against the quota. They are now excluded.
+- **dnsmasq goroutine block** (`pkg/networking/flat.go`): `StartDHCP` no longer passes
+  `--no-daemon` to dnsmasq, preventing the goroutine from blocking indefinitely.
+- **Keypair INSERT missing Q()** (`internal/nova/keypairs.go`): raw `$N` placeholders
+  were sent to SQLite without rewriting via `database.Q()`. Fixed.
+- **Bootstrap "no admin password"** (`scripts/install.sh`, `internal/server/seed.go`):
+  on reinstall the installer now reuses the existing `initial-password` file instead of
+  generating a new random password, eliminating the hash mismatch that caused bootstrap
+  to fail with "Cannot bootstrap: no admin password".
+
+---
+
 ## [0.2.11] - 2026-06-25
 
 ### Added
