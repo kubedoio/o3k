@@ -17,7 +17,7 @@
 
 set -e
 
-GITHUB_REPO="senolcolak/o3kio"
+GITHUB_REPO="kubedoio/o3k"
 INSTALL_DIR="${O3K_INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${O3K_DATA_DIR:-/var/lib/o3k}"
 CONFIG_DIR="/etc/o3k"
