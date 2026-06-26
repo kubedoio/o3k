@@ -2,6 +2,7 @@ package networking
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,7 +88,6 @@ func (m *FlatNetworkManager) StartDHCP(cfg FlatDHCPConfig) error {
 		"--dhcp-option=6," + cfg.DNS,
 		"--pid-file=" + pidFile,
 		"--dhcp-hostsfile=" + hostsFile,
-		"--no-daemon",
 	}
 
 	cmd := exec.Command("dnsmasq", args...)
@@ -133,6 +133,16 @@ func (m *FlatNetworkManager) StopDHCP(subnetID string) error {
 // the operation is a no-op; when a custom dataDir is set (e.g. in tests or
 // real mode) the entry is written and dnsmasq is signalled if running.
 func (m *FlatNetworkManager) AddDHCPReservation(subnetID, mac, ip, hostname string) error {
+	if _, err := net.ParseMAC(mac); err != nil {
+		return fmt.Errorf("invalid MAC address: %q", mac)
+	}
+	if net.ParseIP(ip) == nil {
+		return fmt.Errorf("invalid IP address: %q", ip)
+	}
+	if strings.ContainsAny(hostname, "\n\r,") {
+		return fmt.Errorf("invalid hostname: %q", hostname)
+	}
+
 	hostsFile := m.hostsFilePath(subnetID)
 
 	// In stub mode with the production data dir we have no write permission;

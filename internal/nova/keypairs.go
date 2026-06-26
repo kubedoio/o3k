@@ -169,10 +169,10 @@ func (svc *Service) CreateKeypair(c *gin.Context) {
 
 	// Insert into database
 	now := time.Now()
-	_, err = svc.activeDB().ExecContext(c.Request.Context(), `
+	_, err = svc.activeDB().ExecContext(c.Request.Context(), database.Q(`
 		INSERT INTO keypairs (user_id, name, public_key, fingerprint, created_at)
 		VALUES ($1, $2, $3, $4, $5)
-	`, userID, req.Keypair.Name, publicKey, fingerprint, now)
+	`), userID, req.Keypair.Name, publicKey, fingerprint, now)
 
 	if err != nil {
 		log.Error().Err(err).Str("operation", "create_keypair").Msg("database error")

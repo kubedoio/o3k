@@ -585,6 +585,12 @@ func (svc *Service) CreateServer(c *gin.Context) {
 							Str("instance_id", instanceID).
 							Str("network_id", network.UUID).
 							Msg("Failed to allocate port from Neutron")
+						// Clean up any ports already allocated for earlier networks.
+						for _, allocated := range networks {
+							if derr := svc.neutronSvc.DeletePortByID(ctx, allocated.PortID, projectID); derr != nil {
+								log.Warn().Err(derr).Str("port_id", allocated.PortID).Msg("failed to clean up port after allocation failure")
+							}
+						}
 						// Fail VM creation: a VM without network is unusable
 						if _, derr := svc.activeDB().ExecContext(ctx,
 							database.Q("UPDATE instances SET status = 'ERROR', fault_message = $1, updated_at = NOW() WHERE id = $2"),
@@ -686,6 +692,14 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 			if err != nil {
 				log.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to create VM via libvirt")
+				// Clean up allocated ports so they don't leak on libvirt failure.
+				if svc.neutronSvc != nil {
+					for _, net := range networks {
+						if derr := svc.neutronSvc.DeletePortByID(ctx, net.PortID, projectID); derr != nil {
+							log.Warn().Err(derr).Str("port_id", net.PortID).Msg("failed to clean up port after libvirt failure")
+						}
+					}
+				}
 				dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
 				defer dbCancel()
 				if _, derr := svc.activeDB().ExecContext(dbCtx,
@@ -2364,7 +2378,7 @@ func (svc *Service) GetLimits(c *gin.Context) {
 			COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id::text = $1 AND i.status != 'DELETED'`),
+		WHERE i.project_id::text = $1 AND i.status NOT IN ('DELETED', 'SOFT_DELETED', 'ERROR')`),
 		projectID,
 	).Scan(&instancesUsed, &coresUsed, &ramUsed); err != nil {
 		instancesUsed, coresUsed, ramUsed = 0, 0, 0

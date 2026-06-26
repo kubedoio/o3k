@@ -343,7 +343,7 @@ func (svc *Service) CreateVolume(c *gin.Context) {
 			"available", time.Now(), volumeID)
 	}()
 
-	c.JSON(http.StatusAccepted, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"volume": gin.H{
 			"id":                volumeID,
 			"name":              req.Volume.Name,

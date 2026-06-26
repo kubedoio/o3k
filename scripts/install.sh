@@ -184,14 +184,23 @@ chmod 700 "$CONFIG_DIR"
 
 # Generate admin password now (before starting o3k) so bootstrap and openrc
 # always have a known password without racing against o3k's first-boot write.
-if [ -z "${O3K_ADMIN_PASSWORD:-}" ]; then
+if [ -n "${O3K_ADMIN_PASSWORD:-}" ]; then
+    # Caller supplied a password — use it and (re-)write the file.
+    mkdir -p "$DATA_DIR"
+    printf '%s\n' "$O3K_ADMIN_PASSWORD" > "${DATA_DIR}/initial-password"
+    chmod 600 "${DATA_DIR}/initial-password"
+elif [ -f "${DATA_DIR}/initial-password" ]; then
+    # Re-install: reuse the existing password so the DB and bootstrap stay in sync.
+    O3K_ADMIN_PASSWORD=$(cat "${DATA_DIR}/initial-password")
+    info "Reusing existing admin password from ${DATA_DIR}/initial-password"
+else
+    # Fresh install: generate and persist.
     O3K_ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=')
+    mkdir -p "$DATA_DIR"
+    printf '%s\n' "$O3K_ADMIN_PASSWORD" > "${DATA_DIR}/initial-password"
+    chmod 600 "${DATA_DIR}/initial-password"
     info "Generated admin password."
 fi
-# Write to initial-password so o3k uses it on first boot instead of auto-generating.
-mkdir -p "$DATA_DIR"
-printf '%s\n' "$O3K_ADMIN_PASSWORD" > "${DATA_DIR}/initial-password"
-chmod 600 "${DATA_DIR}/initial-password"
 
 if [ -f "$CONFIG_FILE" ] && [ "${O3K_FORCE_CONFIG:-false}" != "true" ]; then
     info "Config already exists at $CONFIG_FILE — skipping generation (set O3K_FORCE_CONFIG=true to overwrite)"

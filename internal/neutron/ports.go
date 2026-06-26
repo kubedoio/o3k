@@ -904,15 +904,23 @@ func (svc *Service) CreateSecurityGroup(c *gin.Context) {
 	egressRuleIPv4ID := uuid.New().String()
 	egressRuleIPv6ID := uuid.New().String()
 
-	_, _ = svc.activeDB().ExecContext(c.Request.Context(), `
+	if _, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO security_group_rules (id, security_group_id, direction, ethertype, protocol, port_range_min, port_range_max, remote_ip_prefix, remote_group_id, created_at)
 		VALUES ($1, $2, 'egress', 'IPv4', NULL, NULL, NULL, NULL, NULL, $3)
-	`, egressRuleIPv4ID, sgID, now)
+	`, egressRuleIPv4ID, sgID, now); err != nil {
+		log.Error().Err(err).Str("security_group_id", sgID).Msg("failed to insert default IPv4 egress rule")
+		common.SendError(c, common.NewInternalServerError("failed to create security group rules"))
+		return
+	}
 
-	_, _ = svc.activeDB().ExecContext(c.Request.Context(), `
+	if _, err := svc.activeDB().ExecContext(c.Request.Context(), `
 		INSERT INTO security_group_rules (id, security_group_id, direction, ethertype, protocol, port_range_min, port_range_max, remote_ip_prefix, remote_group_id, created_at)
 		VALUES ($1, $2, 'egress', 'IPv6', NULL, NULL, NULL, NULL, NULL, $3)
-	`, egressRuleIPv6ID, sgID, now)
+	`, egressRuleIPv6ID, sgID, now); err != nil {
+		log.Error().Err(err).Str("security_group_id", sgID).Msg("failed to insert default IPv6 egress rule")
+		common.SendError(c, common.NewInternalServerError("failed to create security group rules"))
+		return
+	}
 
 	defaultRules := []gin.H{
 		{
@@ -1623,6 +1631,15 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 		IPAddress: allocatedIP,
 		SubnetID:  subnetID,
 	}, nil
+}
+
+// DeletePortByID deletes a port by ID without networking teardown.
+// Used by Nova to clean up ports on VM creation failure (port was never attached).
+func (svc *Service) DeletePortByID(ctx context.Context, portID, projectID string) error {
+	_, err := svc.activeDB().ExecContext(ctx,
+		database.Q("DELETE FROM ports WHERE id = $1 AND project_id::text = $2"),
+		portID, projectID)
+	return err
 }
 
 // fetchSecurityGroupRulesForPort retrieves all security group rules for given security group IDs
