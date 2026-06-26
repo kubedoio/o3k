@@ -77,25 +77,55 @@ register_endpoint() {
     _svc_name=$1
     _svc_type=$2
     _pub_url=$3
-    # If an endpoint already exists with the correct URL, nothing to do.
-    _existing=$(timeout 10 openstack endpoint list --service "$_svc_name" --interface public -f value -c URL 2>/dev/null | head -1)
-    if [ "$_existing" = "$_pub_url" ]; then
+
+    # Use the Keystone API directly via curl — avoids the chicken-and-egg problem
+    # where the CLI needs a working catalog to manage the catalog.
+    _TOKEN=$(curl -sf --max-time 10 -X POST "${AUTH_URL}/auth/tokens" \
+        -H "Content-Type: application/json" \
+        -d "{\"auth\":{\"identity\":{\"methods\":[\"password\"],\"password\":{\"user\":{\"name\":\"${OS_USERNAME}\",\"password\":\"${OS_PASSWORD}\",\"domain\":{\"name\":\"${OS_USER_DOMAIN_NAME:-Default}\"}}}},\"scope\":{\"project\":{\"name\":\"${OS_PROJECT_NAME}\",\"domain\":{\"name\":\"${OS_PROJECT_DOMAIN_NAME:-Default}\"}}}}}" \
+        -i 2>/dev/null | grep -i "^x-subject-token:" | tr -d '\r' | awk '{print $2}')
+    [ -z "$_TOKEN" ] && return 0
+
+    # Find service ID by name
+    _SVC_ID=$(curl -sf --max-time 10 "${AUTH_URL}/services?name=${_svc_name}" \
+        -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
+        tr ',' '\n' | grep '"id"' | head -1 | grep -oP '"id"\s*:\s*"\K[^"]+')
+
+    if [ -z "$_SVC_ID" ]; then
+        # Create service
+        _SVC_ID=$(curl -sf --max-time 10 -X POST "${AUTH_URL}/services" \
+            -H "X-Auth-Token: ${_TOKEN}" -H "Content-Type: application/json" \
+            -d "{\"service\":{\"name\":\"${_svc_name}\",\"type\":\"${_svc_type}\"}}" 2>/dev/null | \
+            tr ',' '\n' | grep '"id"' | head -1 | grep -oP '"id"\s*:\s*"\K[^"]+')
+    fi
+    [ -z "$_SVC_ID" ] && return 0
+
+    # Check if public endpoint already has the right URL
+    _EXISTING=$(curl -sf --max-time 10 "${AUTH_URL}/endpoints?service_id=${_SVC_ID}&interface=public" \
+        -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
+        tr ',' '\n' | grep '"url"' | head -1 | grep -oP '"url"\s*:\s*"\K[^"]+')
+
+    if [ "$_EXISTING" = "$_pub_url" ]; then
         return 0
     fi
-    # Wrong URL or no endpoint — delete stale endpoints then recreate.
-    if [ -n "$_existing" ]; then
-        timeout 10 openstack endpoint list --service "$_svc_name" -f value -c ID 2>/dev/null | \
-            xargs -r -I{} openstack endpoint delete {} 2>/dev/null || true
+
+    # Delete stale endpoints for this service
+    if [ -n "$_EXISTING" ]; then
+        _EP_IDS=$(curl -sf --max-time 10 "${AUTH_URL}/endpoints?service_id=${_SVC_ID}" \
+            -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
+            grep -oP '"id"\s*:\s*"\K[^"]+')
+        for _ep_id in $_EP_IDS; do
+            curl -sf --max-time 10 -X DELETE "${AUTH_URL}/endpoints/${_ep_id}" \
+                -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null || true
+        done
     fi
-    # Get or create service
-    _svc_id=$(timeout 10 openstack service list --type "$_svc_type" -f value -c ID 2>/dev/null | head -1)
-    if [ -z "$_svc_id" ]; then
-        _svc_id=$(timeout 10 openstack service create --name "$_svc_name" "$_svc_type" -f value -c id 2>/dev/null) || return 0
-    fi
+
+    # Create endpoints for all three interfaces
     for _iface in public internal admin; do
-        timeout 10 openstack endpoint create \
-            --region RegionOne \
-            "$_svc_id" "$_iface" "$_pub_url" >/dev/null 2>&1 || true
+        curl -sf --max-time 10 -X POST "${AUTH_URL}/endpoints" \
+            -H "X-Auth-Token: ${_TOKEN}" -H "Content-Type: application/json" \
+            -d "{\"endpoint\":{\"service_id\":\"${_SVC_ID}\",\"interface\":\"${_iface}\",\"url\":\"${_pub_url}\",\"region\":\"RegionOne\",\"enabled\":true}}" \
+            >/dev/null 2>&1 || true
     done
 }
 
@@ -105,7 +135,7 @@ register_endpoint nova      compute   "http://${MYIP}:8774/v2.1"
 register_endpoint neutron   network   "http://${MYIP}:9696"
 register_endpoint cinder    volume    "http://${MYIP}:8776/v3"
 register_endpoint cinderv3  volumev3  "http://${MYIP}:8776/v3"
-register_endpoint glance    image     "http://${MYIP}:9292/v2"
+register_endpoint glance    image     "http://${MYIP}:9292"
 register_endpoint placement placement "http://${MYIP}:8778"
 info "Service catalog ready."
 

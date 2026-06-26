@@ -1063,13 +1063,25 @@ func createGlanceServer(cfg *common.Config, svc *glance.Service, authService *ke
 	root.GET("/", svc.GetVersions)
 	root.GET("/v2", svc.GetVersionV2)
 
-	// All other routes require authentication and are under /v2
+	authMiddleware := middleware.AuthMiddleware(authService)
+
+	// /v2/* — gophercloud appends "v2/" to the catalog URL, so it calls
+	// http://host:9292/v2/images when catalog stores the bare URL.
 	authGroup := r.Group("/v2")
-	authGroup.Use(middleware.AuthMiddleware(authService))
+	authGroup.Use(authMiddleware)
 	authGroup.Use(middleware.AuditMiddleware())
 	authGroup.Use(middleware.EnforceAccessRules("image"))
 	authGroup.Use(middleware.PolicyMiddleware("image"))
 	svc.RegisterRoutes(authGroup)
+
+	// /* (bare) — OpenStack CLI uses catalog URL as-is, so it calls
+	// http://host:9292/images when catalog stores the bare URL.
+	bareGroup := r.Group("")
+	bareGroup.Use(authMiddleware)
+	bareGroup.Use(middleware.AuditMiddleware())
+	bareGroup.Use(middleware.EnforceAccessRules("image"))
+	bareGroup.Use(middleware.PolicyMiddleware("image"))
+	svc.RegisterRoutes(bareGroup)
 
 	return &http.Server{
 		Addr:         common.BindAddress(cfg, cfg.Glance.Port),
