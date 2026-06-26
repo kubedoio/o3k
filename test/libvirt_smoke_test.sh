@@ -61,6 +61,11 @@ require qemu-img
 
 mkdir -p "$TEST_DIR"
 
+# Kill any leftover o3k processes from prior failed runs so they don't answer
+# our API calls on the same ports.
+pkill -f "bin/o3k --config" 2>/dev/null || true
+sleep 1
+
 # --- start o3k in real mode ---
 log "starting o3k in libvirt real mode"
 export O3K_DATA_DIR="$TEST_DIR/data"
