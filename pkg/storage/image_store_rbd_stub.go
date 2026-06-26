@@ -20,7 +20,7 @@ func (s *ImageStore) rbdNotCompiledMsg(action, imageID string) string {
 
 // initCephConnection is a no-op when built without the ceph tag.
 func (s *ImageStore) initCephConnection() error {
-	return fmt.Errorf("Ceph RBD support not compiled (build with -tags ceph)")
+	return fmt.Errorf("ceph RBD support not compiled (build with -tags ceph)")
 }
 
 // closeCephConnection is a no-op stub.

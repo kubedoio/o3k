@@ -77,7 +77,7 @@ func (c *AgentClient) runStream(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.serverAddr, err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	client := pb.NewTunnelHubClient(conn)
 	stream, err := client.AgentStream(ctx)

@@ -30,7 +30,7 @@ func (c *CephClient) deleteVolumeRBD(ctx context.Context, volumeID string) error
 
 // volumeExistsRBD stub (no ceph build tag)
 func (c *CephClient) volumeExistsRBD(ctx context.Context, volumeID string) (bool, error) {
-	return false, fmt.Errorf("Ceph RBD support not compiled (build with -tags ceph)")
+	return false, fmt.Errorf("ceph RBD support not compiled (build with -tags ceph)")
 }
 
 // CreateSnapshotRBD stub (no ceph build tag)
@@ -45,7 +45,7 @@ func (c *CephClient) DeleteSnapshotRBD(ctx context.Context, volumeID, snapshotID
 
 // GetVolumeSizeRBD stub (no ceph build tag)
 func (c *CephClient) GetVolumeSizeRBD(ctx context.Context, volumeID string) (int, error) {
-	return 0, fmt.Errorf("Ceph RBD support not compiled (build with -tags ceph)")
+	return 0, fmt.Errorf("ceph RBD support not compiled (build with -tags ceph)")
 }
 
 // HealthRBD stub (no ceph build tag)
