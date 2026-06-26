@@ -2364,7 +2364,7 @@ func (svc *Service) GetLimits(c *gin.Context) {
 			COALESCE(SUM(f.ram_mb), 0)
 		FROM instances i
 		LEFT JOIN flavors f ON i.flavor_id = f.id
-		WHERE i.project_id::text = $1 AND i.status != 'DELETED'`),
+		WHERE i.project_id::text = $1 AND i.status NOT IN ('DELETED', 'SOFT_DELETED', 'ERROR')`),
 		projectID,
 	).Scan(&instancesUsed, &coresUsed, &ramUsed); err != nil {
 		instancesUsed, coresUsed, ramUsed = 0, 0, 0

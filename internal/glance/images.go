@@ -929,11 +929,13 @@ func (svc *Service) UpdateImage(c *gin.Context) {
 // UploadImageData uploads image data
 func (svc *Service) UploadImageData(c *gin.Context) {
 	imageID := c.Param("id")
+	projectID := c.GetString("project_id")
 
-	// Atomically transition status from queued to saving to prevent concurrent uploads
+	// Atomically transition status from queued to saving to prevent concurrent uploads.
+	// project_id filter ensures callers can only upload to images they own.
 	result, err := svc.activeDB().ExecContext(c.Request.Context(),
-		database.Q("UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND status = 'queued'"),
-		"saving", time.Now(), imageID)
+		database.Q("UPDATE images SET status = $1, updated_at = $2 WHERE id = $3 AND status = 'queued' AND project_id::text = $4"),
+		"saving", time.Now(), imageID, projectID)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "upload_image").Str("image_id", imageID).Msg("failed to update image status")
 		common.SendError(c, common.NewInternalServerError("failed to update image status"))
