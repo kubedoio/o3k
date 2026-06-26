@@ -1582,15 +1582,28 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 	}
 	fixedIPsJSON, _ := json.Marshal(fixedIPs)
 
-	// Create TAP device in default namespace (not project namespace) for libvirt access
-	if svc.mode != "stub" {
-		tapName := "tap-" + portID[:8]
+	// Create TAP device in default namespace (not project namespace) for libvirt access.
+	// Flat mode is different: libvirt creates the vnet tap from the domain XML and
+	// attaches it directly to the shared flat bridge, so pre-creating tap-* here
+	// creates orphaned interfaces and can leave Nova stuck in BUILD on failures.
+	var tapName string
+	var tapCreated bool
+	cleanupTAP := func() {
+		if tapCreated {
+			if err := svc.tapManager.DeleteTAPDevice(tapName, false, ""); err != nil {
+				log.Warn().Err(err).Str("tap", tapName).Msg("failed to clean up leaked TAP device")
+			}
+		}
+	}
+	if svc.mode != "stub" && svc.flatBridge == "" {
+		tapName = "tap-" + portID[:8]
 
 		// Create TAP device in default namespace
 		if err := svc.tapManager.CreateTAPDevice(tapName, false, ""); err != nil {
 			_ = ipTx.Rollback()
 			return nil, fmt.Errorf("failed to create TAP device: %w", err)
 		}
+		tapCreated = true
 
 		// Ensure bridge exists in default namespace
 		bridgeName := "br-" + networkID[:8]
@@ -1602,6 +1615,7 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 		// Attach TAP to bridge in default namespace
 		if err := svc.brManager.AttachToBridge(tapName, bridgeName, false, ""); err != nil {
 			_ = ipTx.Rollback()
+			cleanupTAP()
 			return nil, fmt.Errorf("failed to attach TAP to bridge: %w", err)
 		}
 	}
@@ -1616,10 +1630,12 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 
 	if err != nil {
 		_ = ipTx.Rollback()
+		cleanupTAP()
 		return nil, fmt.Errorf("failed to insert port into database: %w", err)
 	}
 
 	if err := ipTx.Commit(); err != nil {
+		cleanupTAP()
 		return nil, fmt.Errorf("failed to commit port creation: %w", err)
 	}
 

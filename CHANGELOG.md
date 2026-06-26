@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.15] - 2026-06-26
+
+### Fixed
+- **Flat-network VM boot** (`internal/neutron/ports.go`, `internal/nova/handlers.go`):
+  Nova no longer asks Neutron to pre-create unused `tap-*` devices on per-network
+  bridges when flat networking is active. Libvirt now owns the VM tap lifecycle and
+  attaches the domain interface directly to `br-o3k`, preventing bootstrap VMs from
+  getting stuck in `BUILD`. Port allocation failures now use a fresh DB context so
+  instances are marked `ERROR` instead of being left indefinitely in `BUILD`.
+
+---
+
 ## [0.2.14] - 2026-06-26
 
 ### Fixed

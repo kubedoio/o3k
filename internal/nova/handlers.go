@@ -592,7 +592,9 @@ func (svc *Service) CreateServer(c *gin.Context) {
 							}
 						}
 						// Fail VM creation: a VM without network is unusable
-						if _, derr := svc.activeDB().ExecContext(ctx,
+						dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer dbCancel()
+						if _, derr := svc.activeDB().ExecContext(dbCtx,
 							database.Q("UPDATE instances SET status = 'ERROR', fault_message = $1, updated_at = NOW() WHERE id = $2"),
 							fmt.Sprintf("Failed to allocate port for network %s: %v", network.UUID, err), instanceID,
 						); derr != nil {
