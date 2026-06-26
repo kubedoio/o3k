@@ -728,6 +728,14 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			`), "ACTIVE", 1, libvirtUUID, time.Now(), time.Now(), instanceID); derr != nil {
 				log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to update instance to ACTIVE after VM creation")
 			}
+
+			// Record interface attachments so os-interface and Horizon show them.
+			for _, net := range networks {
+				_, _ = svc.activeDB().ExecContext(dbCtx, database.Q(`
+					INSERT INTO interface_attachments (id, instance_id, port_id, mac_address, attached_at)
+					VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING
+				`), uuid.New().String(), instanceID, net.PortID, net.MACAddress, time.Now())
+			}
 		}()
 	} else {
 		logger.Debug().Msg("Stub mode: skipping libvirt VM creation")
