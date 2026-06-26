@@ -73,70 +73,60 @@ info "Authentication OK."
 MYIP=$(hostname -I 2>/dev/null | awk '{print $1}')
 MYIP="${MYIP:-127.0.0.1}"
 
-register_endpoint() {
-    _svc_name=$1
-    _svc_type=$2
-    _pub_url=$3
-
-    # Use the Keystone API directly via curl — avoids the chicken-and-egg problem
-    # where the CLI needs a working catalog to manage the catalog.
-    _TOKEN=$(curl -sf --max-time 10 -X POST "${AUTH_URL}/auth/tokens" \
+seed_endpoints() {
+    # Services have fixed UUIDs seeded by migration 040. Use them directly —
+    # no JSON parsing, no chicken-and-egg catalog dependency.
+    _TOKEN=$(curl -si --max-time 10 -X POST "${AUTH_URL}/auth/tokens" \
         -H "Content-Type: application/json" \
         -d "{\"auth\":{\"identity\":{\"methods\":[\"password\"],\"password\":{\"user\":{\"name\":\"${OS_USERNAME}\",\"password\":\"${OS_PASSWORD}\",\"domain\":{\"name\":\"${OS_USER_DOMAIN_NAME:-Default}\"}}}},\"scope\":{\"project\":{\"name\":\"${OS_PROJECT_NAME}\",\"domain\":{\"name\":\"${OS_PROJECT_DOMAIN_NAME:-Default}\"}}}}}" \
-        -i 2>/dev/null | grep -i "^x-subject-token:" | tr -d '\r' | awk '{print $2}')
-    [ -z "$_TOKEN" ] && return 0
+        2>/dev/null | grep -i "^x-subject-token:" | tr -d '\r' | awk '{print $2}')
+    [ -z "$_TOKEN" ] && { warn "Could not get token for endpoint seeding"; return 1; }
 
-    # Find service ID by name
-    _SVC_ID=$(curl -sf --max-time 10 "${AUTH_URL}/services?name=${_svc_name}" \
-        -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
-        tr ',' '\n' | grep '"id"' | head -1 | grep -oP '"id"\s*:\s*"\K[^"]+')
-
-    if [ -z "$_SVC_ID" ]; then
-        # Create service
-        _SVC_ID=$(curl -sf --max-time 10 -X POST "${AUTH_URL}/services" \
-            -H "X-Auth-Token: ${_TOKEN}" -H "Content-Type: application/json" \
-            -d "{\"service\":{\"name\":\"${_svc_name}\",\"type\":\"${_svc_type}\"}}" 2>/dev/null | \
-            tr ',' '\n' | grep '"id"' | head -1 | grep -oP '"id"\s*:\s*"\K[^"]+')
-    fi
-    [ -z "$_SVC_ID" ] && return 0
-
-    # Check if public endpoint already has the right URL
-    _EXISTING=$(curl -sf --max-time 10 "${AUTH_URL}/endpoints?service_id=${_SVC_ID}&interface=public" \
-        -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
-        tr ',' '\n' | grep '"url"' | head -1 | grep -oP '"url"\s*:\s*"\K[^"]+')
-
-    if [ "$_EXISTING" = "$_pub_url" ]; then
-        return 0
-    fi
-
-    # Delete stale endpoints for this service
-    if [ -n "$_EXISTING" ]; then
-        _EP_IDS=$(curl -sf --max-time 10 "${AUTH_URL}/endpoints?service_id=${_SVC_ID}" \
+    # Fixed service UUIDs from migration 040_keystone_catalog
+    _seed_one() {
+        _svc_id=$1; _url=$2
+        # Check if correct URL already set for this service's public endpoint
+        _existing=$(curl -sf --max-time 5 "${AUTH_URL}/endpoints?service_id=${_svc_id}" \
             -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
-            grep -oP '"id"\s*:\s*"\K[^"]+')
-        for _ep_id in $_EP_IDS; do
-            curl -sf --max-time 10 -X DELETE "${AUTH_URL}/endpoints/${_ep_id}" \
+            grep -o '"url":"[^"]*"' | head -1 | cut -d'"' -f4)
+        [ "$_existing" = "$_url" ] && return 0
+        # Delete all endpoints for this service then recreate
+        _ep_ids=$(curl -sf --max-time 5 "${AUTH_URL}/endpoints?service_id=${_svc_id}" \
+            -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | \
+            grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+        for _id in $_ep_ids; do
+            curl -sf --max-time 5 -X DELETE "${AUTH_URL}/endpoints/${_id}" \
                 -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null || true
         done
-    fi
+        for _iface in public internal admin; do
+            curl -sf --max-time 5 -X POST "${AUTH_URL}/endpoints" \
+                -H "X-Auth-Token: ${_TOKEN}" -H "Content-Type: application/json" \
+                -d "{\"endpoint\":{\"service_id\":\"${_svc_id}\",\"interface\":\"${_iface}\",\"url\":\"${_url}\",\"region\":\"RegionOne\",\"enabled\":true}}" \
+                >/dev/null 2>&1 || true
+        done
+    }
 
-    # Create endpoints for all three interfaces
-    for _iface in public internal admin; do
-        curl -sf --max-time 10 -X POST "${AUTH_URL}/endpoints" \
+    _seed_one "00000000-0000-0000-0000-000000000010" "http://${MYIP}:35357/v3"
+    _seed_one "00000000-0000-0000-0000-000000000011" "http://${MYIP}:8774/v2.1"
+    _seed_one "00000000-0000-0000-0000-000000000012" "http://${MYIP}:9696"
+    _seed_one "00000000-0000-0000-0000-000000000013" "http://${MYIP}:8776/v3"
+    _seed_one "00000000-0000-0000-0000-000000000014" "http://${MYIP}:9292"
+    _seed_one "00000000-0000-0000-0000-000000000015" "http://${MYIP}:8776/v3"
+
+    # Placement has a dynamic UUID — find or create it
+    _pl_id=$(curl -sf --max-time 5 "${AUTH_URL}/services?type=placement" \
+        -H "X-Auth-Token: ${_TOKEN}" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if [ -z "$_pl_id" ]; then
+        _pl_id=$(curl -sf --max-time 5 -X POST "${AUTH_URL}/services" \
             -H "X-Auth-Token: ${_TOKEN}" -H "Content-Type: application/json" \
-            -d "{\"endpoint\":{\"service_id\":\"${_SVC_ID}\",\"interface\":\"${_iface}\",\"url\":\"${_pub_url}\",\"region\":\"RegionOne\",\"enabled\":true}}" \
-            >/dev/null 2>&1 || true
-    done
+            -d '{"service":{"name":"placement","type":"placement","description":"Placement Service"}}' \
+            2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    fi
+    [ -n "$_pl_id" ] && _seed_one "$_pl_id" "http://${MYIP}:8778"
 }
 
 info "Registering service catalog endpoints..."
-register_endpoint keystone  identity  "http://${MYIP}:35357/v3"
-register_endpoint nova      compute   "http://${MYIP}:8774/v2.1"
-register_endpoint neutron   network   "http://${MYIP}:9696"
-register_endpoint cinder    volume    "http://${MYIP}:8776/v3"
-register_endpoint cinderv3  volumev3  "http://${MYIP}:8776/v3"
-register_endpoint glance    image     "http://${MYIP}:9292"
-register_endpoint placement placement "http://${MYIP}:8778"
+seed_endpoints
 info "Service catalog ready."
 
 # ─── Default network ──────────────────────────────────────────────────────────

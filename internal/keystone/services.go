@@ -9,6 +9,7 @@ import (
 	"database/sql"
 
 	"github.com/cobaltcore-dev/o3k/internal/common"
+	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -16,11 +17,17 @@ import (
 
 // ListServices returns all services in the catalog
 func (svc *Service) ListServices(c *gin.Context) {
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
-		SELECT id, type, name, description, enabled, created_at, updated_at
-		FROM services
-		ORDER BY name
-	`)
+	svcType := c.Query("type")
+
+	query := `SELECT id, type, name, description, enabled, created_at, updated_at FROM services`
+	args := []interface{}{}
+	if svcType != "" {
+		query += ` WHERE type = $1`
+		args = append(args, svcType)
+	}
+	query += ` ORDER BY name`
+
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(query), args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_services").Msg("Failed to query services")
 		common.SendError(c, common.NewInternalServerError("failed to query services"))
@@ -275,12 +282,19 @@ func (svc *Service) UpdateService(c *gin.Context) {
 
 // ListEndpoints returns all endpoints in the catalog
 func (svc *Service) ListEndpoints(c *gin.Context) {
-	rows, err := svc.activeDB().QueryContext(c.Request.Context(), `
-		SELECT e.id, e.service_id, e.interface, e.url, e.region, e.enabled, s.type, s.name
+	serviceID := c.Query("service_id")
+
+	query := `SELECT e.id, e.service_id, e.interface, e.url, e.region, e.enabled, s.type, s.name
 		FROM endpoints e
-		JOIN services s ON e.service_id = s.id
-		ORDER BY s.name, e.interface
-	`)
+		JOIN services s ON e.service_id = s.id`
+	args := []interface{}{}
+	if serviceID != "" {
+		query += ` WHERE e.service_id = $1`
+		args = append(args, serviceID)
+	}
+	query += ` ORDER BY s.name, e.interface`
+
+	rows, err := svc.activeDB().QueryContext(c.Request.Context(), database.Q(query), args...)
 	if err != nil {
 		log.Error().Err(err).Str("operation", "list_endpoints").Msg("Failed to query endpoints")
 		common.SendError(c, common.NewInternalServerError("failed to query endpoints"))
