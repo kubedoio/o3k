@@ -175,6 +175,15 @@ curl -sfL --connect-timeout 30 --max-time 30 \
     -o "${INSTALL_DIR}/o3k-bootstrap" 2>/dev/null || true
 [ -f "${INSTALL_DIR}/o3k-bootstrap" ] && chmod +x "${INSTALL_DIR}/o3k-bootstrap"
 
+# Download flat network setup script
+curl -sfL --connect-timeout 30 --max-time 30 \
+    "https://raw.githubusercontent.com/${GITHUB_REPO}/${VERSION}/scripts/setup-flat-network.sh" \
+    -o "${INSTALL_DIR}/o3k-setup-flat-network" 2>/dev/null || \
+    curl -sfL --connect-timeout 30 --max-time 30 \
+    "https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/setup-flat-network.sh" \
+    -o "${INSTALL_DIR}/o3k-setup-flat-network" 2>/dev/null || true
+[ -f "${INSTALL_DIR}/o3k-setup-flat-network" ] && chmod +x "${INSTALL_DIR}/o3k-setup-flat-network"
+
 rm -rf "$TMP_DIR"
 info "Binary installed: ${INSTALL_DIR}/o3k ($VERSION)"
 
@@ -483,7 +492,7 @@ if [ "${O3K_FLAT_NETWORK:-true}" != "false" ]; then
         fi
     else
         warn "setup-flat-network.sh not found."
-        warn "Download and run: curl -sfL https://get.o3k.io/setup-flat-network.sh | sudo bash"
+        warn "Download and run: curl -sfL https://raw.githubusercontent.com/kubedoio/o3k/main/scripts/setup-flat-network.sh | sudo bash"
     fi
 fi
 
