@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // setupSeedTestDB opens an in-memory SQLite database and creates the minimal
@@ -146,4 +147,34 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestSeedDefaults_PasswordUpdate: when admin already exists and a new password
+// is supplied, SeedDefaults must update the stored hash.
+func TestSeedDefaults_PasswordUpdate(t *testing.T) {
+	db := setupSeedTestDB(t)
+	ctx := context.Background()
+
+	if err := SeedDefaults(ctx, db, "first-password"); err != nil {
+		t.Fatalf("initial seed: %v", err)
+	}
+
+	// Re-seed with a different password — must update the hash.
+	if err := SeedDefaults(ctx, db, "second-password"); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+
+	var hash string
+	if err := db.QueryRowContext(ctx,
+		database.Q("SELECT password_hash FROM users WHERE name = $1"), "admin",
+	).Scan(&hash); err != nil {
+		t.Fatalf("read hash: %v", err)
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("second-password")); err != nil {
+		t.Errorf("stored hash does not match second-password: %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("first-password")); err == nil {
+		t.Errorf("stored hash still matches first-password after update")
+	}
 }

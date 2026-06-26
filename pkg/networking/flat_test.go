@@ -68,3 +68,24 @@ func TestFlatNetworkManagerHostsFile(t *testing.T) {
 		t.Fatalf("unexpected hosts file content: %q", string(data))
 	}
 }
+
+func TestAddDHCPReservation_Validation(t *testing.T) {
+	dir := t.TempDir()
+	m := networking.NewFlatNetworkManagerWithDir("stub", "br-o3k", dir)
+
+	cases := []struct {
+		mac      string
+		ip       string
+		hostname string
+	}{
+		{"not-a-mac", "192.168.1.1", "vm"},
+		{"fa:16:3e:aa:bb:cc", "not-an-ip", "vm"},
+		{"fa:16:3e:aa:bb:cc", "192.168.1.1", "bad\nhostname"},
+		{"fa:16:3e:aa:bb:cc", "192.168.1.1", "bad,hostname"},
+	}
+	for _, tc := range cases {
+		if err := m.AddDHCPReservation("sub-1", tc.mac, tc.ip, tc.hostname); err == nil {
+			t.Errorf("expected error for mac=%q ip=%q hostname=%q", tc.mac, tc.ip, tc.hostname)
+		}
+	}
+}

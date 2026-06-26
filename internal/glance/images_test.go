@@ -246,3 +246,55 @@ func TestDeleteImageProtected(t *testing.T) {
 		})
 	}
 }
+
+func TestReactivateImage_StateGuard(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   string
+		wantCode int
+	}{
+		{"deactivated → active", "deactivated", http.StatusNoContent},
+		{"active → conflict", "active", http.StatusConflict},
+		{"queued → conflict", "queued", http.StatusConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := database.NewTestDB(t)
+			const (
+				imageID   = "img-react-001"
+				projectID = "proj-react"
+			)
+			insertTestProject(t, db, projectID)
+
+			now := time.Now().Format(time.RFC3339)
+			_, err := db.ExecContext(context.Background(), database.Q(`
+				INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, min_disk_gb, min_ram_mb, protected, properties, created_at, updated_at)
+				VALUES ($1, 'img', $2, $3, 'private', 'qcow2', 'bare', 0, 0, 0, '{}', $4, $4)
+			`), imageID, projectID, tc.status, now)
+			if err != nil {
+				t.Fatalf("insert image: %v", err)
+			}
+
+			svc := NewServiceWithDB(db, "stub", "", "", "", "", "", nil)
+
+			gin.SetMode(gin.TestMode)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/images/"+imageID+"/actions/reactivate", nil)
+			c.Params = gin.Params{{Key: "id", Value: imageID}}
+			c.Set("project_id", projectID)
+
+			svc.ReactivateImage(c)
+
+			if tc.wantCode == http.StatusNoContent {
+				// gin.CreateTestContext does not flush WriteHeaderNow for no-body responses;
+				// verify no error was returned instead.
+				if w.Code == http.StatusConflict || w.Code == http.StatusForbidden || w.Code >= http.StatusInternalServerError {
+					t.Errorf("expected success but got %d; body = %s", w.Code, w.Body.String())
+				}
+			} else if w.Code != tc.wantCode {
+				t.Errorf("status = %d, want %d; body = %s", w.Code, tc.wantCode, w.Body.String())
+			}
+		})
+	}
+}

@@ -362,3 +362,45 @@ func TestFloatingIPAssociation(t *testing.T) {
 	assert.True(t, extNet.Contains(net.ParseIP(fipAddr)),
 		"floating IP %s must be inside external CIDR", fipAddr)
 }
+
+func TestDeletePortByID(t *testing.T) {
+	db := neutronTestDB(t)
+	ctx := t.Context()
+
+	svc := NewServiceWithDB(db, "stub", nil)
+
+	const portID = "port-del-001"
+	const projectID = "proj-del"
+	_, err := db.ExecContext(ctx, database.Q(`
+		INSERT INTO ports (id, name, network_id, project_id, mac_address, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
+		VALUES ($1, 'p', 'net-1', $2, 'fa:16:3e:00:00:01', 'DOWN', '[]', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`), portID, projectID)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DeletePortByID(ctx, portID, projectID))
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, database.Q("SELECT COUNT(*) FROM ports WHERE id = $1"), portID).Scan(&count))
+	assert.Equal(t, 0, count)
+}
+
+func TestDeletePortByID_WrongProject(t *testing.T) {
+	db := neutronTestDB(t)
+	ctx := t.Context()
+
+	svc := NewServiceWithDB(db, "stub", nil)
+
+	const portID = "port-del-002"
+	_, err := db.ExecContext(ctx, database.Q(`
+		INSERT INTO ports (id, name, network_id, project_id, mac_address, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
+		VALUES ($1, 'p', 'net-1', 'owner-proj', 'fa:16:3e:00:00:02', 'DOWN', '[]', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`), portID)
+	require.NoError(t, err)
+
+	// Different project — should silently do nothing, not error.
+	require.NoError(t, svc.DeletePortByID(ctx, portID, "other-proj"))
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, database.Q("SELECT COUNT(*) FROM ports WHERE id = $1"), portID).Scan(&count))
+	assert.Equal(t, 1, count, "port owned by another project must not be deleted")
+}
