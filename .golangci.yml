@@ -37,20 +37,21 @@ linters:
         - name: empty-block
           disabled: true
 
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - revive
+          - bodyclose
+      - path: test/
+        linters:
+          - errcheck
+          - gocritic
+          - revive
+          - bodyclose
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gocritic
-        - revive
-        - bodyclose
-    - path: test/
-      linters:
-        - errcheck
-        - gocritic
-        - revive
-        - bodyclose
