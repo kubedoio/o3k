@@ -95,7 +95,7 @@ func (svc *Service) ImportImage(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		common.SendError(c, common.NewInternalServerError("failed to query image status"))
 		return
 	}
 
@@ -109,7 +109,7 @@ func (svc *Service) ImportImage(c *gin.Context) {
 	`, "active", time.Now(), imageID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		common.SendError(c, common.NewInternalServerError("failed to import image"))
 		return
 	}
 

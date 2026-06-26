@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cobaltcore-dev/o3k/internal/common"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -17,7 +18,7 @@ func (svc *Service) CreateTask(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		common.SendError(c, common.NewBadRequestError(err.Error()))
 		return
 	}
 
@@ -31,7 +32,7 @@ func (svc *Service) CreateTask(c *gin.Context) {
 	`, taskID, req.Type, "pending", req.Input, owner, now, now)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		common.SendError(c, common.NewInternalServerError("failed to create task"))
 		return
 	}
 
@@ -57,10 +58,9 @@ func (svc *Service) ListTasks(c *gin.Context) {
 		LIMIT 100
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		common.SendError(c, common.NewInternalServerError("failed to list tasks"))
 		return
 	}
-	defer rows.Close()
 
 	tasks := []gin.H{}
 	for rows.Next() {
@@ -93,7 +93,7 @@ func (svc *Service) ListTasks(c *gin.Context) {
 		tasks = append(tasks, task)
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "rows iteration error"})
+		common.SendError(c, common.NewInternalServerError("failed to list tasks"))
 		return
 	}
 
@@ -118,8 +118,7 @@ func (svc *Service) GetTask(c *gin.Context) {
 	`, taskID).Scan(&taskType, &status, &inputJSON, &resultJSON, &owner, &message, &createdAt, &updatedAt)
 
 	if err != nil {
-		// Log the actual error for debugging
-		c.JSON(http.StatusNotFound, gin.H{"message": "Task not found", "debug_error": err.Error()})
+		common.SendError(c, common.NewNotFoundError("task"))
 		return
 	}
 

@@ -1342,7 +1342,7 @@ func (svc *Service) CreateSecurityGroupRule(c *gin.Context) {
 			return
 		}
 		if remoteGroupProjectID != projectID && !isAdminBool {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Remote security group belongs to another project"})
+			common.SendError(c, common.NewForbiddenError("remote security group belongs to another project"))
 			return
 		}
 	}
