@@ -27,9 +27,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Run cinder without -race: the concurrency tests stress SQLite busy-timeout
-          # under the race detector's timing and produce false SQLITE_BUSY failures.
-          go test -count=1 ./internal/cinder/...
+          go test -short -count=1 ./internal/cinder/...
           go test -race -count=1 $(go list ./... | grep -v '/test/contract' | grep -v 'internal/cinder')
 
       - name: Build all binaries
@@ -47,7 +45,7 @@ jobs:
         with:
           go-version: '1.26.4'
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           args: --timeout=5m

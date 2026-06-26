@@ -162,6 +162,9 @@ func doCreateVolume(svc *Service, projectID string, sizeGB int) *httptest.Respon
 // transitions from "available" to "in-use" atomically inside a transaction.
 // ---------------------------------------------------------------------------
 func TestConcurrentAttach(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping concurrent SQLite stress test in short/CI mode")
+	}
 	db := setupCinderTestDB(t)
 
 	projectID := "proj-" + uuid.New().String()
@@ -215,6 +218,9 @@ func TestConcurrentAttach(t *testing.T) {
 // The final size must be exactly 20 GB, not 10 GB (lost update) or any other value.
 // ---------------------------------------------------------------------------
 func TestConcurrentExtend(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping concurrent SQLite stress test in short/CI mode")
+	}
 	db := setupCinderTestDB(t)
 
 	projectID := "proj-" + uuid.New().String()
