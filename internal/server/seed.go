@@ -17,11 +17,31 @@ import (
 // Uses fixed UUIDs so that repeated calls never duplicate rows and foreign
 // keys remain stable across restarts.
 func SeedDefaults(ctx context.Context, db *sql.DB, adminPassword string) error {
-	// Check if admin user already exists — if so, nothing to do.
+	// Check if admin user already exists.
 	var exists int
 	err := db.QueryRowContext(ctx, database.Q("SELECT 1 FROM users WHERE name = $1"), "admin").Scan(&exists)
 	if err == nil {
-		return nil // Already seeded.
+		// Already seeded. If an explicit password was provided (env var set by
+		// installer on reinstall), update the hash only when it no longer matches —
+		// avoids a 100ms bcrypt hash on every normal restart.
+		if adminPassword != "" {
+			var storedHash string
+			if qerr := db.QueryRowContext(ctx,
+				database.Q("SELECT password_hash FROM users WHERE name = $1"), "admin",
+			).Scan(&storedHash); qerr == nil {
+				if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(adminPassword)) != nil {
+					// Password changed — rehash and update.
+					hash, herr := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+					if herr != nil {
+						return fmt.Errorf("hash password on reseed: %w", herr)
+					}
+					_, _ = db.ExecContext(ctx,
+						database.Q("UPDATE users SET password_hash = $1 WHERE name = $2"),
+						string(hash), "admin")
+				}
+			}
+		}
+		return nil
 	}
 	if err != sql.ErrNoRows {
 		return fmt.Errorf("check existing seed: %w", err)
