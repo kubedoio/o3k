@@ -77,9 +77,15 @@ register_endpoint() {
     _svc_name=$1
     _svc_type=$2
     _pub_url=$3
-    # Check if the service already has public endpoint
-    if timeout 10 openstack endpoint list --service "$_svc_name" --interface public -f value -c URL 2>/dev/null | grep -q "http"; then
+    # If an endpoint already exists with the correct URL, nothing to do.
+    _existing=$(timeout 10 openstack endpoint list --service "$_svc_name" --interface public -f value -c URL 2>/dev/null | head -1)
+    if [ "$_existing" = "$_pub_url" ]; then
         return 0
+    fi
+    # Wrong URL or no endpoint — delete stale endpoints then recreate.
+    if [ -n "$_existing" ]; then
+        timeout 10 openstack endpoint list --service "$_svc_name" -f value -c ID 2>/dev/null | \
+            xargs -r -I{} openstack endpoint delete {} 2>/dev/null || true
     fi
     # Get or create service
     _svc_id=$(timeout 10 openstack service list --type "$_svc_type" -f value -c ID 2>/dev/null | head -1)

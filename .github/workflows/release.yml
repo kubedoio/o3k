@@ -105,7 +105,7 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s -X main.Version=${{ steps.version.outputs.version }}" -o dist/compat-check-darwin-arm64 ./cmd/compat-check
 
       - name: Copy install script
-        run: cp scripts/install.sh dist/install.sh
+        run: cp scripts/install.sh dist/install.sh && cp scripts/setup-flat-network.sh dist/setup-flat-network.sh
 
       - name: Create checksums
         run: |
@@ -191,6 +191,7 @@ jobs:
             dist/compat-check-linux-arm64
             dist/compat-check-darwin-arm64
             dist/install.sh
+            dist/setup-flat-network.sh
             dist/checksums.txt
             dist/checksums.txt.sig
             dist/checksums.txt.pem
