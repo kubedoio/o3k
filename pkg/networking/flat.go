@@ -88,7 +88,6 @@ func (m *FlatNetworkManager) StartDHCP(cfg FlatDHCPConfig) error {
 		"--dhcp-option=6," + cfg.DNS,
 		"--pid-file=" + pidFile,
 		"--dhcp-hostsfile=" + hostsFile,
-		"--no-daemon",
 	}
 
 	cmd := exec.Command("dnsmasq", args...)

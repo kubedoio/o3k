@@ -1633,6 +1633,15 @@ func (svc *Service) AllocatePortForInstance(ctx context.Context, networkID, proj
 	}, nil
 }
 
+// DeletePortByID deletes a port by ID without networking teardown.
+// Used by Nova to clean up ports on VM creation failure (port was never attached).
+func (svc *Service) DeletePortByID(ctx context.Context, portID, projectID string) error {
+	_, err := svc.activeDB().ExecContext(ctx,
+		database.Q("DELETE FROM ports WHERE id = $1 AND project_id::text = $2"),
+		portID, projectID)
+	return err
+}
+
 // fetchSecurityGroupRulesForPort retrieves all security group rules for given security group IDs
 func (svc *Service) fetchSecurityGroupRulesForPort(ctx context.Context, securityGroupIDs []string) ([]networking.SecurityGroupRule, error) {
 	if len(securityGroupIDs) == 0 {
