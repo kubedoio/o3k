@@ -78,7 +78,7 @@ func (svc *Service) ImportImage(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Invalid request body"})
+		common.SendError(c, common.NewBadRequestError("invalid request body"))
 		return
 	}
 
@@ -90,7 +90,7 @@ func (svc *Service) ImportImage(c *gin.Context) {
 	).Scan(&status)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusNotFound, gin.H{"message": "Image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 
@@ -129,7 +129,7 @@ func (svc *Service) GetImageImportInfo(c *gin.Context) {
 	).Scan(&exists)
 
 	if err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"message": "Image not found"})
+		common.SendError(c, common.NewNotFoundError("image"))
 		return
 	}
 
