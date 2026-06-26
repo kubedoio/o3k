@@ -182,6 +182,17 @@ info "Binary installed: ${INSTALL_DIR}/o3k ($VERSION)"
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 chmod 700 "$CONFIG_DIR"
 
+# Generate admin password now (before starting o3k) so bootstrap and openrc
+# always have a known password without racing against o3k's first-boot write.
+if [ -z "${O3K_ADMIN_PASSWORD:-}" ]; then
+    O3K_ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=')
+    info "Generated admin password."
+fi
+# Write to initial-password so o3k uses it on first boot instead of auto-generating.
+mkdir -p "$DATA_DIR"
+printf '%s\n' "$O3K_ADMIN_PASSWORD" > "${DATA_DIR}/initial-password"
+chmod 600 "${DATA_DIR}/initial-password"
+
 if [ -f "$CONFIG_FILE" ] && [ "${O3K_FORCE_CONFIG:-false}" != "true" ]; then
     info "Config already exists at $CONFIG_FILE — skipping generation (set O3K_FORCE_CONFIG=true to overwrite)"
 else
@@ -270,7 +281,7 @@ Requires=libvirtd.service
 Type=simple
 ExecStart=${INSTALL_DIR}/o3k --config ${CONFIG_FILE}
 Environment=O3K_DATA_DIR=${DATA_DIR}
-Environment=O3K_ADMIN_PASSWORD=${O3K_ADMIN_PASSWORD:-}
+Environment=O3K_ADMIN_PASSWORD=${O3K_ADMIN_PASSWORD}
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
@@ -289,12 +300,8 @@ info "Service enabled and started."
 
 # ─── Phase 5a: Generate openrc file ───────────────────────────────────────────
 OPENRC_FILE="/etc/o3k/o3k-admin-openrc"
-# Wait briefly for initial-password to be written by o3k on first boot
-sleep 2
-ADMIN_PASS="${O3K_ADMIN_PASSWORD:-}"
-if [ -z "$ADMIN_PASS" ] && [ -f "${DATA_DIR}/initial-password" ]; then
-    ADMIN_PASS=$(cat "${DATA_DIR}/initial-password")
-fi
+# O3K_ADMIN_PASSWORD was set earlier in Phase 4 — use it directly.
+ADMIN_PASS="${O3K_ADMIN_PASSWORD}"
 printf '%s\n' \
     '# O3K admin credentials — source this file to use the OpenStack CLI' \
     '# Usage: source /etc/o3k/o3k-admin-openrc' \
@@ -495,15 +502,14 @@ fi
 if [ "${O3K_NO_BOOTSTRAP:-false}" != "true" ]; then
     info "Running bootstrap (network + CirrOS image + test VM)..."
     info "Set O3K_NO_BOOTSTRAP=true to skip."
-    O3K_ADMIN_PASSWORD="${O3K_ADMIN_PASSWORD:-}" \
+    O3K_ADMIN_PASSWORD="${O3K_ADMIN_PASSWORD}" \
     O3K_DATA_DIR="$DATA_DIR" \
     sh "${INSTALL_DIR}/o3k-bootstrap" 2>&1 || \
         warn "Bootstrap encountered errors — run manually: o3k-bootstrap"
 fi
 
 # ─── Phase 8: Print credentials and summary ──────────────────────────────────
-PASS=""
-[ -f "${DATA_DIR}/initial-password" ] && PASS=$(cat "${DATA_DIR}/initial-password")
+PASS="${O3K_ADMIN_PASSWORD}"
 MYIP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 
 printf "\n"
