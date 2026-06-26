@@ -72,7 +72,7 @@ func readHostStats(ctx context.Context, db interface {
 	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(dataDir, &stat); err == nil {
-		blockSize := int64(stat.Bsize)
+		blockSize := int64(stat.Bsize) //nolint:unconvert
 		s.localGB = int(int64(stat.Blocks) * blockSize / (1024 * 1024 * 1024))
 		s.freeGB = int(int64(stat.Bavail) * blockSize / (1024 * 1024 * 1024))
 		if s.localGB < 1 {
