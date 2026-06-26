@@ -79,6 +79,7 @@ func (m *FlatNetworkManager) StartDHCP(cfg FlatDHCPConfig) error {
 
 	hostsFile := m.hostsFilePath(cfg.SubnetID)
 	pidFile := m.pidFilePath(cfg.SubnetID)
+	leaseFile := m.leaseFilePath(cfg.SubnetID)
 
 	args := []string{
 		"--interface=" + cfg.BridgeName,
@@ -88,6 +89,7 @@ func (m *FlatNetworkManager) StartDHCP(cfg FlatDHCPConfig) error {
 		"--dhcp-option=6," + cfg.DNS,
 		"--pid-file=" + pidFile,
 		"--dhcp-hostsfile=" + hostsFile,
+		"--dhcp-leasefile=" + leaseFile,
 	}
 
 	cmd := exec.Command("dnsmasq", args...)
@@ -169,6 +171,10 @@ func (m *FlatNetworkManager) AddDHCPReservation(subnetID, mac, ip, hostname stri
 		return nil
 	}
 
+	// Remove any stale lease for this MAC so dnsmasq doesn't serve the old IP.
+	leaseFile := m.leaseFilePath(subnetID)
+	removeLease(leaseFile, mac)
+
 	pidFile := m.pidFilePath(subnetID)
 	if data, err := os.ReadFile(pidFile); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
@@ -187,6 +193,10 @@ func (m *FlatNetworkManager) pidFilePath(subnetID string) string {
 	return filepath.Join(m.dataDir, "dhcp-"+subnetID+".pid")
 }
 
+func (m *FlatNetworkManager) leaseFilePath(subnetID string) string {
+	return filepath.Join(m.dataDir, "dhcp-"+subnetID+".leases")
+}
+
 func (m *FlatNetworkManager) ensureHostsFile(subnetID string) error {
 	p := m.hostsFilePath(subnetID)
 	if _, err := os.Stat(p); err != nil {
@@ -203,4 +213,21 @@ func (m *FlatNetworkManager) ensureHostsFile(subnetID string) error {
 		return f.Close()
 	}
 	return nil
+}
+
+// removeLease removes any lease line matching the given MAC from the lease file,
+// so dnsmasq doesn't serve a stale IP when a new reservation is written.
+func removeLease(leaseFile, mac string) {
+	data, err := os.ReadFile(leaseFile)
+	if err != nil {
+		return
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.Contains(line, mac) {
+			continue
+		}
+		out = append(out, line)
+	}
+	_ = os.WriteFile(leaseFile, []byte(strings.Join(out, "\n")+"\n"), 0644)
 }
