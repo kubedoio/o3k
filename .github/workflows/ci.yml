@@ -56,7 +56,11 @@ jobs:
           cache: true
 
       - name: Run tests with race detector
-        run: go test -race -coverprofile=coverage.txt -covermode=atomic $(go list ./... | grep -v '/test/contract')
+        run: |
+          go test -count=1 -coverprofile=coverage-cinder.txt -covermode=atomic ./internal/cinder/...
+          go test -race -coverprofile=coverage.txt -covermode=atomic $(go list ./... | grep -v '/test/contract' | grep -v 'internal/cinder')
+          # Merge coverage profiles
+          cat coverage-cinder.txt >> coverage.txt
 
       - name: Check coverage
         run: |
@@ -84,7 +88,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.8
+          version: v2.12.2
           install-mode: goinstall
           args: --timeout=5m
 
