@@ -363,8 +363,8 @@ func (svc *Service) ListPorts(c *gin.Context) {
 		status              string
 		fixedIPsJSON        []byte
 		allowedAddrPairJSON []byte
-		createdAt           time.Time
-		updatedAt           time.Time
+		createdAt           string
+		updatedAt           string
 	}
 
 	var portRows []portRow
@@ -454,8 +454,8 @@ func (svc *Service) ListPorts(c *gin.Context) {
 			"allowed_address_pairs": allowedAddrPairs,
 			"dns_name":              "",
 			"dns_assignment":        []interface{}{},
-			"created_at":            pr.createdAt.Format(time.RFC3339),
-			"updated_at":            pr.updatedAt.Format(time.RFC3339),
+			"created_at":            parseDBTime(pr.createdAt).Format(time.RFC3339),
+			"updated_at":            parseDBTime(pr.updatedAt).Format(time.RFC3339),
 		})
 	}
 
@@ -487,7 +487,7 @@ func (svc *Service) GetPort(c *gin.Context) {
 	var macAddress, status string
 	var adminStateUp bool
 	var fixedIPsJSON, allowedAddrPairJSON []byte
-	var createdAt, updatedAt time.Time
+	var createdAt, updatedAt string
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT p.id, p.name, p.network_id, p.device_id, p.device_owner, p.mac_address, p.admin_state_up, p.status, p.fixed_ips, p.allowed_address_pairs, p.created_at, p.updated_at
@@ -558,8 +558,8 @@ func (svc *Service) GetPort(c *gin.Context) {
 			"allowed_address_pairs": allowedAddrPairs,
 			"dns_name":              "",
 			"dns_assignment":        []interface{}{},
-			"created_at":            createdAt.Format(time.RFC3339),
-			"updated_at":            updatedAt.Format(time.RFC3339),
+			"created_at":            parseDBTime(createdAt).Format(time.RFC3339),
+			"updated_at":            parseDBTime(updatedAt).Format(time.RFC3339),
 		},
 	})
 }
@@ -1016,7 +1016,7 @@ func (svc *Service) ListSecurityGroups(c *gin.Context) {
 	var securityGroups []gin.H
 	for rows.Next() {
 		var id, name, description string
-		var createdAt, updatedAt time.Time
+		var createdAt, updatedAt string
 
 		if err := rows.Scan(&id, &name, &description, &createdAt, &updatedAt); err != nil {
 			log.Warn().Err(err).Msg("failed to scan security group row")
@@ -1032,8 +1032,8 @@ func (svc *Service) ListSecurityGroups(c *gin.Context) {
 			"tenant_id":            projectID,
 			"description":          description,
 			"security_group_rules": sgRules,
-			"created_at":           createdAt.Format(time.RFC3339),
-			"updated_at":           updatedAt.Format(time.RFC3339),
+			"created_at":           parseDBTime(createdAt).Format(time.RFC3339),
+			"updated_at":           parseDBTime(updatedAt).Format(time.RFC3339),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1132,7 +1132,7 @@ func (svc *Service) GetSecurityGroup(c *gin.Context) {
 	projectID := c.GetString("project_id")
 
 	var id, name, description string
-	var createdAt, updatedAt time.Time
+	var createdAt, updatedAt string
 
 	err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
 		SELECT id, name, description, created_at, updated_at
@@ -1159,8 +1159,8 @@ func (svc *Service) GetSecurityGroup(c *gin.Context) {
 			"name":                 name,
 			"tenant_id":            projectID,
 			"description":          description,
-			"created_at":           createdAt.Format(time.RFC3339),
-			"updated_at":           updatedAt.Format(time.RFC3339),
+			"created_at":           parseDBTime(createdAt).Format(time.RFC3339),
+			"updated_at":           parseDBTime(updatedAt).Format(time.RFC3339),
 			"security_group_rules": rules,
 		},
 	})
@@ -1438,7 +1438,7 @@ func (svc *Service) ListSecurityGroupRules(c *gin.Context) {
 		var id, sgID, direction, etherType string
 		var protocol, remoteIP, remoteGroup sql.NullString
 		var portMin, portMax sql.NullInt32
-		var createdAt time.Time
+		var createdAt string
 
 		if err := rows.Scan(&id, &sgID, &direction, &etherType, &protocol, &portMin, &portMax, &remoteIP, &remoteGroup, &createdAt); err != nil {
 			log.Warn().Err(err).Msg("failed to scan security group rule row")
@@ -1450,7 +1450,7 @@ func (svc *Service) ListSecurityGroupRules(c *gin.Context) {
 			"security_group_id": sgID,
 			"direction":         direction,
 			"ethertype":         etherType,
-			"created_at":        createdAt.Format(time.RFC3339),
+			"created_at":        parseDBTime(createdAt).Format(time.RFC3339),
 		}
 
 		if protocol.Valid {
