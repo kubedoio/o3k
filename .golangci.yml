@@ -36,6 +36,17 @@ linters:
           disabled: true
         - name: empty-block
           disabled: true
+    errcheck:
+      # Close/Rollback calls in defer are non-actionable: the operation is
+      # already complete and errors cannot be handled meaningfully.
+      exclude-functions:
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.DB).Close
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*net.Conn).Close
 
   exclusions:
     rules:

@@ -68,7 +68,7 @@ func (m *FlatNetworkManager) BridgeExists() bool {
 func (m *FlatNetworkManager) StartDHCP(cfg FlatDHCPConfig) error {
 	// Skip file creation in stub mode with the production data dir (no write
 	// permission outside tests/real installs).
-	if !(m.mode == "stub" && m.dataDir == defaultFlatDataDir) {
+	if m.mode != "stub" || m.dataDir != defaultFlatDataDir {
 		if err := m.ensureHostsFile(cfg.SubnetID); err != nil {
 			return err
 		}

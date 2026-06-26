@@ -33,8 +33,8 @@ func renderRBDHosts(monitors []string) string {
 		if idx := strings.LastIndex(m, ":"); idx > 0 && idx < len(m)-1 {
 			host, port = m[:idx], m[idx+1:]
 		}
-		sb.WriteString(fmt.Sprintf("        <host name='%s' port='%s'/>\n",
-			xmlEscape(host), xmlEscape(port)))
+		fmt.Fprintf(&sb, "        <host name='%s' port='%s'/>\n",
+			xmlEscape(host), xmlEscape(port))
 	}
 	return sb.String()
 }
@@ -85,7 +85,7 @@ func GenerateVMXML(spec VMSpec) string {
 	var sb strings.Builder
 
 	// Domain header
-	sb.WriteString(fmt.Sprintf(`<domain type='kvm'>
+	fmt.Fprintf(&sb, `<domain type='kvm'>
   <name>%s</name>
   <uuid>%s</uuid>
   <memory unit='MiB'>%d</memory>
@@ -120,7 +120,7 @@ func GenerateVMXML(spec VMSpec) string {
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
 `,
-		xmlEscape(spec.Name), xmlEscape(spec.UUID), spec.MemoryMB, spec.MemoryMB, spec.VCPUs))
+		xmlEscape(spec.Name), xmlEscape(spec.UUID), spec.MemoryMB, spec.MemoryMB, spec.VCPUs)
 
 	// Boot disk (RBD-backed or local)
 	if strings.HasPrefix(spec.ImagePath, "rbd:") {
@@ -129,23 +129,23 @@ func GenerateVMXML(spec VMSpec) string {
 		pool := parts[0]
 		image := parts[1]
 
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
     <disk type='network' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback'/>
       <source protocol='rbd' name='%s/%s'>
 %s      </source>
       <target dev='vda' bus='virtio'/>
     </disk>
-`, xmlEscape(pool), xmlEscape(image), renderRBDHosts(spec.CephMonitors)))
+`, xmlEscape(pool), xmlEscape(image), renderRBDHosts(spec.CephMonitors))
 	} else {
 		// Local file
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback'/>
       <source file='%s'/>
       <target dev='vda' bus='virtio'/>
     </disk>
-`, xmlEscape(spec.ImagePath)))
+`, xmlEscape(spec.ImagePath))
 	}
 
 	// Attached volumes
@@ -155,14 +155,14 @@ func GenerateVMXML(spec VMSpec) string {
 			device = fmt.Sprintf("vd%c", 'b'+i) // vdb, vdc, etc.
 		}
 
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
     <disk type='network' device='disk'>
       <driver name='qemu' type='raw'/>
       <source protocol='rbd' name='%s/%s'>
 %s      </source>
       <target dev='%s' bus='virtio'/>
     </disk>
-`, xmlEscape(vol.RBDPool), xmlEscape(vol.RBDImage), renderRBDHosts(spec.CephMonitors), xmlEscape(device)))
+`, xmlEscape(vol.RBDPool), xmlEscape(vol.RBDImage), renderRBDHosts(spec.CephMonitors), xmlEscape(device))
 	}
 
 	// Network interfaces — use bridge if one was provisioned, otherwise fall
@@ -171,21 +171,21 @@ func GenerateVMXML(spec VMSpec) string {
 	if len(spec.Networks) > 0 {
 		for _, net := range spec.Networks {
 			if net.BridgeName != "" {
-				sb.WriteString(fmt.Sprintf(`
+				fmt.Fprintf(&sb, `
     <interface type='bridge'>
       <mac address='%s'/>
       <source bridge='%s'/>
       <model type='virtio'/>
     </interface>
-`, xmlEscape(net.MACAddress), xmlEscape(net.BridgeName)))
+`, xmlEscape(net.MACAddress), xmlEscape(net.BridgeName))
 			} else {
-				sb.WriteString(fmt.Sprintf(`
+				fmt.Fprintf(&sb, `
     <interface type='network'>
       <mac address='%s'/>
       <source network='default'/>
       <model type='virtio'/>
     </interface>
-`, xmlEscape(net.MACAddress)))
+`, xmlEscape(net.MACAddress))
 			}
 		}
 	} else {
@@ -217,14 +217,14 @@ func GenerateVMXML(spec VMSpec) string {
 
 	// Cloud-init (if provided)
 	if spec.CloudInit != nil {
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source file='/var/lib/o3k/cloud-init/%s.iso'/>
       <target dev='hdc' bus='ide'/>
       <readonly/>
     </disk>
-`, spec.UUID))
+`, spec.UUID)
 	}
 
 	// Close devices and domain
@@ -362,19 +362,19 @@ func GenerateDiskXML(spec DiskSpec) string {
 
 	if spec.Type == "network" && spec.Protocol == "rbd" {
 		// RBD network disk
-		sb.WriteString(fmt.Sprintf(`<disk type='network' device='disk'>
+		fmt.Fprintf(&sb, `<disk type='network' device='disk'>
   <driver name='qemu' type='raw' cache='writeback'/>
   <source protocol='rbd' name='%s'>
 %s  </source>
   <target dev='%s' bus='virtio'/>
-</disk>`, xmlEscape(spec.Source), renderRBDHosts(spec.CephMonitors), xmlEscape(device)))
+</disk>`, xmlEscape(spec.Source), renderRBDHosts(spec.CephMonitors), xmlEscape(device))
 	} else {
 		// Local file disk
-		sb.WriteString(fmt.Sprintf(`<disk type='file' device='disk'>
+		fmt.Fprintf(&sb, `<disk type='file' device='disk'>
   <driver name='qemu' type='qcow2' cache='writeback'/>
   <source file='%s'/>
   <target dev='%s' bus='virtio'/>
-</disk>`, xmlEscape(spec.Source), xmlEscape(device)))
+</disk>`, xmlEscape(spec.Source), xmlEscape(device))
 	}
 
 	return sb.String()

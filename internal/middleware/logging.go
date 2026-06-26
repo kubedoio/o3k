@@ -315,6 +315,7 @@ func CORSMiddlewareWithConfig(allowedOrigins []string) gin.HandlerFunc {
 }
 
 // CORSMiddleware adds CORS headers using the default origin allowlist.
+//
 // Deprecated: prefer CORSMiddlewareWithConfig with an explicit allowlist.
 func CORSMiddleware() gin.HandlerFunc {
 	return CORSMiddlewareWithConfig(nil)

@@ -311,8 +311,8 @@ func (svc *Service) ValidateToken(c *gin.Context) {
 	// Build full token response (same structure as POST /v3/auth/tokens)
 	tokenResp := gin.H{
 		"methods":    []string{"token"},
-		"expires_at": claims.ExpiresAt.Time.Format(time.RFC3339),
-		"issued_at":  claims.IssuedAt.Time.Format(time.RFC3339),
+		"expires_at": claims.ExpiresAt.Format(time.RFC3339),
+		"issued_at":  claims.IssuedAt.Format(time.RFC3339),
 	}
 
 	// Query user's domain

@@ -137,24 +137,26 @@ func (p *Parser) parseExpression() (*ASTNode, error) {
 		return nil, err
 	}
 
+loop:
 	for p.current < len(p.tokens) {
 		token := p.tokens[p.current]
-		if token.Type == TOKEN_OR {
+		switch token.Type {
+		case TOKEN_OR:
 			p.current++
 			right, err := p.parseTerm()
 			if err != nil {
 				return nil, err
 			}
 			left = &ASTNode{Type: "or", Left: left, Right: right}
-		} else if token.Type == TOKEN_AND {
+		case TOKEN_AND:
 			p.current++
 			right, err := p.parseTerm()
 			if err != nil {
 				return nil, err
 			}
 			left = &ASTNode{Type: "and", Left: left, Right: right}
-		} else {
-			break
+		default:
+			break loop
 		}
 	}
 

@@ -34,13 +34,14 @@ func NewSecurityGroupManager(mode string, ebpfObjectPath string) (*SecurityGroup
 		stubRules:  make(map[string][]SecurityGroupRule),
 	}
 
-	if mode == "iptables" {
+	switch mode {
+	case "iptables":
 		ipt, err := iptables.New()
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize iptables: %w", err)
 		}
 		mgr.ipt = ipt
-	} else if mode == "ebpf" {
+	case "ebpf":
 		// Initialize eBPF manager
 		ebpfMgr, err := ebpf.NewSecurityGroupManager(ebpfObjectPath)
 		if err != nil {
