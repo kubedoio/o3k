@@ -387,9 +387,16 @@ func (svc *Service) ListPorts(c *gin.Context) {
 	// Batch fetch security groups for all ports in one query.
 	sgByPort := make(map[string][]string)
 	if len(portIDs) > 0 {
+		placeholders := make([]string, len(portIDs))
+		sgArgs := make([]interface{}, len(portIDs))
+		for i, id := range portIDs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			sgArgs[i] = id
+		}
 		sgRows, err := svc.activeDB().QueryContext(c.Request.Context(),
-			"SELECT port_id, security_group_id FROM port_security_groups WHERE port_id = ANY($1)",
-			portIDs,
+			database.Q(fmt.Sprintf("SELECT port_id, security_group_id FROM port_security_groups WHERE port_id IN (%s)",
+				strings.Join(placeholders, ","))),
+			sgArgs...,
 		)
 		if err != nil {
 			log.Error().Err(err).Str("operation", "list_ports_sg_batch").Msg("database error fetching security groups")
@@ -1649,14 +1656,20 @@ func (svc *Service) fetchSecurityGroupRulesForPort(ctx context.Context, security
 	}
 
 	// Build query with IN clause for multiple security groups
-	query := `
+	placeholders := make([]string, len(securityGroupIDs))
+	args := make([]interface{}, len(securityGroupIDs))
+	for i, id := range securityGroupIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	query := database.Q(fmt.Sprintf(`
 		SELECT id, security_group_id, direction, ethertype, protocol,
 		       port_range_min, port_range_max, remote_ip_prefix, remote_group_id
 		FROM security_group_rules
-		WHERE security_group_id = ANY($1)
-	`
+		WHERE security_group_id IN (%s)
+	`, strings.Join(placeholders, ",")))
 
-	rows, err := svc.activeDB().QueryContext(ctx, query, securityGroupIDs)
+	rows, err := svc.activeDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query security group rules: %w", err)
 	}
