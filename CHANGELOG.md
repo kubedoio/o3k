@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.14] - 2026-06-26
+
+### Fixed
+- **Ubuntu 26.04 KVM installs** (`scripts/install.sh`): install the correct
+  `qemu-system-x86` package set where `qemu-kvm` is no longer available.
+- **Release installer repository** (`scripts/install.sh`): use the canonical
+  `kubedoio/o3k` release repository for binary downloads.
+- **Libvirt machine compatibility** (`pkg/hypervisor/xml_template.go`): stop
+  pinning VMs to the legacy `pc-i440fx-2.12` machine type so current QEMU/libvirt
+  hosts can select a supported machine type.
+
+---
+
 ## [0.2.13] - 2026-06-26
 
 ### Fixed
