@@ -32,6 +32,7 @@ func TestGenerateVMXML(t *testing.T) {
 		"<uuid>550e8400-e29b-41d4-a716-446655440000</uuid>",
 		"<memory unit='MiB'>2048</memory>",
 		"<vcpu placement='static'>2</vcpu>",
+		"<type arch='x86_64'>hvm</type>",
 		"<disk type='file' device='disk'>",
 		"<source file='/var/lib/libvirt/images/test.qcow2'/>",
 		"<interface type='bridge'>",
@@ -43,6 +44,9 @@ func TestGenerateVMXML(t *testing.T) {
 		if !strings.Contains(xml, element) {
 			t.Errorf("XML missing required element: %s", element)
 		}
+	}
+	if strings.Contains(xml, "pc-i440fx-2.12") {
+		t.Error("XML must not pin the legacy pc-i440fx-2.12 machine type")
 	}
 }
 
