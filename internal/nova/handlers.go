@@ -1079,6 +1079,21 @@ func parseDBTime(s string) time.Time {
 	return time.Time{}
 }
 
+func parseDBTimeValue(v interface{}) time.Time {
+	switch t := v.(type) {
+	case nil:
+		return time.Time{}
+	case time.Time:
+		return t
+	case string:
+		return parseDBTime(t)
+	case []byte:
+		return parseDBTime(string(t))
+	default:
+		return parseDBTime(fmt.Sprint(t))
+	}
+}
+
 // generateHostID returns a deterministic hex string derived from projectID and hostname,
 // matching the Nova convention for the hostId field in server responses.
 func generateHostID(projectID, hostname string) string {
@@ -1285,8 +1300,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 		id, name, status, projID, userID, flavorID, flavorName string
 		imageID                                                *string
 		powerState, vcpus, ramMB, diskGB                       int
-		createdAt, updatedAt                                   string
-		launchedAt                                             *string
+		createdAt, updatedAt, launchedAt                       interface{}
 		host                                                   sql.NullString
 		locked                                                 bool
 		taskStateDB, keyNameDB, faultMsgDB                     sql.NullString
@@ -1326,8 +1340,8 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			imageIDStr = *r.imageID
 		}
 		launchedAtStr := ""
-		if r.launchedAt != nil {
-			launchedAtStr = parseDBTime(*r.launchedAt).Format(time.RFC3339)
+		if launchedAt := parseDBTimeValue(r.launchedAt); !launchedAt.IsZero() {
+			launchedAtStr = launchedAt.Format(time.RFC3339)
 		}
 
 		addresses, ok := addressesByServer[r.id]
@@ -1388,8 +1402,8 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			"status":                              r.status,
 			"tenant_id":                           r.projID,
 			"user_id":                             r.userID,
-			"created":                             parseDBTime(r.createdAt).Format(time.RFC3339),
-			"updated":                             parseDBTime(r.updatedAt).Format(time.RFC3339),
+			"created":                             parseDBTimeValue(r.createdAt).Format(time.RFC3339),
+			"updated":                             parseDBTimeValue(r.updatedAt).Format(time.RFC3339),
 			"addresses":                           addresses,
 			"OS-EXT-STS:power_state":              r.powerState,
 			"OS-EXT-STS:task_state":               taskState,
@@ -1437,7 +1451,7 @@ func (svc *Service) ListServersDetail(c *gin.Context) {
 			entry["fault"] = gin.H{
 				"code":    500,
 				"message": faultMsg,
-				"created": parseDBTime(r.createdAt).Format(time.RFC3339),
+				"created": parseDBTimeValue(r.createdAt).Format(time.RFC3339),
 			}
 		}
 		servers = append(servers, entry)
@@ -1543,8 +1557,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 	var id, name, status, projID string
 	var userID, flavorID, imageID interface{}
 	var powerState int
-	var createdAt, updatedAt string
-	var launchedAt *string
+	var createdAt, updatedAt, launchedAt interface{}
 	var host sql.NullString
 	var locked bool
 	var vcpus, ramMB, diskGB int
@@ -1619,10 +1632,10 @@ func (svc *Service) GetServer(c *gin.Context) {
 
 	// Use DB launched_at if non-null; fall back to created_at for ACTIVE instances
 	var getLaunchedAt interface{}
-	if launchedAt != nil {
-		getLaunchedAt = parseDBTime(*launchedAt).Format(time.RFC3339)
+	if launchedAtTime := parseDBTimeValue(launchedAt); !launchedAtTime.IsZero() {
+		getLaunchedAt = launchedAtTime.Format(time.RFC3339)
 	} else if status == "ACTIVE" {
-		getLaunchedAt = parseDBTime(createdAt).Format(time.RFC3339)
+		getLaunchedAt = parseDBTimeValue(createdAt).Format(time.RFC3339)
 	}
 
 	// progress: 25 for BUILD, 0 otherwise
@@ -1638,8 +1651,8 @@ func (svc *Service) GetServer(c *gin.Context) {
 		"name":                                name,
 		"status":                              status,
 		"tenant_id":                           projID,
-		"created":                             parseDBTime(createdAt).Format(time.RFC3339),
-		"updated":                             parseDBTime(updatedAt).Format(time.RFC3339),
+		"created":                             parseDBTimeValue(createdAt).Format(time.RFC3339),
+		"updated":                             parseDBTimeValue(updatedAt).Format(time.RFC3339),
 		"hostId":                              generateHostID(projID, "stub-host"),
 		"OS-EXT-SRV-ATTR:host":                hostStr,
 		"OS-EXT-SRV-ATTR:instance_name":       fmt.Sprintf("instance-%s", id[:8]),
@@ -1690,7 +1703,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 		response["fault"] = gin.H{
 			"code":    500,
 			"message": faultMsg,
-			"created": parseDBTime(createdAt).Format(time.RFC3339),
+			"created": parseDBTimeValue(createdAt).Format(time.RFC3339),
 		}
 	}
 	response["security_groups"] = svc.getServerSecurityGroups(c.Request.Context(), id)

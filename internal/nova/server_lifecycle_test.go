@@ -281,6 +281,31 @@ func TestGetServerIncludesAddresses(t *testing.T) {
 	assert.Contains(t, addresses, "test-net")
 }
 
+func TestGetServerHandlesNativeTimestamps(t *testing.T) {
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	_, err := db.ExecContext(context.Background(), database.Q(`
+		INSERT INTO instances (id, name, project_id, user_id, flavor_id, status, power_state, created_at, updated_at, launched_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`), "inst-native-time", "native-time-vm", "test-project", "test-user", "flavor-m1-small", "ACTIVE", 1, now, now, now)
+	require.NoError(t, err)
+
+	svc := nova.NewServiceWithDB(db, "stub")
+	c, w := novaGinContext(t, http.MethodGet, "/v2.1/servers/inst-native-time", "")
+	c.Params = gin.Params{{Key: "id", Value: "inst-native-time"}}
+
+	svc.GetServer(c)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp map[string]map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	server := resp["server"]
+	assert.Equal(t, "ACTIVE", server["status"])
+	assert.NotEmpty(t, server["OS-SRV-USG:launched_at"])
+}
+
 // TestQuotaBlocksExcessCreation verifies that creating a server when the
 // instance quota is already at its limit returns 413.
 func TestQuotaBlocksExcessCreation(t *testing.T) {
