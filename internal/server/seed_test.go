@@ -49,6 +49,17 @@ func setupSeedTestDB(t *testing.T) *sql.DB {
 			description TEXT, is_public INTEGER,
 			extra_specs TEXT DEFAULT '{}'
 		);`,
+		`CREATE TABLE images (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			project_id TEXT,
+			status TEXT NOT NULL DEFAULT 'queued',
+			visibility TEXT DEFAULT 'private',
+			size_bytes INTEGER,
+			disk_format TEXT,
+			container_format TEXT,
+			rbd_image TEXT
+		);`,
 	}
 	for _, s := range schemas {
 		if _, err := db.ExecContext(ctx, s); err != nil {
@@ -114,9 +125,8 @@ func TestSeedDefaults_SCSVolumeTypes(t *testing.T) {
 	}
 }
 
-// TestSeedDefaults_Idempotent: SeedDefaults short-circuits when the admin user
-// already exists, so a second call must NOT duplicate or alter the volume
-// types. The first call seeds, the second is a no-op — both calls return nil.
+// TestSeedDefaults_Idempotent verifies a second seed pass does not duplicate or
+// alter the volume types. Compatibility seeds may still be backfilled.
 func TestSeedDefaults_Idempotent(t *testing.T) {
 	db := setupSeedTestDB(t)
 	ctx := context.Background()
@@ -137,6 +147,27 @@ func TestSeedDefaults_Idempotent(t *testing.T) {
 	}
 	if count != 3 {
 		t.Errorf("expected 3 scs-* volume types after double-seed, got %d", count)
+	}
+}
+
+func TestSeedDefaults_DefaultImage(t *testing.T) {
+	db := setupSeedTestDB(t)
+	ctx := context.Background()
+
+	if err := SeedDefaults(ctx, db, "test-password"); err != nil {
+		t.Fatalf("SeedDefaults: %v", err)
+	}
+
+	var name, status, visibility, diskFormat string
+	err := db.QueryRowContext(ctx,
+		database.Q(`SELECT name, status, visibility, disk_format FROM images WHERE id = $1`),
+		"00000000-0000-0000-0000-000000000001",
+	).Scan(&name, &status, &visibility, &diskFormat)
+	if err != nil {
+		t.Fatalf("query default image: %v", err)
+	}
+	if name != "cirros" || status != "active" || visibility != "public" || diskFormat != "qcow2" {
+		t.Fatalf("default image = (%q, %q, %q, %q), want cirros active public qcow2", name, status, visibility, diskFormat)
 	}
 }
 

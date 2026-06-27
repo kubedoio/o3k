@@ -41,6 +41,9 @@ func SeedDefaults(ctx context.Context, db *sql.DB, adminPassword string) error {
 				}
 			}
 		}
+		if err := seedDefaultImage(ctx, db); err != nil {
+			return err
+		}
 		return nil
 	}
 	if err != sql.ErrNoRows {
@@ -220,6 +223,25 @@ func SeedDefaults(ctx context.Context, db *sql.DB, adminPassword string) error {
 			return fmt.Errorf("seed: %w", err)
 		}
 	}
+	if err := seedDefaultImage(ctx, db); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func seedDefaultImage(ctx context.Context, db *sql.DB) error {
+	const (
+		defaultImageID = "00000000-0000-0000-0000-000000000001"
+		projectID      = "00000000-0000-0000-0000-000000000002"
+	)
+	_, err := db.ExecContext(ctx, database.Q(`
+		INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, size_bytes, rbd_image)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (id) DO NOTHING
+	`), defaultImageID, "cirros", projectID, "active", "public", "qcow2", "bare", 0, "image-"+defaultImageID)
+	if err != nil {
+		return fmt.Errorf("seed default image: %w", err)
+	}
 	return nil
 }

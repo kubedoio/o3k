@@ -143,7 +143,7 @@ if [ -z "$IMAGE_ID" ]; then
     warn "no image available; uploading a tiny placeholder"
     IMAGE_ID=$(curl -sf -X POST http://localhost:9292/v2/images \
         -H "X-Auth-Token: $TOKEN" -H "Content-Type: application/json" \
-        -d '{"name":"smoke-placeholder","disk_format":"raw","container_format":"bare"}' | \
+        -d '{"name":"smoke-placeholder","disk_format":"qcow2","container_format":"bare"}' | \
         jq -r '.id')
 fi
 [ -n "$IMAGE_ID" ] || fail "no image id available"
@@ -156,6 +156,10 @@ IMAGE_DIR="/var/lib/o3k/images"
 sudo mkdir -p "$IMAGE_DIR"
 STUB_IMAGE_PATH="$IMAGE_DIR/${IMAGE_ID}.qcow2"
 sudo qemu-img create -f qcow2 "$STUB_IMAGE_PATH" 50M >/dev/null
+curl -sf -X PUT "http://localhost:9292/v2/images/$IMAGE_ID/file" \
+    -H "X-Auth-Token: $TOKEN" \
+    -H "Content-Type: application/octet-stream" \
+    --data-binary @"$STUB_IMAGE_PATH" >/dev/null
 
 # --- create server ---
 SERVER_NAME="o3k-smoke-$(date +%s)"
