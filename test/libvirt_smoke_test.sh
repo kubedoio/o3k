@@ -139,12 +139,14 @@ FLAVOR_ID=$(curl -sf -H "X-Auth-Token: $TOKEN" http://localhost:8774/v2.1/flavor
 # create handler accepts the request. Stub Glance returns a fixed list.
 IMAGE_ID=$(curl -sf -H "X-Auth-Token: $TOKEN" http://localhost:9292/v2/images | \
     jq -r '.images[0].id // empty')
+CREATED_PLACEHOLDER_IMAGE=0
 if [ -z "$IMAGE_ID" ]; then
     warn "no image available; uploading a tiny placeholder"
     IMAGE_ID=$(curl -sf -X POST http://localhost:9292/v2/images \
         -H "X-Auth-Token: $TOKEN" -H "Content-Type: application/json" \
         -d '{"name":"smoke-placeholder","disk_format":"qcow2","container_format":"bare"}' | \
         jq -r '.id')
+    CREATED_PLACEHOLDER_IMAGE=1
 fi
 [ -n "$IMAGE_ID" ] || fail "no image id available"
 
@@ -156,10 +158,12 @@ IMAGE_DIR="/var/lib/o3k/images"
 sudo mkdir -p "$IMAGE_DIR"
 STUB_IMAGE_PATH="$IMAGE_DIR/${IMAGE_ID}.qcow2"
 sudo qemu-img create -f qcow2 "$STUB_IMAGE_PATH" 50M >/dev/null
-curl -sf -X PUT "http://localhost:9292/v2/images/$IMAGE_ID/file" \
-    -H "X-Auth-Token: $TOKEN" \
-    -H "Content-Type: application/octet-stream" \
-    --data-binary @"$STUB_IMAGE_PATH" >/dev/null
+if [ "$CREATED_PLACEHOLDER_IMAGE" -eq 1 ]; then
+    curl -sf -X PUT "http://localhost:9292/v2/images/$IMAGE_ID/file" \
+        -H "X-Auth-Token: $TOKEN" \
+        -H "Content-Type: application/octet-stream" \
+        --data-binary @"$STUB_IMAGE_PATH" >/dev/null
+fi
 
 # --- create server ---
 SERVER_NAME="o3k-smoke-$(date +%s)"
