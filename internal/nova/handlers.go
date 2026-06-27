@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdlog "log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1586,6 +1587,7 @@ func (svc *Service) GetServer(c *gin.Context) {
 	}
 	if err != nil {
 		log.Error().Err(err).Str("operation", "get_server").Msg("database error")
+		stdlog.Printf("Nova GetServer database error for instance %q project %q: %v", instanceID, projectID, err)
 		common.SendError(c, common.NewInternalServerError("failed to get server"))
 		return
 	}
