@@ -768,12 +768,18 @@ func (svc *Service) allocateIPFromSubnet(ctx context.Context, subnetID, cidr str
 		return "", nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	// Lock and fetch allocated IPs only for ports that have a fixed IP in this subnet.
-	// Using a JSONB containment text check narrows the FOR UPDATE lock scope so we
-	// don't serialize all port allocations globally.
+	var networkID string
+	if err := tx.QueryRowContext(ctx, database.Q("SELECT network_id FROM subnets WHERE id = $1"), subnetID).Scan(&networkID); err != nil {
+		_ = tx.Rollback()
+		return "", nil, fmt.Errorf("failed to query subnet network: %w", err)
+	}
+
+	// Lock and fetch allocated IPs on the subnet's network, then parse fixed_ips
+	// in Go. This avoids backend-specific JSON text matching differences between
+	// SQLite and Postgres while keeping allocation and port insert atomic.
 	rows, err := tx.QueryContext(ctx,
-		database.Q(`SELECT fixed_ips FROM ports WHERE fixed_ips IS NOT NULL AND fixed_ips::text LIKE '%' || $1 || '%' FOR UPDATE`),
-		subnetID,
+		database.Q(`SELECT fixed_ips FROM ports WHERE network_id = $1 AND fixed_ips IS NOT NULL FOR UPDATE`),
+		networkID,
 	)
 	if err != nil {
 		_ = tx.Rollback()

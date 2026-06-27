@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -378,6 +381,73 @@ type CreateServerRequest struct {
 	} `json:"server"`
 }
 
+type bootImageInfo struct {
+	ID         string
+	DiskFormat string
+	LocalPath  string
+}
+
+func prepareInstanceBootDisk(instanceID string, image bootImageInfo) (string, error) {
+	instanceDir := filepath.Join("/var/lib/o3k/instances", instanceID)
+	if err := os.MkdirAll(instanceDir, 0755); err != nil {
+		return "", fmt.Errorf("create instance directory: %w", err)
+	}
+
+	format := strings.ToLower(strings.TrimSpace(image.DiskFormat))
+	if format == "" {
+		format = "qcow2"
+	}
+
+	diskPath := filepath.Join(instanceDir, "disk."+format)
+	src, err := os.Open(image.LocalPath)
+	if err != nil {
+		_ = os.RemoveAll(instanceDir)
+		return "", fmt.Errorf("open source image: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(diskPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		_ = os.RemoveAll(instanceDir)
+		return "", fmt.Errorf("create instance disk: %w", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = os.RemoveAll(instanceDir)
+		return "", fmt.Errorf("copy source image: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.RemoveAll(instanceDir)
+		return "", fmt.Errorf("close instance disk: %w", err)
+	}
+
+	return diskPath, nil
+}
+
+func resolveLocalBootImagePath(imageID, diskFormat string) (string, error) {
+	format := strings.ToLower(strings.TrimSpace(diskFormat))
+	if format == "" {
+		format = "qcow2"
+	}
+
+	baseDir := "/var/lib/o3k/images"
+	candidates := []string{
+		filepath.Join(baseDir, "image-"+imageID+"."+format),
+		filepath.Join(baseDir, imageID+"."+format),
+		filepath.Join(baseDir, "image-"+imageID+".raw"),
+		filepath.Join(baseDir, imageID+".qcow2"),
+		filepath.Join(baseDir, "image-"+imageID+".qcow2"),
+		filepath.Join(baseDir, imageID+".raw"),
+	}
+
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no local image data found for image %s", imageID)
+}
+
 // CreateServer creates a new server instance
 func (svc *Service) CreateServer(c *gin.Context) {
 	logger := middleware.GetLogger(c)
@@ -416,6 +486,46 @@ func (svc *Service) CreateServer(c *gin.Context) {
 		log.Error().Err(err).Str("operation", "query_flavor").Msg("database error")
 		common.SendError(c, common.NewInternalServerError("failed to query flavor"))
 		return
+	}
+
+	var bootImage *bootImageInfo
+	if req.Server.ImageRef != "" {
+		var image bootImageInfo
+		var imageStatus string
+		queryStart = time.Now()
+		err := svc.activeDB().QueryRowContext(c.Request.Context(), database.Q(`
+			SELECT id, status, COALESCE(NULLIF(disk_format, ''), 'qcow2')
+			FROM images
+			WHERE (id::text = $1 OR name = $1)
+			  AND (visibility = 'public' OR project_id::text = $2)
+			LIMIT 1
+		`), req.Server.ImageRef, projectID).Scan(&image.ID, &imageStatus, &image.DiskFormat)
+		middleware.LogDatabaseQuery(c, "SELECT image", time.Since(queryStart), err)
+		if errors.Is(err, sql.ErrNoRows) {
+			logger.Warn().Str("image_ref", req.Server.ImageRef).Msg("Image not found")
+			common.SendError(c, common.NewNotFoundError("image"))
+			return
+		}
+		if err != nil {
+			logger.Error().Err(err).Str("image_ref", req.Server.ImageRef).Msg("Failed to query image")
+			common.SendError(c, common.NewInternalServerError("failed to query image"))
+			return
+		}
+		if imageStatus != "active" {
+			common.SendError(c, common.NewConflictError("image is not active"))
+			return
+		}
+		if svc.libvirtMode == "real" {
+			image.LocalPath, err = resolveLocalBootImagePath(image.ID, image.DiskFormat)
+			if err != nil {
+				logger.Error().Err(err).Str("image_id", image.ID).Str("image_ref", req.Server.ImageRef).Msg("Image has no local backing file")
+				common.SendError(c, common.NewConflictError("image data is not available on this host"))
+				return
+			}
+		} else {
+			image.LocalPath = fmt.Sprintf("/var/lib/o3k/images/%s.%s", image.ID, image.DiskFormat)
+		}
+		bootImage = &image
 	}
 
 	// Atomic quota check + INSERT: serializable transaction prevents TOCTOU
@@ -481,8 +591,8 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Handle NULL image_id (for volume-backed instances)
 	var imageID interface{}
-	if req.Server.ImageRef != "" {
-		imageID = req.Server.ImageRef
+	if bootImage != nil {
+		imageID = bootImage.ID
 	} else {
 		imageID = nil
 	}
@@ -527,10 +637,17 @@ func (svc *Service) CreateServer(c *gin.Context) {
 
 	// Async mode: insert task row for the worker to pick up
 	if svc.dispatcher != nil {
+		imageLocalPath := ""
+		imageDiskFormat := ""
+		if bootImage != nil {
+			imageLocalPath = bootImage.LocalPath
+			imageDiskFormat = bootImage.DiskFormat
+		}
 		taskPayload, _ := json.Marshal(map[string]interface{}{
 			"instance_id":      instanceID,
 			"flavor_id":        req.Server.FlavorRef,
-			"image_local_path": fmt.Sprintf("/var/lib/o3k/images/%s.qcow2", req.Server.ImageRef),
+			"image_local_path": imageLocalPath,
+			"image_format":     imageDiskFormat,
 			"vcpu":             flavor.VCPUs,
 			"ram_mb":           flavor.RAMMB,
 			"disk_gb":          flavor.DiskGB,
@@ -671,6 +788,29 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				}
 			}
 
+			var instanceDiskPath string
+			if bootImage != nil {
+				instanceDiskPath, err = prepareInstanceBootDisk(instanceID, *bootImage)
+				if err != nil {
+					log.Error().Err(err).Str("instance_id", instanceID).Msg("Failed to prepare instance boot disk")
+					if svc.neutronSvc != nil {
+						for _, net := range networks {
+							if derr := svc.neutronSvc.DeletePortByID(ctx, net.PortID, projectID); derr != nil {
+								log.Warn().Err(derr).Str("port_id", net.PortID).Msg("failed to clean up port after disk preparation failure")
+							}
+						}
+					}
+					dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer dbCancel()
+					if _, derr := svc.activeDB().ExecContext(dbCtx,
+						database.Q("UPDATE instances SET status = $1, fault_message = $2, updated_at = $3 WHERE id = $4"),
+						"ERROR", err.Error(), time.Now(), instanceID); derr != nil {
+						log.Error().Err(derr).Str("instance_id", instanceID).Msg("failed to mark instance ERROR after boot disk failure")
+					}
+					return
+				}
+			}
+
 			// Generate VM XML
 			log.Debug().Str("instance_id", instanceID).Msg("Generating VM XML")
 			spec := hypervisor.VMSpec{
@@ -679,10 +819,13 @@ func (svc *Service) CreateServer(c *gin.Context) {
 				VCPUs:        flavor.VCPUs,
 				MemoryMB:     flavor.RAMMB,
 				DiskGB:       flavor.DiskGB,
-				ImagePath:    fmt.Sprintf("/var/lib/o3k/images/%s.qcow2", req.Server.ImageRef),
 				Networks:     networks,
 				CloudInit:    cloudInit,
 				CephMonitors: svc.cephMonitors,
+			}
+			if bootImage != nil {
+				spec.ImagePath = instanceDiskPath
+				spec.ImageFormat = bootImage.DiskFormat
 			}
 
 			log.Debug().Str("image_path", spec.ImagePath).Int("network_count", len(spec.Networks)).Msg("VM spec prepared")
@@ -702,6 +845,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 						}
 					}
 				}
+				_ = os.RemoveAll(filepath.Join("/var/lib/o3k/instances", instanceID))
 				dbCtx, dbCancel := context.WithTimeout(svc.ctx, 5*time.Second)
 				defer dbCancel()
 				if _, derr := svc.activeDB().ExecContext(dbCtx,
@@ -768,7 +912,7 @@ func (svc *Service) CreateServer(c *gin.Context) {
 			"created":                     nowStr,
 			"updated":                     nowStr,
 			"flavor":                      gin.H{"id": flavor.ID},
-			"image":                       gin.H{"id": req.Server.ImageRef},
+			"image":                       gin.H{"id": imageID},
 			"metadata":                    gin.H{},
 			"adminPass":                   common.GeneratePassword(16),
 			"security_groups":             []gin.H{{"name": "default"}},
@@ -1678,6 +1822,9 @@ func (svc *Service) DeleteServer(c *gin.Context) {
 		database.Q("DELETE FROM ports WHERE device_id = $1 AND project_id::text = $2"),
 		instanceID, projectID); derr != nil {
 		log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to delete orphaned ports during instance deletion")
+	}
+	if derr := os.RemoveAll(filepath.Join("/var/lib/o3k/instances", instanceID)); derr != nil {
+		log.Warn().Err(derr).Str("instance_id", instanceID).Msg("failed to delete instance disk directory")
 	}
 
 	// Delete from database (support lookup by ID or name)

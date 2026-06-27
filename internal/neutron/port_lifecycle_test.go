@@ -220,6 +220,45 @@ func TestCreatePortRespectsCIDR(t *testing.T) {
 	assert.True(t, ipnet.Contains(ip), "allocated IP %s must be inside CIDR %s", ipStr, cidr)
 }
 
+func TestCreatePortIgnoresFixedIPsFromOtherSubnetsOnSameNetwork(t *testing.T) {
+	db := neutronTestDB(t)
+	const networkID = "net-005"
+	const subnetID = "sub-005"
+	const otherSubnetID = "sub-other-005"
+	const cidr = "10.2.0.0/24"
+	seedNetwork(t, db, networkID, subnetID, cidr, "test-project")
+
+	ctx := t.Context()
+	_, err := db.ExecContext(ctx,
+		database.Q(`INSERT INTO subnets (id, name, network_id, project_id, cidr, gateway_ip, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
+		otherSubnetID, "other-subnet", networkID, "test-project", "10.3.0.0/24", "10.3.0.1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx,
+		database.Q(`INSERT INTO ports (id, name, network_id, project_id, subnet_id, mac_address, admin_state_up, status, fixed_ips, allowed_address_pairs, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 1, 'ACTIVE', $7, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`),
+		"port-other-subnet", "other-subnet-port", networkID, "test-project", otherSubnetID, "fa:16:3e:00:05:02",
+		`[{"subnet_id":"`+otherSubnetID+`","ip_address":"10.2.0.2"}]`,
+	)
+	require.NoError(t, err)
+
+	svc := NewServiceWithDB(db, "stub", nil)
+	c, w := neutronGinContext(t, http.MethodPost, "/v2/ports", portRequest(networkID))
+	svc.CreatePort(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	port := resp["port"].(map[string]interface{})
+	fixedIPs := port["fixed_ips"].([]interface{})
+	require.NotEmpty(t, fixedIPs)
+
+	ipStr := fixedIPs[0].(map[string]interface{})["ip_address"].(string)
+	assert.Equal(t, "10.2.0.2", ipStr)
+}
+
 // TestDeleteSubnetWithPortsFails409 verifies that deleting a subnet that has
 // at least one port returns 409 Conflict.
 func TestDeleteSubnetWithPortsFails409(t *testing.T) {

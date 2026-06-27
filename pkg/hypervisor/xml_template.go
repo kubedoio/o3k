@@ -41,15 +41,16 @@ func renderRBDHosts(monitors []string) string {
 
 // VMSpec defines VM specifications
 type VMSpec struct {
-	UUID      string
-	Name      string
-	VCPUs     int
-	MemoryMB  int
-	DiskGB    int
-	ImagePath string // Path to image (RBD or local)
-	Networks  []NetworkConfig
-	Volumes   []VolumeConfig
-	CloudInit *CloudInitConfig
+	UUID        string
+	Name        string
+	VCPUs       int
+	MemoryMB    int
+	DiskGB      int
+	ImagePath   string // Path to image (RBD or local)
+	ImageFormat string // qemu driver format, e.g. qcow2 or raw
+	Networks    []NetworkConfig
+	Volumes     []VolumeConfig
+	CloudInit   *CloudInitConfig
 	// CephMonitors is the list of Ceph monitor endpoints in host:port form
 	// (e.g. ["mon1.ceph.local:6789", "10.0.0.5:6789"]). Used when ImagePath is
 	// an rbd: URL or any Volumes are RBD-backed. Empty means "fall back to
@@ -83,6 +84,10 @@ type CloudInitConfig struct {
 // GenerateVMXML generates libvirt XML for a VM
 func GenerateVMXML(spec VMSpec) string {
 	var sb strings.Builder
+	imageFormat := strings.ToLower(strings.TrimSpace(spec.ImageFormat))
+	if imageFormat == "" {
+		imageFormat = "qcow2"
+	}
 
 	// Domain header
 	fmt.Fprintf(&sb, `<domain type='kvm'>
@@ -131,21 +136,21 @@ func GenerateVMXML(spec VMSpec) string {
 
 		fmt.Fprintf(&sb, `
     <disk type='network' device='disk'>
-      <driver name='qemu' type='qcow2' cache='writeback'/>
+      <driver name='qemu' type='%s' cache='writeback'/>
       <source protocol='rbd' name='%s/%s'>
 %s      </source>
       <target dev='vda' bus='virtio'/>
     </disk>
-`, xmlEscape(pool), xmlEscape(image), renderRBDHosts(spec.CephMonitors))
+`, xmlEscape(imageFormat), xmlEscape(pool), xmlEscape(image), renderRBDHosts(spec.CephMonitors))
 	} else {
 		// Local file
 		fmt.Fprintf(&sb, `
     <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='writeback'/>
+      <driver name='qemu' type='%s' cache='writeback'/>
       <source file='%s'/>
       <target dev='vda' bus='virtio'/>
     </disk>
-`, xmlEscape(spec.ImagePath))
+`, xmlEscape(imageFormat), xmlEscape(spec.ImagePath))
 	}
 
 	// Attached volumes

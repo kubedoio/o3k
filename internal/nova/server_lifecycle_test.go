@@ -17,6 +17,7 @@ import (
 
 	"github.com/cobaltcore-dev/o3k/internal/database"
 	"github.com/cobaltcore-dev/o3k/internal/nova"
+	"github.com/cobaltcore-dev/o3k/internal/tunnel"
 )
 
 // novaGinContext builds a gin context with auth pre-set.
@@ -45,6 +46,22 @@ func insertFlavor(t *testing.T, db *sql.DB, id, name string, vcpus, ram, disk in
 		database.Q(`INSERT INTO flavors (id, name, vcpus, ram_mb, disk_gb, is_public)
 			VALUES ($1, $2, $3, $4, $5, $6)`),
 		id, name, vcpus, ram, disk, true,
+	)
+	require.NoError(t, err)
+}
+
+func insertImage(t *testing.T, db *sql.DB, id, name, projectID string) {
+	t.Helper()
+	insertImageWithStatusFormat(t, db, id, name, projectID, "active", "qcow2")
+}
+
+func insertImageWithStatusFormat(t *testing.T, db *sql.DB, id, name, projectID, status, diskFormat string) {
+	t.Helper()
+	nowStr := time.Now().Format(time.RFC3339)
+	_, err := db.ExecContext(context.Background(),
+		database.Q(`INSERT INTO images (id, name, project_id, status, visibility, disk_format, container_format, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'public', $5, 'bare', $6, $7)`),
+		id, name, projectID, status, diskFormat, nowStr, nowStr,
 	)
 	require.NoError(t, err)
 }
@@ -95,6 +112,7 @@ func insertPort(t *testing.T, db *sql.DB, id, networkID, projectID, deviceID, fi
 func TestCreateServerReturnsRequiredFields(t *testing.T) {
 	db := database.NewTestDB(t)
 	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertImage(t, db, "img-cirros", "cirros", "test-project")
 	svc := nova.NewServiceWithDB(db, "stub")
 	c, w := novaGinContext(t, http.MethodPost, "/v2.1/servers", createServerBody("tf-test-vm"))
 
@@ -115,6 +133,54 @@ func TestCreateServerReturnsRequiredFields(t *testing.T) {
 	links, ok := server["links"].([]interface{})
 	require.True(t, ok)
 	assert.NotEmpty(t, links)
+}
+
+func TestCreateServerRejectsMissingImage(t *testing.T) {
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	svc := nova.NewServiceWithDB(db, "stub")
+
+	c, w := novaGinContext(t, http.MethodPost, "/v2.1/servers", createServerBody("missing-image-vm"))
+	svc.CreateServer(c)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	var count int
+	require.NoError(t, db.QueryRowContext(context.Background(), database.Q("SELECT COUNT(*) FROM instances")).Scan(&count))
+	assert.Zero(t, count, "server row must not be created when the image is missing")
+}
+
+func TestCreateServerRejectsInactiveImage(t *testing.T) {
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertImageWithStatusFormat(t, db, "img-cirros", "cirros", "test-project", "queued", "qcow2")
+	svc := nova.NewServiceWithDB(db, "stub")
+
+	c, w := novaGinContext(t, http.MethodPost, "/v2.1/servers", createServerBody("inactive-image-vm"))
+	svc.CreateServer(c)
+
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	var count int
+	require.NoError(t, db.QueryRowContext(context.Background(), database.Q("SELECT COUNT(*) FROM instances")).Scan(&count))
+	assert.Zero(t, count, "server row must not be created when the image is not active")
+}
+
+func TestCreateServerTaskPayloadUsesResolvedImageFormat(t *testing.T) {
+	db := database.NewTestDB(t)
+	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertImageWithStatusFormat(t, db, "img-raw", "img-cirros", "test-project", "active", "raw")
+	svc := nova.NewServiceWithDB(db, "stub")
+	svc.SetDispatcher(tunnel.NewHub("test-secret"))
+
+	c, w := novaGinContext(t, http.MethodPost, "/v2.1/servers", createServerBody("raw-image-vm"))
+	svc.CreateServer(c)
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	var payloadText string
+	require.NoError(t, db.QueryRowContext(context.Background(), database.Q("SELECT payload FROM tasks WHERE type = 'VM_CREATE'")).Scan(&payloadText))
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(payloadText), &payload))
+	assert.Equal(t, "/var/lib/o3k/images/img-raw.raw", payload["image_local_path"])
+	assert.Equal(t, "raw", payload["image_format"])
 }
 
 // TestListServersDetailPagination verifies that listing with limit=2 returns
@@ -220,6 +286,7 @@ func TestGetServerIncludesAddresses(t *testing.T) {
 func TestQuotaBlocksExcessCreation(t *testing.T) {
 	db := database.NewTestDB(t)
 	insertFlavor(t, db, "flavor-m1-small", "test.small", 1, 512, 10)
+	insertImage(t, db, "img-cirros", "cirros", "test-project")
 	insertQuota(t, db, "test-project", "instances", 1)
 	insertInstance(t, db, "inst-existing", "existing-vm", "test-project", "test-user", "flavor-m1-small", "ACTIVE")
 

@@ -55,6 +55,7 @@ type vmCreatePayload struct {
 	InstanceID     string `json:"instance_id"`
 	FlavorID       string `json:"flavor_id"`
 	ImageLocalPath string `json:"image_local_path"`
+	ImageFormat    string `json:"image_format"`
 	VCPU           int    `json:"vcpu"`
 	RAMMB          int    `json:"ram_mb"`
 	DiskGB         int    `json:"disk_gb"`
@@ -81,12 +82,13 @@ func (e *Executor) vmCreate(ctx context.Context, payload []byte) ([]byte, error)
 	}
 
 	spec := hypervisor.VMSpec{
-		UUID:      p.InstanceID,
-		Name:      fmt.Sprintf("instance-%s", p.InstanceID),
-		VCPUs:     p.VCPU,
-		MemoryMB:  p.RAMMB,
-		DiskGB:    p.DiskGB,
-		ImagePath: p.ImageLocalPath,
+		UUID:        p.InstanceID,
+		Name:        fmt.Sprintf("instance-%s", p.InstanceID),
+		VCPUs:       p.VCPU,
+		MemoryMB:    p.RAMMB,
+		DiskGB:      p.DiskGB,
+		ImagePath:   p.ImageLocalPath,
+		ImageFormat: p.ImageFormat,
 	}
 	if p.NetworkID != "" || p.MACAddress != "" {
 		spec.Networks = []hypervisor.NetworkConfig{

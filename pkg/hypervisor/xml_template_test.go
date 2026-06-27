@@ -50,6 +50,48 @@ func TestGenerateVMXML(t *testing.T) {
 	}
 }
 
+func TestGenerateVMXMLRawBootDisk(t *testing.T) {
+	spec := VMSpec{
+		UUID:        "12345678-1234-1234-1234-123456789abc",
+		Name:        "test-raw",
+		VCPUs:       1,
+		MemoryMB:    512,
+		DiskGB:      1,
+		ImagePath:   "/var/lib/o3k/images/image-ubuntu.raw",
+		ImageFormat: "raw",
+	}
+
+	xml := GenerateVMXML(spec)
+
+	if !strings.Contains(xml, "<driver name='qemu' type='raw' cache='writeback'/>") {
+		t.Error("Expected raw boot disk driver")
+	}
+	if !strings.Contains(xml, "<source file='/var/lib/o3k/images/image-ubuntu.raw'/>") {
+		t.Error("Expected raw image path")
+	}
+}
+
+func TestGenerateVMXMLRawRBDBootDisk(t *testing.T) {
+	spec := VMSpec{
+		UUID:        "12345678-1234-1234-1234-123456789abd",
+		Name:        "test-raw-rbd",
+		VCPUs:       1,
+		MemoryMB:    512,
+		DiskGB:      1,
+		ImagePath:   "rbd:images/ubuntu-raw",
+		ImageFormat: "raw",
+	}
+
+	xml := GenerateVMXML(spec)
+
+	if !strings.Contains(xml, "<driver name='qemu' type='raw' cache='writeback'/>") {
+		t.Error("Expected raw RBD boot disk driver")
+	}
+	if !strings.Contains(xml, "<source protocol='rbd' name='images/ubuntu-raw'>") {
+		t.Error("Expected raw RBD image source")
+	}
+}
+
 func TestGenerateVMXMLMultipleNetworks(t *testing.T) {
 	spec := VMSpec{
 		Name:      "multi-net-vm",
