@@ -35,6 +35,16 @@ require() {
 
 STUB_IMAGE_PATH=""
 
+nova_get_server() {
+    local server_id="$1"
+    local response_file="$2"
+    local status_file="$3"
+
+    curl -sS -o "$response_file" -w "%{http_code}" \
+        -H "X-Auth-Token: $TOKEN" \
+        "http://localhost:8774/v2.1/servers/$server_id" > "$status_file"
+}
+
 cleanup() {
     log "cleanup"
     if [ -f "$TEST_DIR/o3k.pid" ]; then
@@ -176,8 +186,16 @@ SERVER_ID=$(echo "$CREATE_RESP" | jq -r '.server.id')
 log "server id: $SERVER_ID"
 
 # --- wait for ACTIVE ---
+SERVER_GET_RESP=$(mktemp)
+SERVER_GET_CODE=$(mktemp)
 for i in $(seq 1 120); do
-    STATUS=$(curl -sf -H "X-Auth-Token: $TOKEN" "http://localhost:8774/v2.1/servers/$SERVER_ID" | jq -r '.server.status')
+    nova_get_server "$SERVER_ID" "$SERVER_GET_RESP" "$SERVER_GET_CODE"
+    HTTP_CODE=$(cat "$SERVER_GET_CODE")
+    if [ "$HTTP_CODE" != "200" ]; then
+        cat "$SERVER_GET_RESP" >&2
+        fail "server status poll returned HTTP $HTTP_CODE"
+    fi
+    STATUS=$(jq -r '.server.status' < "$SERVER_GET_RESP")
     log "  status[$i]: $STATUS"
     case "$STATUS" in
         ACTIVE) break ;;
@@ -200,10 +218,13 @@ log "deleting server"
 curl -sf -X DELETE -H "X-Auth-Token: $TOKEN" "http://localhost:8774/v2.1/servers/$SERVER_ID"
 
 for i in $(seq 1 30); do
-    if ! curl -sf -H "X-Auth-Token: $TOKEN" "http://localhost:8774/v2.1/servers/$SERVER_ID" >/dev/null 2>&1; then
+    nova_get_server "$SERVER_ID" "$SERVER_GET_RESP" "$SERVER_GET_CODE"
+    HTTP_CODE=$(cat "$SERVER_GET_CODE")
+    if [ "$HTTP_CODE" = "404" ]; then
         log "  server gone from API after ${i}s"
         break
     fi
+    [ "$HTTP_CODE" = "200" ] || { cat "$SERVER_GET_RESP" >&2; fail "server delete poll returned HTTP $HTTP_CODE"; }
     sleep 1
     [ "$i" -eq 30 ] && fail "server still present in API after delete"
 done
